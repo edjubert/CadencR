@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::routing::{get, put};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -11,6 +11,7 @@ use crate::app_state::AppState;
 use crate::domain::agents::runtime::ModelCatalogEntry;
 use crate::error::AppError;
 
+use super::oauth_usage::{live_usage, live_usage_force_refresh, UsageCacheEntry, UsageStatus};
 use super::{custom_models, profiles};
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -180,6 +181,98 @@ pub async fn delete_custom_model_handler(
     Ok(Json(SuccessResponse { ok: true }))
 }
 
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OauthUsageResponseStatus {
+    Available,
+    Unavailable,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct OauthQuotaWindow {
+    pub utilization: f64,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct OauthUsageSnapshotResponse {
+    pub five_hour: OauthQuotaWindow,
+    pub seven_day: OauthQuotaWindow,
+    pub seven_day_sonnet: OauthQuotaWindow,
+    pub seven_day_opus: OauthQuotaWindow,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct OauthUsageResponse {
+    pub status: OauthUsageResponseStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<OauthUsageSnapshotResponse>,
+    /// Seconds since the Unix epoch when this snapshot was fetched — the
+    /// frontend computes "fetched Ns ago" from this, not from a live timer.
+    pub fetched_at: u64,
+}
+
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct OauthUsageQuery {
+    #[serde(default)]
+    pub force: bool,
+}
+
+fn oauth_usage_response_from_entry(entry: UsageCacheEntry) -> OauthUsageResponse {
+    // `entry.fetched_at` is a monotonic `Instant` — convert to a wall-clock
+    // unix timestamp the frontend can diff against `Date.now()`.
+    let elapsed_secs = entry.fetched_at.elapsed().as_secs();
+    let fetched_at_unix_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since_epoch| since_epoch.as_secs().saturating_sub(elapsed_secs))
+        .unwrap_or(0);
+    match entry.status {
+        UsageStatus::Available(snapshot) => OauthUsageResponse {
+            status: OauthUsageResponseStatus::Available,
+            reason: None,
+            snapshot: Some(OauthUsageSnapshotResponse {
+                five_hour: OauthQuotaWindow {
+                    utilization: snapshot.five_hour.utilization,
+                },
+                seven_day: OauthQuotaWindow {
+                    utilization: snapshot.seven_day.utilization,
+                },
+                seven_day_sonnet: OauthQuotaWindow {
+                    utilization: snapshot.seven_day_sonnet.utilization,
+                },
+                seven_day_opus: OauthQuotaWindow {
+                    utilization: snapshot.seven_day_opus.utilization,
+                },
+            }),
+            fetched_at: fetched_at_unix_secs,
+        },
+        UsageStatus::Unavailable(reason) => OauthUsageResponse {
+            status: OauthUsageResponseStatus::Unavailable,
+            reason: Some(reason),
+            snapshot: None,
+            fetched_at: fetched_at_unix_secs,
+        },
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/claude-code/oauth-usage",
+    params(OauthUsageQuery),
+    responses((status = 200, body = OauthUsageResponse))
+)]
+pub async fn get_claude_code_oauth_usage_handler(
+    Query(query): Query<OauthUsageQuery>,
+) -> Json<OauthUsageResponse> {
+    let entry = if query.force {
+        live_usage_force_refresh().await
+    } else {
+        live_usage().await
+    };
+    Json(oauth_usage_response_from_entry(entry))
+}
+
 pub fn claude_code_router() -> Router<AppState> {
     Router::new()
         .route("/api/claude-code/profiles", get(list_profiles_handler))
@@ -199,4 +292,26 @@ pub fn claude_code_router() -> Router<AppState> {
             "/api/claude-code/custom-models/{model_id}",
             put(upsert_custom_model_handler).delete(delete_custom_model_handler),
         )
+        .route(
+            "/api/claude-code/oauth-usage",
+            get(get_claude_code_oauth_usage_handler),
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oauth_usage_response_serializes_unavailable_without_snapshot() {
+        let response = OauthUsageResponse {
+            status: OauthUsageResponseStatus::Unavailable,
+            reason: Some("not authenticated via claude login".into()),
+            snapshot: None,
+            fetched_at: 0,
+        };
+        let value = serde_json::to_value(&response).unwrap();
+        assert_eq!(value["status"], serde_json::json!("unavailable"));
+        assert!(value.get("snapshot").is_none());
+    }
 }
