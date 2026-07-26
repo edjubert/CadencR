@@ -305,6 +305,7 @@ impl StreamReaderTask {
                 usage_update.snapshot.input_tokens,
                 usage_update.snapshot.output_tokens,
                 usage_update.snapshot.context_window,
+                usage_update.snapshot.cost_usd,
             )
             .await;
         }

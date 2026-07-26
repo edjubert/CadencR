@@ -183,6 +183,7 @@ pub(super) async fn handle_init(
     let init_input_tokens = row.as_ref().and_then(|r| r.input_tokens);
     let init_output_tokens = row.as_ref().and_then(|r| r.output_tokens);
     let init_context_window = row.as_ref().and_then(|r| r.context_window);
+    let init_cost_usd = row.as_ref().and_then(|r| r.cost_usd);
 
     let Some(adapter) = runtime_adapter(&effective_provider) else {
         send_error(
@@ -332,6 +333,7 @@ pub(super) async fn handle_init(
             input_tokens: init_input_tokens.map(|v| v as u64),
             output_tokens: init_output_tokens.map(|v| v as u64),
             context_window: init_context_window.map(|v| v as u64),
+            cost_usd: init_cost_usd,
             supports_prompt_receipts: adapter.supports_prompt_receipts(),
         })
         .unwrap(),

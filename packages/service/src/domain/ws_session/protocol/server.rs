@@ -17,6 +17,10 @@ pub struct SessionUsageUpdatePayload {
     /// "unknown until the provider reports one" — distinct from 0.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u64>,
+    /// Cumulative session cost (USD). `None` for providers that don't
+    /// report cost (only Claude Code does today).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -40,6 +44,8 @@ pub struct SessionInitializedPayload {
     pub output_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
     #[serde(default)]
     pub supports_prompt_receipts: bool,
 }
@@ -356,6 +362,30 @@ mod tests {
         let value = serde_json::to_value(&payload).unwrap();
         assert_eq!(value["provider"], "codex");
         assert_eq!(value["context_window"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn session_usage_update_payload_omits_absent_cost() {
+        let payload = SessionUsageUpdatePayload {
+            input_tokens: 100,
+            output_tokens: 50,
+            context_window: Some(200_000),
+            cost_usd: None,
+        };
+        let value = serde_json::to_value(&payload).unwrap();
+        assert!(value.get("cost_usd").is_none());
+    }
+
+    #[test]
+    fn session_usage_update_payload_includes_present_cost() {
+        let payload = SessionUsageUpdatePayload {
+            input_tokens: 100,
+            output_tokens: 50,
+            context_window: Some(200_000),
+            cost_usd: Some(0.042),
+        };
+        let value = serde_json::to_value(&payload).unwrap();
+        assert_eq!(value["cost_usd"], serde_json::json!(0.042));
     }
 
     #[test]

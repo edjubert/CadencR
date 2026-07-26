@@ -22,6 +22,7 @@ impl StreamReaderTask {
         input_tokens: u64,
         output_tokens: u64,
         context_window: Option<u64>,
+        cost_usd: Option<f64>,
     ) {
         let usage_env = WsEnvelope::new(
             "session",
@@ -30,6 +31,7 @@ impl StreamReaderTask {
                 input_tokens,
                 output_tokens,
                 context_window,
+                cost_usd,
             })
             .unwrap(),
         );
