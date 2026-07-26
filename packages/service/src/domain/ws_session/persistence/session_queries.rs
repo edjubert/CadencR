@@ -121,7 +121,7 @@ mod session_queries_tests {
                 input_tokens INTEGER NOT NULL DEFAULT 0,
                 output_tokens INTEGER NOT NULL DEFAULT 0,
                 context_window INTEGER NOT NULL DEFAULT 200000,
-                cost_usd REAL NOT NULL DEFAULT 0,
+                cost_usd REAL,
                 started_at TEXT,
                 ended_at TEXT,
                 pending_permission TEXT,

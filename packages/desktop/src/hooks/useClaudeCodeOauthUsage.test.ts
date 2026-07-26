@@ -89,4 +89,48 @@ describe("useClaudeCodeOauthUsage", () => {
       expect(refetch).toHaveBeenCalled();
     });
   });
+
+  it("maps a failed polled query to a visible unavailable status, not a silent loading state", () => {
+    const mocked = vi.mocked(generated.useGetClaudeCodeOauthUsage);
+    mocked.mockReturnValue({
+      data: undefined,
+      isError: true,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof generated.useGetClaudeCodeOauthUsage>);
+
+    const { result } = renderHook(() => useClaudeCodeOauthUsage(true));
+
+    expect(result.current.status).toBe("unavailable");
+    expect(result.current.reason).not.toBeNull();
+  });
+
+  it("surfaces a failed forced refresh instead of swallowing it", async () => {
+    const refetch = vi.fn();
+    const mocked = vi.mocked(generated.useGetClaudeCodeOauthUsage);
+    mocked.mockReturnValue({
+      data: {
+        status: "available",
+        snapshot: {
+          five_hour: { utilization: 0.42 },
+          seven_day: { utilization: 0.1 },
+          seven_day_sonnet: { utilization: 0.05 },
+          seven_day_opus: { utilization: 0 },
+        },
+        fetched_at: 1_700_000_000,
+      },
+      isFetching: false,
+      refetch,
+    } as unknown as ReturnType<typeof generated.useGetClaudeCodeOauthUsage>);
+    vi.spyOn(generated, "getClaudeCodeOauthUsage").mockRejectedValue(new Error("network down"));
+
+    const { result } = renderHook(() => useClaudeCodeOauthUsage(true));
+    result.current.refresh();
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("unavailable");
+      expect(result.current.reason).toBe("network down");
+    });
+    expect(refetch).not.toHaveBeenCalled();
+  });
 });

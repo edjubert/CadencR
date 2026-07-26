@@ -99,7 +99,7 @@ mod tests {
                 input_tokens INTEGER NOT NULL DEFAULT 0,
                 output_tokens INTEGER NOT NULL DEFAULT 0,
                 context_window INTEGER NOT NULL DEFAULT 200000,
-                cost_usd REAL NOT NULL DEFAULT 0,
+                cost_usd REAL,
                 pending_permission TEXT,
                 pending_questions TEXT,
                 thinking_effort TEXT

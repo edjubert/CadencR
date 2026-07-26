@@ -1,4 +1,4 @@
-import { memo, type ReactElement, useRef, useState } from "react";
+import { memo, type ReactElement, useEffect, useRef, useState } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 import { normalizeContextWindow, totalTokens, type ContextUsageState } from "@/types/agent";
 import { cn } from "@/lib/utils";
@@ -14,13 +14,21 @@ export function ContextUsageBar({
   usage,
   className,
   isStreaming,
+  supportsClaudeCodeQuota,
 }: {
   usage: ContextUsageState | null | undefined;
   className?: string;
   isStreaming: boolean;
+  /**
+   * The account-quota panel is Claude-Code-specific (it reads an OAuth token
+   * that only exists for that provider). Callers pass `true` only when the
+   * session's provider is Claude Code — every other provider must never
+   * trigger `GET /api/claude-code/oauth-usage` or show that account's quota.
+   */
+  supportsClaudeCodeQuota: boolean;
 }): ReactElement | null {
   const [open, setOpen] = useState(false);
-  const quota = useClaudeCodeOauthUsage(open);
+  const quota = useClaudeCodeOauthUsage(open && supportsClaudeCodeQuota);
   const closeTimeoutRef = useRef<number | undefined>(undefined);
 
   function cancelScheduledClose(): void {
@@ -44,6 +52,8 @@ export function ContextUsageBar({
     cancelScheduledClose();
     setOpen(true);
   }
+
+  useEffect(() => cancelScheduledClose, []);
 
   if (!usage) return null;
   const windowSize = normalizeContextWindow(usage.contextWindow);
@@ -89,7 +99,7 @@ export function ContextUsageBar({
           onMouseEnter={openNow}
           onMouseLeave={scheduleClose}
         >
-          <ContextUsageDetails usage={usage} quota={quota} />
+          <ContextUsageDetails usage={usage} quota={supportsClaudeCodeQuota ? quota : null} />
         </PopoverContent>
       </Popover>
       <PromptKeyboardHint />
@@ -152,14 +162,18 @@ function ContextUsageDetails({
   quota,
 }: {
   usage: ContextUsageState;
-  quota: ReturnType<typeof useClaudeCodeOauthUsage>;
+  /** `null` when the session's provider doesn't support account quota at all
+   * (anything but Claude Code) — renders no quota block whatsoever, not even
+   * a loading or error line. */
+  quota: ReturnType<typeof useClaudeCodeOauthUsage> | null;
 }): ReactElement {
   const windowSize = normalizeContextWindow(usage.contextWindow);
   const used = totalTokens(usage);
   const ratio = windowSize == null ? 0 : Math.min(1, used / windowSize);
   const appearance = getContextUsageAppearance(ratio);
   const usedLabel = `${used.toLocaleString()} / ${windowSize?.toLocaleString() ?? "—"}`;
-  const quotaFetchFailed = quota.status === "unavailable" && quota.reason !== "not authenticated via claude login";
+  const availableQuota = quota?.status === "available" ? quota : null;
+  const snapshot = availableQuota?.snapshot ?? null;
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -179,18 +193,18 @@ function ContextUsageDetails({
           Context compacted
         </p>
       ) : null}
-      {quota.status === "available" && quota.snapshot ? (
+      {availableQuota && snapshot ? (
         <div className="flex flex-col gap-1.5 border-t border-border pt-1.5">
           <div className="flex items-center justify-between">
             <span className="text-[10.5px] text-muted-foreground">Account quota</span>
             <button
               type="button"
               aria-label="Refresh quota"
-              disabled={quota.isRefreshing}
-              onClick={quota.refresh}
+              disabled={availableQuota.isRefreshing}
+              onClick={availableQuota.refresh}
               className="text-muted-foreground hover:text-foreground disabled:opacity-50"
             >
-              {quota.isRefreshing ? (
+              {availableQuota.isRefreshing ? (
                 <Loader2 className="size-3 animate-spin" aria-hidden />
               ) : (
                 <RefreshCw className="size-3" aria-hidden />
@@ -198,7 +212,7 @@ function ContextUsageDetails({
             </button>
           </div>
           {QUOTA_WINDOWS.map(({ key, label }) => {
-            const window = quota.snapshot![key];
+            const window = snapshot[key];
             const barAppearance = getContextUsageAppearance(window.utilization);
             return (
               <div key={key} className="flex items-center justify-between gap-2">
@@ -215,14 +229,19 @@ function ContextUsageDetails({
               </div>
             );
           })}
-          {quota.fetchedAt != null ? (
+          {availableQuota.fetchedAt != null ? (
             <div className="text-right text-[10px] text-muted-foreground">
-              {formatFetchedAgo(quota.fetchedAt)}
+              {formatFetchedAgo(availableQuota.fetchedAt)}
             </div>
           ) : null}
         </div>
       ) : null}
-      {quotaFetchFailed ? (
+      {quota?.status === "loading" ? (
+        <div className="border-t border-border pt-1.5 text-[10.5px] text-muted-foreground">
+          Loading account quota…
+        </div>
+      ) : null}
+      {quota?.status === "unavailable" ? (
         <div className="border-t border-border pt-1.5 text-[10.5px] text-muted-foreground">
           Quota unavailable right now
         </div>

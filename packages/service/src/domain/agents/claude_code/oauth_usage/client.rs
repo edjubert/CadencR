@@ -4,10 +4,13 @@
 //! published, stable API. If Anthropic changes the shape, `parse_usage_response`
 //! is the single place to fix.
 
+use std::time::Duration;
+
 use serde::Deserialize;
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const OAUTH_BETA_HEADER: &str = "oauth-2025-04-20";
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 // `pub(crate)` (not `pub(super)`): `cache.rs` (this module's sibling) needs
 // these, but so does `claude_code::routes` two levels up when it builds the
@@ -29,6 +32,11 @@ pub(crate) struct OauthUsageSnapshot {
 
 #[derive(Debug, Clone)]
 pub(super) enum OauthUsageError {
+    /// Not a failure — the session isn't authenticated via `claude login`
+    /// (API-key/Bedrock/Vertex profile, or never logged in). `cache.rs` maps
+    /// this to `UsageStatus::NotApplicable`, never `Unavailable`, so the
+    /// frontend hides the quota section instead of showing an error.
+    NotAuthenticated,
     Http(String),
     Status(u16),
     Parse(String),
@@ -37,6 +45,7 @@ pub(super) enum OauthUsageError {
 impl std::fmt::Display for OauthUsageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::NotAuthenticated => write!(f, "not authenticated via claude login"),
             Self::Http(msg) => write!(f, "network error: {msg}"),
             Self::Status(code) => write!(f, "unexpected status {code}"),
             Self::Parse(msg) => write!(f, "could not parse response: {msg}"),
@@ -55,7 +64,10 @@ fn parse_usage_response(body: &str) -> Result<OauthUsageSnapshot, OauthUsageErro
 pub(super) async fn fetch_usage(
     access_token: &str,
 ) -> Result<OauthUsageSnapshot, OauthUsageError> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
     let response = client
         .get(USAGE_URL)
         .bearer_auth(access_token)
@@ -103,5 +115,13 @@ mod tests {
             parse_usage_response("not json"),
             Err(OauthUsageError::Parse(_))
         ));
+    }
+
+    #[test]
+    fn not_authenticated_has_a_readable_display() {
+        assert_eq!(
+            OauthUsageError::NotAuthenticated.to_string(),
+            "not authenticated via claude login"
+        );
     }
 }

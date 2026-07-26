@@ -70,7 +70,6 @@ fn message_start() -> RuntimeEvent {
     RuntimeEvent::new(
         RuntimeEventMetadata {
             session_id: Some("cli".into()),
-            cost_usd: None,
             raw: serde_json::json!({ "type": "stream_event" }),
             ..RuntimeEventMetadata::default()
         },
@@ -88,7 +87,6 @@ fn interrupted_error_result() -> RuntimeEvent {
     RuntimeEvent::new(
         RuntimeEventMetadata {
             session_id: Some("cli".into()),
-            cost_usd: None,
             raw: serde_json::json!({
                 "type": "result",
                 "subtype": "error_during_execution",

@@ -15,6 +15,9 @@ export const AgentSession = memo(
   forwardRef<AgentSessionHandle, AgentSessionProps>(function AgentSession(props, ref) {
     const controller = useAgentSessionController(props, ref);
     const { base } = controller;
+
+    const isClaudeProvider =
+      base.activeProviderId === PROVIDER_IDS.CLAUDE_CODE || base.runtimeProvider === PROVIDER_IDS.CLAUDE_CODE;
     return (
       <AgentSessionProvider value={controller.contextValue}>
         {props.wsSessionId && <BranchConfirmDialog wsSessionId={props.wsSessionId} />}

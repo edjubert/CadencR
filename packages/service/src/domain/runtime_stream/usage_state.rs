@@ -601,6 +601,26 @@ mod tests {
         assert_eq!(update.snapshot.context_window, Some(180_000));
     }
 
+    #[test]
+    fn result_event_during_subagent_window_still_updates_cost() {
+        // Same rationale as the context-window sibling above: the Result is
+        // always the root turn's boundary, so its cost must apply to the
+        // root snapshot even while a Task sub-agent window is still open —
+        // a sub-agent's own token usage never reaches this point as a
+        // separate cost update (only Result carries cost_usd), so there is
+        // no sub-agent cost to leak in the first place, but the root Result
+        // must not be mistaken for sub-agent traffic either.
+        let mut state = RuntimeUsageState::new(None, None);
+        state.set_root_session_id("root-1");
+        state.apply_event(
+            None,
+            &make_assistant_with_tool_use("root-1", "toolu_1", "Task", None),
+        );
+        let update = state.apply_event(None, &make_result_with_cost("root-1", 0.15));
+        assert!(update.cost_usd_changed);
+        assert_eq!(update.snapshot.cost_usd, Some(0.15));
+    }
+
     // ── Provider flow integration tests ─────────────────────────────────
     //
     // These exercise the full sequence of events a real provider produces

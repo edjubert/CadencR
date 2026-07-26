@@ -18,8 +18,12 @@ const USAGE_TTL: Duration = Duration::from_secs(60);
 #[derive(Debug, Clone)]
 pub(crate) enum UsageStatus {
     Available(OauthUsageSnapshot),
-    /// Human-readable reason, safe to show in the UI (e.g. "not
-    /// authenticated via claude login", "quota unavailable right now").
+    /// Not authenticated via `claude login` (API-key/Bedrock/Vertex profile,
+    /// or never logged in) — expected, not a failure. The frontend hides the
+    /// quota section entirely for this status instead of showing an error.
+    NotApplicable,
+    /// A real failure (network, non-2xx, malformed response). Human-readable
+    /// reason, safe to show in the UI (e.g. "quota unavailable right now").
     Unavailable(String),
 }
 
@@ -46,17 +50,16 @@ pub(crate) async fn live_usage() -> UsageCacheEntry {
 }
 
 /// Forced refresh entry point — bypasses the TTL check but still goes
-/// through the single-flight lock, so concurrent manual refreshes coalesce
-/// into one HTTP call instead of one each.
+/// through the single-flight lock, so a forced refresh never runs
+/// concurrently with another cache write (each still issues its own probe;
+/// the lock only serializes them, it does not deduplicate them).
 pub(crate) async fn live_usage_force_refresh() -> UsageCacheEntry {
     live_usage_entry_with(real_probe, true).await
 }
 
 async fn real_probe() -> Result<OauthUsageSnapshot, OauthUsageError> {
     let Some(token) = resolve_access_token() else {
-        return Err(OauthUsageError::Http(
-            "not authenticated via claude login".into(),
-        ));
+        return Err(OauthUsageError::NotAuthenticated);
     };
     fetch_usage(&token).await
 }
@@ -87,6 +90,7 @@ where
 
     let status = match probe().await {
         Ok(snapshot) => UsageStatus::Available(snapshot),
+        Err(OauthUsageError::NotAuthenticated) => UsageStatus::NotApplicable,
         Err(error) => {
             tracing::warn!(error = %error, "claude code oauth usage probe failed");
             UsageStatus::Unavailable(error.to_string())
@@ -196,6 +200,18 @@ mod tests {
 
         let _ = live_usage_entry_with(&probe, false).await;
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+        reset_for_test().await;
+    }
+
+    #[tokio::test]
+    async fn not_authenticated_is_cached_as_not_applicable_not_unavailable() {
+        let _guard = TEST_LOCK.lock().await;
+        reset_for_test().await;
+        let probe = || async { Err(super::super::client::OauthUsageError::NotAuthenticated) };
+
+        let entry = live_usage_entry_with(&probe, false).await;
+        assert!(matches!(entry.status, UsageStatus::NotApplicable));
+
         reset_for_test().await;
     }
 }

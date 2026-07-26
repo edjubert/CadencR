@@ -185,6 +185,11 @@ pub async fn delete_custom_model_handler(
 #[serde(rename_all = "snake_case")]
 pub enum OauthUsageResponseStatus {
     Available,
+    /// Not authenticated via `claude login` — expected, not an error. The
+    /// frontend hides the quota section for this status.
+    NotApplicable,
+    /// A real failure (network, non-2xx, malformed response). The frontend
+    /// shows a visible "unavailable" message for this status.
     Unavailable,
 }
 
@@ -247,6 +252,12 @@ fn oauth_usage_response_from_entry(entry: UsageCacheEntry) -> OauthUsageResponse
             }),
             fetched_at: fetched_at_unix_secs,
         },
+        UsageStatus::NotApplicable => OauthUsageResponse {
+            status: OauthUsageResponseStatus::NotApplicable,
+            reason: None,
+            snapshot: None,
+            fetched_at: fetched_at_unix_secs,
+        },
         UsageStatus::Unavailable(reason) => OauthUsageResponse {
             status: OauthUsageResponseStatus::Unavailable,
             reason: Some(reason),
@@ -306,12 +317,40 @@ mod tests {
     fn oauth_usage_response_serializes_unavailable_without_snapshot() {
         let response = OauthUsageResponse {
             status: OauthUsageResponseStatus::Unavailable,
-            reason: Some("not authenticated via claude login".into()),
+            reason: Some("unexpected status 500".into()),
             snapshot: None,
             fetched_at: 0,
         };
         let value = serde_json::to_value(&response).unwrap();
         assert_eq!(value["status"], serde_json::json!("unavailable"));
         assert!(value.get("snapshot").is_none());
+    }
+
+    #[test]
+    fn oauth_usage_response_serializes_not_applicable_without_reason() {
+        let response = OauthUsageResponse {
+            status: OauthUsageResponseStatus::NotApplicable,
+            reason: None,
+            snapshot: None,
+            fetched_at: 0,
+        };
+        let value = serde_json::to_value(&response).unwrap();
+        assert_eq!(value["status"], serde_json::json!("not_applicable"));
+        assert!(value.get("reason").is_none());
+        assert!(value.get("snapshot").is_none());
+    }
+
+    #[test]
+    fn oauth_usage_response_from_entry_maps_not_applicable() {
+        let entry = UsageCacheEntry {
+            status: UsageStatus::NotApplicable,
+            fetched_at: std::time::Instant::now(),
+        };
+        let response = oauth_usage_response_from_entry(entry);
+        assert!(matches!(
+            response.status,
+            OauthUsageResponseStatus::NotApplicable
+        ));
+        assert!(response.reason.is_none());
     }
 }

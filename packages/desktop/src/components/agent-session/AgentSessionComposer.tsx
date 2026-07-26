@@ -24,6 +24,11 @@ export interface AgentSessionComposerProps {
   autoScrollEnabled: boolean;
   showWorktreeChip: boolean;
   activeProviderId: string;
+  /** True for Claude Code, by either the UI-selected provider or the actually
+   * running session's provider — same computation `AgentSession.tsx` already
+   * uses for `showClaudeProfileSelector`. Gates the account-quota panel,
+   * which only makes sense for Claude Code. */
+  isClaudeProvider: boolean;
   currentModelLabel: string;
   modelSelectionStatus: AgentSessionMetaProps["modelSelectionStatus"];
   models: AgentSessionMetaProps["models"];
@@ -118,6 +123,7 @@ export const AgentSessionComposer = memo(function AgentSessionComposer(
         contextUsage={contextUsage}
         isAgentWorking={props.isAgentWorking}
         collapsible={props.collapsible}
+        supportsClaudeCodeQuota={props.isClaudeProvider}
       />
     </div>
   );
@@ -284,10 +290,12 @@ function ComposerContextUsage({
   contextUsage,
   isAgentWorking,
   collapsible,
+  supportsClaudeCodeQuota,
 }: {
   contextUsage: AgentSessionProps["contextUsage"];
   isAgentWorking: boolean;
   collapsible: boolean;
+  supportsClaudeCodeQuota: boolean;
 }) {
   const shouldShow = collapsible
     ? !!contextUsage
@@ -300,6 +308,7 @@ function ComposerContextUsage({
         usage={contextUsage}
         className="flex-1 px-0 py-0"
         isStreaming={isAgentWorking}
+        supportsClaudeCodeQuota={supportsClaudeCodeQuota}
       />
     </div>
   );

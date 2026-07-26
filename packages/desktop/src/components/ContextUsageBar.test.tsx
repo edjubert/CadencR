@@ -7,9 +7,9 @@ import type { ContextUsageState } from "@/types/agent";
 
 vi.mock("@/hooks/useClaudeCodeOauthUsage", () => ({
   useClaudeCodeOauthUsage: vi.fn(() => ({
-    status: "unavailable",
+    status: "not_applicable",
     snapshot: null,
-    reason: "not authenticated via claude login",
+    reason: null,
     fetchedAt: null,
     isRefreshing: false,
     refresh: vi.fn(),
@@ -40,28 +40,48 @@ function makeUsage(
 
 describe("ContextUsageBar", () => {
   it("renders nothing when usage is null", () => {
-    const { container } = render(<ContextUsageBar usage={null} isStreaming={false} />);
+    const { container } = render(
+      <ContextUsageBar usage={null} isStreaming={false} supportsClaudeCodeQuota={true} />,
+    );
     expect(container.firstChild).toBeNull();
   });
 
   it("renders nothing when usage is undefined", () => {
-    const { container } = render(<ContextUsageBar usage={undefined} isStreaming={false} />);
+    const { container } = render(
+      <ContextUsageBar usage={undefined} isStreaming={false} supportsClaudeCodeQuota={true} />,
+    );
     expect(container.firstChild).toBeNull();
   });
 
   it("displays usage as percentage", () => {
-    render(<ContextUsageBar usage={makeUsage({ usageRatio: 0.05 })} isStreaming={false} />);
+    render(
+      <ContextUsageBar
+        usage={makeUsage({ usageRatio: 0.05 })}
+        isStreaming={false}
+        supportsClaudeCodeQuota={true}
+      />,
+    );
     expect(screen.getByText("5%")).toBeInTheDocument();
   });
 
   it("displays high usage as percentage", () => {
-    render(<ContextUsageBar usage={makeUsage({ usageRatio: 0.75 })} isStreaming={false} />);
+    render(
+      <ContextUsageBar
+        usage={makeUsage({ usageRatio: 0.75 })}
+        isStreaming={false}
+        supportsClaudeCodeQuota={true}
+      />,
+    );
     expect(screen.getByText("75%")).toBeInTheDocument();
   });
 
   it("renders low usage (green)", () => {
     const { container } = render(
-      <ContextUsageBar usage={makeUsage({ usageRatio: 0.3 })} isStreaming={false} />,
+      <ContextUsageBar
+        usage={makeUsage({ usageRatio: 0.3 })}
+        isStreaming={false}
+        supportsClaudeCodeQuota={true}
+      />,
     );
     expect(container.querySelector(".h-full.rounded-full")?.className).toContain(
       "bg-[var(--acc-green)]",
@@ -70,7 +90,11 @@ describe("ContextUsageBar", () => {
 
   it("renders medium usage (yellow)", () => {
     const { container } = render(
-      <ContextUsageBar usage={makeUsage({ usageRatio: 0.6 })} isStreaming={false} />,
+      <ContextUsageBar
+        usage={makeUsage({ usageRatio: 0.6 })}
+        isStreaming={false}
+        supportsClaudeCodeQuota={true}
+      />,
     );
     expect(container.querySelector(".h-full.rounded-full")?.className).toContain(
       "bg-[var(--acc-yellow)]",
@@ -79,7 +103,11 @@ describe("ContextUsageBar", () => {
 
   it("renders high usage (orange)", () => {
     const { container } = render(
-      <ContextUsageBar usage={makeUsage({ usageRatio: 0.85 })} isStreaming={false} />,
+      <ContextUsageBar
+        usage={makeUsage({ usageRatio: 0.85 })}
+        isStreaming={false}
+        supportsClaudeCodeQuota={true}
+      />,
     );
     expect(container.querySelector(".h-full.rounded-full")?.className).toContain(
       "bg-[var(--acc-orange)]",
@@ -88,7 +116,11 @@ describe("ContextUsageBar", () => {
 
   it("renders critical usage (red)", () => {
     const { container } = render(
-      <ContextUsageBar usage={makeUsage({ usageRatio: 0.95 })} isStreaming={false} />,
+      <ContextUsageBar
+        usage={makeUsage({ usageRatio: 0.95 })}
+        isStreaming={false}
+        supportsClaudeCodeQuota={true}
+      />,
     );
     expect(container.querySelector(".h-full.rounded-full")?.className).toContain(
       "bg-[var(--acc-red)]",
@@ -97,7 +129,11 @@ describe("ContextUsageBar", () => {
 
   it("renders usage-glow style when active", () => {
     const { container } = render(
-      <ContextUsageBar usage={makeUsage({ usageRatio: 0.6 })} isStreaming />,
+      <ContextUsageBar
+        usage={makeUsage({ usageRatio: 0.6 })}
+        isStreaming
+        supportsClaudeCodeQuota={true}
+      />,
     );
 
     expect(container.querySelector(".context-usage-glow")).toBeInTheDocument();
@@ -106,7 +142,11 @@ describe("ContextUsageBar", () => {
 
   it("does not animate usage-glow when inactive", () => {
     const { container } = render(
-      <ContextUsageBar usage={makeUsage({ usageRatio: 0.6 })} isStreaming={false} />,
+      <ContextUsageBar
+        usage={makeUsage({ usageRatio: 0.6 })}
+        isStreaming={false}
+        supportsClaudeCodeQuota={true}
+      />,
     );
 
     expect(container.querySelector(".context-usage-glow")).not.toBeInTheDocument();
@@ -121,6 +161,7 @@ describe("ContextUsageBar", () => {
           contextWindow: 1_000_000,
         })}
         isStreaming={false}
+        supportsClaudeCodeQuota={true}
       />,
     );
     const bar = container.querySelector<HTMLDivElement>(".h-full.rounded-full");
@@ -140,6 +181,7 @@ describe("ContextUsageBar", () => {
           costUsd: null,
         }}
         isStreaming={false}
+        supportsClaudeCodeQuota={true}
       />,
     );
     expect(container.firstChild).toBeNull();
@@ -150,6 +192,7 @@ describe("ContextUsageBar", () => {
       <ContextUsageBar
         usage={makeUsage({ inputTokens: 0, outputTokens: 0, contextWindow: 0 })}
         isStreaming={false}
+        supportsClaudeCodeQuota={true}
       />,
     );
     expect(container.firstChild).toBeNull();
@@ -161,6 +204,7 @@ describe("ContextUsageBar", () => {
       <ContextUsageBar
         usage={makeUsage({ inputTokens: 40000, outputTokens: 5230, contextWindow: 200000 })}
         isStreaming={false}
+        supportsClaudeCodeQuota={true}
       />,
     );
 
@@ -177,7 +221,13 @@ describe("ContextUsageBar", () => {
 
   it("hides the popover again on unhover", async () => {
     const user = userEvent.setup();
-    render(<ContextUsageBar usage={makeUsage({ usageRatio: 0.3 })} isStreaming={false} />);
+    render(
+      <ContextUsageBar
+        usage={makeUsage({ usageRatio: 0.3 })}
+        isStreaming={false}
+        supportsClaudeCodeQuota={true}
+      />,
+    );
 
     const trigger = screen.getByRole("button", { name: /context usage 30%/i });
     await user.hover(trigger);
@@ -195,6 +245,7 @@ describe("ContextUsageBar", () => {
       <ContextUsageBar
         usage={makeUsage({ usageRatio: 0.3, wasCompacted: true })}
         isStreaming={false}
+        supportsClaudeCodeQuota={true}
       />,
     );
 
@@ -205,7 +256,13 @@ describe("ContextUsageBar", () => {
 
   it("omits the compacted note when wasCompacted is false", async () => {
     const user = userEvent.setup();
-    render(<ContextUsageBar usage={makeUsage({ usageRatio: 0.3 })} isStreaming={false} />);
+    render(
+      <ContextUsageBar
+        usage={makeUsage({ usageRatio: 0.3 })}
+        isStreaming={false}
+        supportsClaudeCodeQuota={true}
+      />,
+    );
 
     await user.hover(screen.getByRole("button", { name: /context usage 30%/i }));
 
@@ -219,6 +276,7 @@ describe("ContextUsageBar", () => {
       <ContextUsageBar
         usage={makeUsage({ usageRatio: 0.3, costUsd: 0.0421 })}
         isStreaming={false}
+        supportsClaudeCodeQuota={true}
       />,
     );
 
@@ -230,7 +288,13 @@ describe("ContextUsageBar", () => {
 
   it("omits session cost when costUsd is null", async () => {
     const user = userEvent.setup();
-    render(<ContextUsageBar usage={makeUsage({ usageRatio: 0.3 })} isStreaming={false} />);
+    render(
+      <ContextUsageBar
+        usage={makeUsage({ usageRatio: 0.3 })}
+        isStreaming={false}
+        supportsClaudeCodeQuota={true}
+      />,
+    );
 
     await user.hover(screen.getByRole("button", { name: /context usage 30%/i }));
 
@@ -239,7 +303,13 @@ describe("ContextUsageBar", () => {
   });
 
   it("keeps keyboard hints outside the usage trigger", () => {
-    render(<ContextUsageBar usage={makeUsage({ usageRatio: 0.3 })} isStreaming={false} />);
+    render(
+      <ContextUsageBar
+        usage={makeUsage({ usageRatio: 0.3 })}
+        isStreaming={false}
+        supportsClaudeCodeQuota={true}
+      />,
+    );
 
     const trigger = screen.getByRole("button", { name: /context usage 30%/i });
     expect(trigger).not.toHaveTextContent("send");
@@ -261,26 +331,55 @@ describe("ContextUsageBar", () => {
       refresh: vi.fn(),
     });
     const user = userEvent.setup();
-    render(<ContextUsageBar usage={makeUsage({ usageRatio: 0.3 })} isStreaming={false} />);
+    render(
+      <ContextUsageBar
+        usage={makeUsage({ usageRatio: 0.3 })}
+        isStreaming={false}
+        supportsClaudeCodeQuota={true}
+      />,
+    );
     await user.hover(screen.getByRole("button", { name: /context usage 30%/i }));
     expect(await screen.findByText("42%")).toBeInTheDocument();
     expect(screen.getByText(/fetched 5s ago/i)).toBeInTheDocument();
   });
 
-  it("hides the quota section when unavailable for a non-OAuth profile", async () => {
+  it("hides the quota section entirely for a non-OAuth profile (status: not_applicable)", async () => {
     vi.mocked(useClaudeCodeOauthUsage).mockReturnValue({
-      status: "unavailable",
+      status: "not_applicable",
       snapshot: null,
-      reason: "not authenticated via claude login",
+      reason: null,
       fetchedAt: null,
       isRefreshing: false,
       refresh: vi.fn(),
     });
     const user = userEvent.setup();
-    render(<ContextUsageBar usage={makeUsage({ usageRatio: 0.3 })} isStreaming={false} />);
+    render(
+      <ContextUsageBar
+        usage={makeUsage({ usageRatio: 0.3 })}
+        isStreaming={false}
+        supportsClaudeCodeQuota={true}
+      />,
+    );
     await user.hover(screen.getByRole("button", { name: /context usage 30%/i }));
     expect(await screen.findByText("Context")).toBeInTheDocument();
     expect(screen.queryByText("Account quota")).not.toBeInTheDocument();
+    expect(screen.queryByText(/quota unavailable right now/i)).not.toBeInTheDocument();
+  });
+
+  it("hides the quota section when the session's provider isn't Claude Code", async () => {
+    const user = userEvent.setup();
+    render(
+      <ContextUsageBar
+        usage={makeUsage({ usageRatio: 0.3 })}
+        isStreaming={false}
+        supportsClaudeCodeQuota={false}
+      />,
+    );
+    await user.hover(screen.getByRole("button", { name: /context usage 30%/i }));
+    expect(await screen.findByText("Context")).toBeInTheDocument();
+    expect(screen.queryByText("Account quota")).not.toBeInTheDocument();
+    expect(screen.queryByText(/loading account quota/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/quota unavailable right now/i)).not.toBeInTheDocument();
   });
 
   it("shows a visible message when the quota fetch actually failed", async () => {
@@ -293,7 +392,13 @@ describe("ContextUsageBar", () => {
       refresh: vi.fn(),
     });
     const user = userEvent.setup();
-    render(<ContextUsageBar usage={makeUsage({ usageRatio: 0.3 })} isStreaming={false} />);
+    render(
+      <ContextUsageBar
+        usage={makeUsage({ usageRatio: 0.3 })}
+        isStreaming={false}
+        supportsClaudeCodeQuota={true}
+      />,
+    );
     await user.hover(screen.getByRole("button", { name: /context usage 30%/i }));
     expect(await screen.findByText(/quota unavailable right now/i)).toBeInTheDocument();
   });
@@ -314,7 +419,13 @@ describe("ContextUsageBar", () => {
       refresh,
     });
     const user = userEvent.setup();
-    render(<ContextUsageBar usage={makeUsage({ usageRatio: 0.3 })} isStreaming={false} />);
+    render(
+      <ContextUsageBar
+        usage={makeUsage({ usageRatio: 0.3 })}
+        isStreaming={false}
+        supportsClaudeCodeQuota={true}
+      />,
+    );
     await user.hover(screen.getByRole("button", { name: /context usage 30%/i }));
     const button = await screen.findByRole("button", { name: /refresh quota/i });
     expect(button).toBeDisabled();
@@ -338,7 +449,13 @@ describe("ContextUsageBar", () => {
       refresh,
     });
     const user = userEvent.setup();
-    render(<ContextUsageBar usage={makeUsage({ usageRatio: 0.3 })} isStreaming={false} />);
+    render(
+      <ContextUsageBar
+        usage={makeUsage({ usageRatio: 0.3 })}
+        isStreaming={false}
+        supportsClaudeCodeQuota={true}
+      />,
+    );
     await user.hover(screen.getByRole("button", { name: /context usage 30%/i }));
     const button = await screen.findByRole("button", { name: /refresh quota/i });
     await user.click(button);

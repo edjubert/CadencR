@@ -1677,6 +1677,7 @@ export type OauthUsageResponseStatus =
 // eslint-disable-next-line @typescript-eslint/no-redeclare
 export const OauthUsageResponseStatus = {
   available: "available",
+  not_applicable: "not_applicable",
   unavailable: "unavailable",
 } as const;
 
