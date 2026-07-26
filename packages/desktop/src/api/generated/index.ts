@@ -1651,6 +1651,42 @@ export interface NewProjectBranchPayload {
   base?: NewProjectBranchPayloadBase;
 }
 
+export interface OauthQuotaWindow {
+  utilization: number;
+}
+
+export type OauthUsageResponseReason = string | null;
+
+export type OauthUsageResponseSnapshot = null | OauthUsageSnapshotResponse;
+
+export interface OauthUsageResponse {
+  /**
+   * Seconds since the Unix epoch when this snapshot was fetched — the
+frontend computes "fetched Ns ago" from this, not from a live timer.
+   * @minimum 0
+   */
+  fetched_at: number;
+  reason?: OauthUsageResponseReason;
+  snapshot?: OauthUsageResponseSnapshot;
+  status: OauthUsageResponseStatus;
+}
+
+export type OauthUsageResponseStatus =
+  (typeof OauthUsageResponseStatus)[keyof typeof OauthUsageResponseStatus];
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const OauthUsageResponseStatus = {
+  available: "available",
+  unavailable: "unavailable",
+} as const;
+
+export interface OauthUsageSnapshotResponse {
+  five_hour: OauthQuotaWindow;
+  seven_day: OauthQuotaWindow;
+  seven_day_opus: OauthQuotaWindow;
+  seven_day_sonnet: OauthQuotaWindow;
+}
+
 /**
  * Optional concrete server id (e.g. `"tsgo"`, `"biome"`). When present the
 service resolves that specific catalog entry instead of the language's
@@ -3090,6 +3126,10 @@ export type GetUnifiedAgentsParams = {
   message_limit?: number | null;
 };
 
+export type GetClaudeCodeOauthUsageParams = {
+  force?: boolean;
+};
+
 export type ListCustomActionsParams = {
   project_id: number;
   /**
@@ -3781,6 +3821,69 @@ export const useDeleteCustomModel = <TError = ErrorType<unknown>, TContext = unk
 
   return useMutation(mutationOptions);
 };
+
+export const getClaudeCodeOauthUsage = (
+  params?: GetClaudeCodeOauthUsageParams,
+  signal?: AbortSignal,
+) => {
+  return customInstance<OauthUsageResponse>({
+    url: `/api/claude-code/oauth-usage`,
+    method: "GET",
+    params,
+    signal,
+  });
+};
+
+export const getGetClaudeCodeOauthUsageQueryKey = (params?: GetClaudeCodeOauthUsageParams) => {
+  return [`/api/claude-code/oauth-usage`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetClaudeCodeOauthUsageQueryOptions = <
+  TData = Awaited<ReturnType<typeof getClaudeCodeOauthUsage>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetClaudeCodeOauthUsageParams,
+  options?: {
+    query?: UseQueryOptions<Awaited<ReturnType<typeof getClaudeCodeOauthUsage>>, TError, TData>;
+  },
+) => {
+  const { query: queryOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetClaudeCodeOauthUsageQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getClaudeCodeOauthUsage>>> = ({
+    signal,
+  }) => getClaudeCodeOauthUsage(params, signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getClaudeCodeOauthUsage>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetClaudeCodeOauthUsageQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getClaudeCodeOauthUsage>>
+>;
+export type GetClaudeCodeOauthUsageQueryError = ErrorType<unknown>;
+
+export function useGetClaudeCodeOauthUsage<
+  TData = Awaited<ReturnType<typeof getClaudeCodeOauthUsage>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetClaudeCodeOauthUsageParams,
+  options?: {
+    query?: UseQueryOptions<Awaited<ReturnType<typeof getClaudeCodeOauthUsage>>, TError, TData>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetClaudeCodeOauthUsageQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  query.queryKey = queryOptions.queryKey;
+
+  return query;
+}
 
 export const listProfiles = (signal?: AbortSignal) => {
   return customInstance<ProfilesResponse>({
