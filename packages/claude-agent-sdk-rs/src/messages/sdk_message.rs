@@ -318,4 +318,63 @@ impl SdkMessage {
             SdkMessage::System(SystemMessage::CompactBoundary { .. })
         )
     }
+
+    /// Extract the cumulative cost (USD) reported on the `Result` message.
+    /// This is the running total for the whole CLI process, not a per-turn
+    /// delta. `None` for every other message variant.
+    pub fn total_cost_usd(&self) -> Option<f64> {
+        match self {
+            SdkMessage::Result { total_cost_usd, .. } => Some(*total_cost_usd),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{PermissionDenial, Usage};
+    use std::collections::HashMap;
+
+    fn result_message(total_cost_usd: f64) -> SdkMessage {
+        SdkMessage::Result {
+            subtype: "success".into(),
+            uuid: "u1".into(),
+            session_id: "s1".into(),
+            duration_ms: 1,
+            duration_api_ms: 1,
+            is_error: false,
+            num_turns: 1,
+            result: Some("ok".into()),
+            errors: None,
+            stop_reason: None,
+            total_cost_usd,
+            usage: Usage {
+                input_tokens: 1,
+                output_tokens: 1,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
+            },
+            permission_denials: Vec::<PermissionDenial>::new(),
+            structured_output: None,
+            model_usage: HashMap::new(),
+            extra: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn total_cost_usd_reads_from_result_message() {
+        let msg = result_message(0.0421);
+        assert_eq!(msg.total_cost_usd(), Some(0.0421));
+    }
+
+    #[test]
+    fn total_cost_usd_is_none_for_non_result_messages() {
+        let msg = SdkMessage::Status {
+            uuid: "u1".into(),
+            session_id: "s1".into(),
+            data: serde_json::json!({}),
+        };
+        assert_eq!(msg.total_cost_usd(), None);
+    }
 }
