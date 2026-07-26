@@ -289,6 +289,7 @@ mod session_events_tests {
                 session_id: Some(runtime_session_id.to_string()),
                 usage: None,
                 context_window: None,
+                cost_usd: None,
                 raw: serde_json::json!({}),
             },
             RuntimeEventKind::StreamEvent {

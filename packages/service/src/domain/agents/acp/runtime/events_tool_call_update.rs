@@ -135,6 +135,7 @@ mod tests {
     }
     fn metadata() -> RuntimeEventMetadata {
         RuntimeEventMetadata {
+            cost_usd: None,
             raw: json!({}),
             ..RuntimeEventMetadata::default()
         }

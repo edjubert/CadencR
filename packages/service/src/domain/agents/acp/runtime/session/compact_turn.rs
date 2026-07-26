@@ -144,6 +144,7 @@ async fn emit_manual_compact_boundary(
             session_id,
             usage: None,
             context_window,
+            cost_usd: None,
             raw,
         },
         RuntimeEventKind::CompactBoundary {

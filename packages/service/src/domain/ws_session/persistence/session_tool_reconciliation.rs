@@ -148,6 +148,7 @@ mod session_tool_reconciliation_tests {
                 session_id: Some("ses_1".to_string()),
                 usage: None,
                 context_window: None,
+                cost_usd: None,
                 raw: serde_json::json!({}),
             },
             RuntimeEventKind::AssistantMessage {
@@ -167,6 +168,7 @@ mod session_tool_reconciliation_tests {
                 session_id: Some("ses_1".to_string()),
                 usage: None,
                 context_window: None,
+                cost_usd: None,
                 raw: serde_json::json!({}),
             },
             RuntimeEventKind::StreamEvent {
@@ -260,6 +262,7 @@ mod session_tool_reconciliation_tests {
                 session_id: Some("ses_1".to_string()),
                 usage: None,
                 context_window: None,
+                cost_usd: None,
                 raw: serde_json::json!({}),
             },
             RuntimeEventKind::StreamEvent {
@@ -294,6 +297,7 @@ mod session_tool_reconciliation_tests {
                 session_id: Some("ses_1".to_string()),
                 usage: None,
                 context_window: None,
+                cost_usd: None,
                 raw: serde_json::json!({}),
             },
             RuntimeEventKind::AssistantMessage {
@@ -333,6 +337,7 @@ mod session_tool_reconciliation_tests {
                 session_id: Some("ses_1".to_string()),
                 usage: None,
                 context_window: None,
+                cost_usd: None,
                 raw: serde_json::json!({}),
             },
             RuntimeEventKind::AssistantMessage {

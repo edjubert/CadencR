@@ -46,6 +46,7 @@ pub async fn refreshed_permission_event_for_tool_input(
             session_id,
             usage: None,
             context_window: None,
+            cost_usd: None,
             raw: permission_raw_event(&request, &params),
         },
         RuntimeEventKind::Other,

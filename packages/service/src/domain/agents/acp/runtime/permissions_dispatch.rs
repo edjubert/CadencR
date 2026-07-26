@@ -87,6 +87,7 @@ pub async fn dispatch_permission_request_for_method(
         session_id,
         usage: None,
         context_window: None,
+        cost_usd: None,
         raw,
     };
     let event = RuntimeEvent::new(metadata, RuntimeEventKind::Other);

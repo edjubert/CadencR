@@ -277,6 +277,7 @@ async fn emit_init_event(
             session_id: Some(negotiated.session_id.clone()),
             usage: None,
             context_window: negotiated.context_window,
+            cost_usd: None,
             raw,
         },
         RuntimeEventKind::Init(RuntimeInitEvent {

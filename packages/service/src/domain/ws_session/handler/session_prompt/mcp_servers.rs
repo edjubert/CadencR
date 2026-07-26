@@ -289,6 +289,7 @@ mod tests {
                 session_id: Some("sess".into()),
                 usage: None,
                 context_window: None,
+                cost_usd: None,
                 raw: json!({ "type": "session.init" }),
             },
             RuntimeEventKind::Init(RuntimeInitEvent {

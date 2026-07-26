@@ -327,6 +327,7 @@ async fn test_stream_reader_routes_acp_permission_request() {
             session_id: Some("sess-opencode".to_string()),
             usage: None,
             context_window: None,
+            cost_usd: None,
             raw: serde_json::json!({
                 "type": "acp_permission_request",
                 "request_id": "perm-1",
@@ -539,6 +540,7 @@ async fn test_stream_close_mid_turn_surfaces_an_error() {
                 session_id: Some("cli".to_string()),
                 usage: None,
                 context_window: None,
+                cost_usd: None,
                 raw: serde_json::json!({ "type": "stream_event" }),
             },
             RuntimeEventKind::StreamEvent {
@@ -640,6 +642,7 @@ async fn test_intentional_teardown_mid_turn_closes_benignly() {
                 session_id: Some("cli".to_string()),
                 usage: None,
                 context_window: None,
+                cost_usd: None,
                 raw: serde_json::json!({ "type": "stream_event" }),
             },
             RuntimeEventKind::StreamEvent {
@@ -730,6 +733,7 @@ async fn test_error_result_is_surfaced_and_still_completes_the_turn() {
                 session_id: Some("cli".to_string()),
                 usage: None,
                 context_window: None,
+                cost_usd: None,
                 raw: serde_json::json!({ "type": "result", "subtype": "error_during_execution" }),
             },
             RuntimeEventKind::Result,
@@ -837,6 +841,7 @@ async fn test_error_result_after_provider_error_does_not_double_surface() {
                 session_id: Some("cli".to_string()),
                 usage: None,
                 context_window: None,
+                cost_usd: None,
                 raw: serde_json::json!({ "type": "result", "subtype": "error_during_execution" }),
             },
             RuntimeEventKind::Result,
@@ -924,6 +929,7 @@ async fn test_session_message_envelopes_carry_monotonic_seq() {
                     session_id: Some("cli".to_string()),
                     usage: None,
                     context_window: None,
+                    cost_usd: None,
                     raw: serde_json::json!({
                         "type": "stream_event",
                         "event": {

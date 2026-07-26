@@ -27,6 +27,7 @@ pub(super) fn usage_event(params: Value) -> RuntimeEvent {
             session_id: Some(session_id.clone()),
             usage: Some(usage),
             context_window,
+            cost_usd: None,
             raw: serde_json::json!({ "type": "usage_update", "session_id": session_id }),
         },
         RuntimeEventKind::Other,

@@ -123,6 +123,7 @@ pub(super) fn synthesize_subagent_text_event(
         session_id: metadata.session_id.clone(),
         usage: None,
         context_window: None,
+        cost_usd: None,
         raw,
     };
     RuntimeEvent::new(
@@ -148,6 +149,7 @@ mod tests {
     fn metadata() -> RuntimeEventMetadata {
         RuntimeEventMetadata {
             session_id: Some("ses_parent".to_string()),
+            cost_usd: None,
             raw: json!({}),
             ..RuntimeEventMetadata::default()
         }

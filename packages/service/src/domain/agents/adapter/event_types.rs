@@ -59,6 +59,11 @@ pub struct RuntimeEventMetadata {
     /// (e.g. from Claude Code's `result.modelUsage[model].contextWindow`).
     /// Populated on turn-complete events; `None` on intermediate events.
     pub context_window: Option<u64>,
+    /// Cumulative session cost (USD) reported by the provider on its
+    /// turn-ending result (Claude Code: `Result.total_cost_usd`). `None` on
+    /// every intermediate event and for every provider that doesn't report
+    /// cost — this is populated only by the Claude Code adapter.
+    pub cost_usd: Option<f64>,
     pub raw: Value,
 }
 

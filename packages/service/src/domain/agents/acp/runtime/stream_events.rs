@@ -15,6 +15,7 @@ fn metadata(session_id: String, usage: Option<RuntimeUsage>, raw: Value) -> Runt
     RuntimeEventMetadata {
         session_id: Some(session_id),
         usage,
+        cost_usd: None,
         raw,
         ..RuntimeEventMetadata::default()
     }

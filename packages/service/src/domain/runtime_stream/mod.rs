@@ -114,6 +114,7 @@ mod tests {
                 session_id: Some("sess-123".into()),
                 usage: None,
                 context_window: None,
+                cost_usd: None,
                 raw: json!({ "type": "stream_event" }),
             },
             RuntimeEventKind::AssistantMessage {
@@ -139,6 +140,7 @@ mod tests {
                 session_id: None,
                 usage: None,
                 context_window: Some(1_000_000),
+                cost_usd: None,
                 raw: json!({ "type": "result" }),
             },
             RuntimeEventKind::Result,
@@ -154,6 +156,7 @@ mod tests {
                 session_id: None,
                 usage: None,
                 context_window: None,
+                cost_usd: None,
                 raw: json!({ "type": "init" }),
             },
             RuntimeEventKind::Init(RuntimeInitEvent {
@@ -173,6 +176,7 @@ mod tests {
                 session_id: None,
                 usage: None,
                 context_window: Some(1_000_000),
+                cost_usd: None,
                 raw: json!({
                     "type": "result",
                     "modelUsage": {
@@ -213,6 +217,7 @@ mod tests {
                 session_id: None,
                 usage: None,
                 context_window: Some(1_000_000),
+                cost_usd: None,
                 raw: json!({
                     "type": "result",
                     "modelUsage": {
@@ -236,6 +241,7 @@ mod tests {
                 session_id: Some("s1".into()),
                 usage: None,
                 context_window: None,
+                cost_usd: None,
                 raw: json!({ "type": "stream_event" }),
             },
             RuntimeEventKind::AssistantMessage {

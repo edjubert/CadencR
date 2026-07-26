@@ -18,6 +18,7 @@ pub(super) fn normalize_event(msg: claude_agent_sdk_rs::SdkMessage) -> RuntimeEv
             output_tokens: usage.output_tokens,
         }),
         context_window: msg.result_context_window(),
+        cost_usd: msg.total_cost_usd(),
         raw: serde_json::to_value(&msg).unwrap_or(Value::Null),
     };
 
@@ -390,5 +391,43 @@ mod tests {
             "message should name the failing subtype: {}",
             error.message
         );
+    }
+
+    #[test]
+    fn normalize_event_maps_total_cost_usd_from_result() {
+        let message: claude_agent_sdk_rs::SdkMessage = serde_json::from_value(json!({
+            "type": "result",
+            "subtype": "success",
+            "uuid": "u1",
+            "session_id": "s1",
+            "duration_ms": 1,
+            "duration_api_ms": 1,
+            "is_error": false,
+            "num_turns": 1,
+            "total_cost_usd": 0.0421,
+            "usage": { "input_tokens": 1, "output_tokens": 1 }
+        }))
+        .expect("valid result message");
+
+        let event = normalize_event(message);
+        assert_eq!(event.cost_usd(), Some(0.0421));
+    }
+
+    #[test]
+    fn normalize_event_cost_usd_is_none_for_non_result_events() {
+        let message: claude_agent_sdk_rs::SdkMessage = serde_json::from_value(json!({
+            "type": "stream_event",
+            "uuid": "u1",
+            "session_id": "s1",
+            "event": {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": { "type": "text_delta", "text": "hi" }
+            }
+        }))
+        .expect("valid stream event");
+
+        let event = normalize_event(message);
+        assert_eq!(event.cost_usd(), None);
     }
 }

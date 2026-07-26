@@ -79,6 +79,7 @@ fn question_permission_event(
 ) -> RuntimeEvent {
     let mut event = RuntimeEvent::new(
         RuntimeEventMetadata {
+            cost_usd: None,
             raw: json!({
                 "type": "acp_permission_request",
                 "transport": "acp",
@@ -105,6 +106,7 @@ mod tests {
 
     fn metadata() -> RuntimeEventMetadata {
         RuntimeEventMetadata {
+            cost_usd: None,
             raw: json!({}),
             ..RuntimeEventMetadata::default()
         }

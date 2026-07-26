@@ -106,6 +106,7 @@ async fn extension_metadata(
         session_id: config.session_id.read().await.clone(),
         usage: None,
         context_window: None,
+        cost_usd: None,
         raw: json!({
             "type": "acp_extension",
             "method": method,

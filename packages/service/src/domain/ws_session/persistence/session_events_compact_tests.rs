@@ -313,6 +313,7 @@ mod session_events_compact_tests {
                 session_id: Some("sess".to_string()),
                 usage: None,
                 context_window: None,
+                cost_usd: None,
                 raw: serde_json::json!({}),
             },
             RuntimeEventKind::CompactBoundary { metadata },

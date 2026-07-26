@@ -112,6 +112,7 @@ fn base_metadata(params: &Value, session_id: Option<&str>) -> RuntimeEventMetada
         session_id: session_id.map(ToOwned::to_owned),
         usage: None,
         context_window: None,
+        cost_usd: None,
         raw: params.clone(),
     }
 }

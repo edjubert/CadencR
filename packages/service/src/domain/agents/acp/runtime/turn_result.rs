@@ -30,6 +30,7 @@ pub async fn emit_turn_result(
         session_id,
         usage,
         context_window,
+        cost_usd: None,
         raw,
     };
     let event = RuntimeEvent::new(metadata, RuntimeEventKind::Result);

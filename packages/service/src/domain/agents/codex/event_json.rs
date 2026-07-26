@@ -8,6 +8,7 @@ use crate::domain::agents::adapter::{
 pub(super) fn metadata(session_id: &str, raw: Value) -> RuntimeEventMetadata {
     RuntimeEventMetadata {
         session_id: Some(session_id.to_string()),
+        cost_usd: None,
         raw,
         ..RuntimeEventMetadata::default()
     }

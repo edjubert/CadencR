@@ -177,6 +177,7 @@ mod tests {
                 session_id: Some(session_id.into()),
                 usage: None,
                 context_window: None,
+                cost_usd: None,
                 raw: json!({ "type": "stream_event" }),
             },
             RuntimeEventKind::StreamEvent {
@@ -199,6 +200,7 @@ mod tests {
                 session_id: Some(session_id.into()),
                 usage: Some(usage),
                 context_window: None,
+                cost_usd: None,
                 raw: json!({ "type": "usage_update" }),
             },
             RuntimeEventKind::AssistantMessage {
@@ -222,6 +224,7 @@ mod tests {
                 session_id: Some(session_id.into()),
                 usage,
                 context_window: None,
+                cost_usd: None,
                 raw: json!({ "type": "assistant" }),
             },
             RuntimeEventKind::AssistantMessage {
@@ -248,6 +251,7 @@ mod tests {
                 session_id: Some(session_id.into()),
                 usage: None,
                 context_window: None,
+                cost_usd: None,
                 raw: json!({ "type": "user" }),
             },
             RuntimeEventKind::UserMessage {
@@ -273,6 +277,7 @@ mod tests {
                 session_id: Some(session_id.into()),
                 usage: None,
                 context_window: Some(context_window),
+                cost_usd: None,
                 raw: json!({ "type": "result" }),
             },
             RuntimeEventKind::Result,
@@ -285,6 +290,7 @@ mod tests {
                 session_id: Some(session_id.into()),
                 usage: None,
                 context_window: None,
+                cost_usd: None,
                 raw: json!({ "type": "system", "subtype": "init" }),
             },
             RuntimeEventKind::Init(crate::domain::agents::adapter::RuntimeInitEvent {

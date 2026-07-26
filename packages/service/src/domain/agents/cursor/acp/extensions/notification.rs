@@ -99,6 +99,7 @@ mod tests {
             "cursor/task",
             &json!({ "toolCallId": "task-1", "description": "Explore" }),
             RuntimeEventMetadata {
+                cost_usd: None,
                 raw: json!({ "type": "acp_extension", "method": "cursor/task" }),
                 ..RuntimeEventMetadata::default()
             },

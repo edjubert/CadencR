@@ -270,6 +270,7 @@ mod tests {
     use serde_json::json;
     fn metadata() -> RuntimeEventMetadata {
         RuntimeEventMetadata {
+            cost_usd: None,
             raw: json!({}),
             ..RuntimeEventMetadata::default()
         }

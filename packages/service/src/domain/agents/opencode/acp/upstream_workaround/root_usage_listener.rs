@@ -54,6 +54,7 @@ impl RootUsageState {
                 session_id: Some(root_session_id.to_string()),
                 usage: Some(usage.clone()),
                 context_window,
+                cost_usd: None,
                 raw: json!({
                     "type": "usage_update",
                     "source": "http_poll",

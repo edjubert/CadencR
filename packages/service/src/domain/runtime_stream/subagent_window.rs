@@ -128,6 +128,7 @@ mod tests {
                 session_id: Some("root-1".into()),
                 usage: None,
                 context_window: None,
+                cost_usd: None,
                 raw: json!({ "type": "assistant" }),
             },
             RuntimeEventKind::AssistantMessage {
@@ -150,6 +151,7 @@ mod tests {
                 session_id: Some("root-1".into()),
                 usage: None,
                 context_window: None,
+                cost_usd: None,
                 raw: json!({ "type": "user" }),
             },
             RuntimeEventKind::UserMessage {
@@ -225,6 +227,7 @@ mod tests {
                 session_id: Some("root-1".into()),
                 usage: None,
                 context_window: None,
+                cost_usd: None,
                 raw: json!({ "type": "user" }),
             },
             RuntimeEventKind::UserMessage {
@@ -258,6 +261,7 @@ mod tests {
                 session_id: Some("root-1".into()),
                 usage: None,
                 context_window: None,
+                cost_usd: None,
                 raw: json!({ "type": "user" }),
             },
             RuntimeEventKind::UserMessage {

@@ -57,6 +57,10 @@ impl RuntimeEvent {
         self.metadata.context_window
     }
 
+    pub fn cost_usd(&self) -> Option<f64> {
+        self.metadata.cost_usd
+    }
+
     pub fn is_result(&self) -> bool {
         matches!(self.kind, RuntimeEventKind::Result)
     }
@@ -197,6 +201,7 @@ impl RuntimeEvent {
                 session_id,
                 usage: None,
                 context_window,
+                cost_usd: None,
                 raw,
             },
             RuntimeEventKind::TurnStarted { source },
@@ -249,6 +254,7 @@ impl RuntimeEvent {
     pub fn prompt_received_event(client_message_id: String) -> Self {
         Self::new(
             RuntimeEventMetadata {
+                cost_usd: None,
                 raw: serde_json::json!({
                     "type": "prompt_received",
                     "client_message_id": client_message_id,
@@ -285,6 +291,7 @@ mod tests {
                 session_id: Some("root".into()),
                 usage: None,
                 context_window: None,
+                cost_usd: None,
                 raw: json!({
                     "type": "assistant",
                     "session_id": "root",
@@ -340,6 +347,7 @@ mod tests {
                 session_id: Some("root".into()),
                 usage: None,
                 context_window: None,
+                cost_usd: None,
                 raw: json!({ "type": "stream_event", "parent_tool_use_id": null }),
             },
             RuntimeEventKind::StreamEvent {

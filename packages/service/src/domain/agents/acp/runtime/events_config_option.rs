@@ -86,6 +86,7 @@ mod tests {
             session_id: Some("s-1".into()),
             usage: None,
             context_window: None,
+            cost_usd: None,
             raw: json!({}),
         }
     }
