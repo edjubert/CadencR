@@ -221,6 +221,7 @@ pub(crate) async fn make_test_app_state() -> AppState {
                 input_tokens INTEGER NOT NULL DEFAULT 0,
                 output_tokens INTEGER NOT NULL DEFAULT 0,
                 context_window INTEGER NOT NULL DEFAULT 200000,
+                cost_usd REAL NOT NULL DEFAULT 0,
                 thinking_effort TEXT
             )"#,
     )

@@ -99,6 +99,7 @@ mod tests {
                 input_tokens INTEGER NOT NULL DEFAULT 0,
                 output_tokens INTEGER NOT NULL DEFAULT 0,
                 context_window INTEGER NOT NULL DEFAULT 200000,
+                cost_usd REAL NOT NULL DEFAULT 0,
                 pending_permission TEXT,
                 pending_questions TEXT,
                 thinking_effort TEXT
@@ -135,6 +136,7 @@ mod tests {
             input_tokens: None,
             output_tokens: None,
             context_window: None,
+            cost_usd: None,
             thinking_effort: None,
         };
         let (_, payload) = row.pending_gate_payload().expect("payload");
@@ -181,6 +183,7 @@ mod tests {
             input_tokens: None,
             output_tokens: None,
             context_window: None,
+            cost_usd: None,
             thinking_effort: None,
         }
     }

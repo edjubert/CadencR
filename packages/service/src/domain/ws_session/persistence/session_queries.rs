@@ -18,9 +18,10 @@ impl WsSessionPersistence {
             Option<i64>,
             Option<i64>,
             Option<i64>,
+            Option<f64>,
             Option<String>,
         )> = sqlx::query_as(
-            "SELECT id, feature_id, runtime_provider, runtime_session_id, model, profile, permission_mode, codex_permission_mode, status, pending_permission, pending_questions, input_tokens, output_tokens, context_window, thinking_effort FROM agent_sessions WHERE id = ?",
+            "SELECT id, feature_id, runtime_provider, runtime_session_id, model, profile, permission_mode, codex_permission_mode, status, pending_permission, pending_questions, input_tokens, output_tokens, context_window, cost_usd, thinking_effort FROM agent_sessions WHERE id = ?",
         )
         .bind(session_id)
         .fetch_optional(pool)
@@ -41,6 +42,7 @@ impl WsSessionPersistence {
                 input_tokens,
                 output_tokens,
                 context_window,
+                cost_usd,
                 thinking_effort,
             )| SessionRow {
                 id,
@@ -57,6 +59,7 @@ impl WsSessionPersistence {
                 input_tokens,
                 output_tokens,
                 context_window,
+                cost_usd,
                 thinking_effort,
             },
         ))
@@ -118,6 +121,7 @@ mod session_queries_tests {
                 input_tokens INTEGER NOT NULL DEFAULT 0,
                 output_tokens INTEGER NOT NULL DEFAULT 0,
                 context_window INTEGER NOT NULL DEFAULT 200000,
+                cost_usd REAL NOT NULL DEFAULT 0,
                 started_at TEXT,
                 ended_at TEXT,
                 pending_permission TEXT,

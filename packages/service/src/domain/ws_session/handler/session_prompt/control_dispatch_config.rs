@@ -189,6 +189,7 @@ mod tests {
             input_tokens: None,
             output_tokens: None,
             context_window: None,
+            cost_usd: None,
             thinking_effort: None,
         };
 

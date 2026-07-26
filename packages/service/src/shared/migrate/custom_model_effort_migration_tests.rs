@@ -14,6 +14,7 @@ async fn migration_preserves_existing_custom_models_with_unknown_effort() {
          CREATE TABLE claude_code_custom_models (id INTEGER PRIMARY KEY, model_id TEXT NOT NULL \
          UNIQUE, label TEXT NOT NULL, description TEXT, created_at DATETIME NOT NULL DEFAULT \
          CURRENT_TIMESTAMP); \
+         CREATE TABLE agent_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, feature_id INTEGER NOT NULL); \
          CREATE TABLE agent_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT \
          NULL); \
          CREATE TABLE agent_session_message_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, \
