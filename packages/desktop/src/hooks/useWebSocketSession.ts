@@ -209,6 +209,9 @@ function usePersistedSessionLoader(
             outputTokens: lastSession.outputTokens ?? 0,
             contextWindow: normalizeContextWindow(lastSession.contextWindow),
             wasCompacted: lastSession.wasCompacted ?? false,
+            // Not exposed by this REST payload — the live session.init WS
+            // envelope (handleInitialized) is what carries cost_usd.
+            costUsd: null,
           }
         : null;
     store.setPersistedState(sessionId, {

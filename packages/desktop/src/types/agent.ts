@@ -42,6 +42,8 @@ export interface ContextUsageState {
   /** `null` means the provider has not reported an authoritative window yet. */
   contextWindow: number | null;
   wasCompacted: boolean;
+  /** Cumulative session cost (USD). `null` for providers that don't report cost. */
+  costUsd: number | null;
 }
 
 export function normalizeContextWindow(contextWindow: number | null | undefined): number | null {

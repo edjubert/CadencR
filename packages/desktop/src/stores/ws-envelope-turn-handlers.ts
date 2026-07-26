@@ -58,6 +58,7 @@ export function handleUsageUpdate(ctx: StoreAccessors, sessionId: string, payloa
         outputTokens: u.output_tokens,
         contextWindow,
         wasCompacted: session.contextUsage?.wasCompacted ?? false,
+        costUsd: u.cost_usd ?? session.contextUsage?.costUsd ?? null,
       },
     }),
   );

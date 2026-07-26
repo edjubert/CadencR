@@ -85,6 +85,7 @@ export function handleInitialized(ctx: StoreAccessors, sessionId: string, payloa
       outputTokens: p.output_tokens ?? 0,
       contextWindow,
       wasCompacted: false,
+      costUsd: p.cost_usd ?? null,
     };
   }
   ctx.set(updateSession(ctx.get(), sessionId, updates));

@@ -14,6 +14,7 @@ function makeUsage(
     outputTokens: 0,
     contextWindow: 200000,
     wasCompacted: false,
+    costUsd: null,
     ...rest,
   };
   if (ratio != null && base.contextWindow && base.contextWindow > 0) {
@@ -124,6 +125,7 @@ describe("ContextUsageBar", () => {
           outputTokens: 0,
           contextWindow: null,
           wasCompacted: false,
+          costUsd: null,
         }}
         isStreaming={false}
       />,

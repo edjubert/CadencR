@@ -78,6 +78,7 @@ describe("ws-session usage updates", () => {
         outputTokens: 25,
         contextWindow: 200_000,
         wasCompacted: false,
+        costUsd: null,
       },
     });
 
@@ -92,6 +93,7 @@ describe("ws-session usage updates", () => {
       outputTokens: 50,
       contextWindow: 200_000,
       wasCompacted: false,
+      costUsd: null,
     });
   });
 
@@ -107,6 +109,7 @@ describe("ws-session usage updates", () => {
         outputTokens: 25,
         contextWindow: null,
         wasCompacted: false,
+        costUsd: null,
       },
     });
 
@@ -121,6 +124,7 @@ describe("ws-session usage updates", () => {
       outputTokens: 50,
       contextWindow: 1_000_000,
       wasCompacted: false,
+      costUsd: null,
     });
   });
 });

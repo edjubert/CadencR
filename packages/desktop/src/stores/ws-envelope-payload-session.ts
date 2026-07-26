@@ -226,6 +226,7 @@ export function parseUsagePayload(payload: unknown): {
   input_tokens: number;
   output_tokens: number;
   context_window?: number;
+  cost_usd?: number;
 } | null {
   const record = asRecord(payload);
   if (!record) return null;
@@ -234,6 +235,7 @@ export function parseUsagePayload(payload: unknown): {
     input_tokens: optionalNumber(record, "input_tokens") ?? 0,
     output_tokens: optionalNumber(record, "output_tokens") ?? 0,
     context_window: contextWindow && contextWindow > 0 ? contextWindow : undefined,
+    cost_usd: optionalNumber(record, "cost_usd"),
   };
 }
 

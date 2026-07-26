@@ -124,6 +124,7 @@ export function parseInitializedPayload(payload: unknown): {
   input_tokens?: number;
   output_tokens?: number;
   context_window?: number;
+  cost_usd?: number;
   supports_prompt_receipts?: boolean;
 } | null {
   const record = asRecord(payload);
@@ -142,6 +143,7 @@ export function parseInitializedPayload(payload: unknown): {
     input_tokens: optionalNumber(record, "input_tokens"),
     output_tokens: optionalNumber(record, "output_tokens"),
     context_window: optionalNumber(record, "context_window"),
+    cost_usd: optionalNumber(record, "cost_usd"),
     supports_prompt_receipts: optionalBoolean(record, "supports_prompt_receipts"),
   };
 }

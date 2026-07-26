@@ -301,5 +301,8 @@ function buildContextUsage(entry: UnifiedAgentEntry): ContextUsageState {
     outputTokens: entry.session.outputTokens,
     contextWindow: normalizeContextWindow(entry.session.contextWindow),
     wasCompacted: entry.session.wasCompacted,
+    // Not exposed by the sessions list REST payload — only the live WS
+    // usage_update/session_initialized envelopes carry cost_usd today.
+    costUsd: null,
   };
 }

@@ -92,6 +92,7 @@ describe("useWebSocketSession context usage hydration", () => {
       outputTokens: 0,
       contextWindow: 1_000_000,
       wasCompacted: false,
+      costUsd: null,
     });
   });
 });

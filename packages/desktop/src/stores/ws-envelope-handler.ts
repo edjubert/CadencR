@@ -265,12 +265,18 @@ function handleProviderSetOk(ctx: StoreAccessors, sessionId: string, payload: un
 
 function handleModelSetOk(ctx: StoreAccessors, sessionId: string, payload: unknown): void {
   const p = parseModelPayload(payload);
-  if (!p) return;
-  const session = ctx.getSession(sessionId);
-  const nextContextWindow = p.context_window ?? session.contextUsage?.contextWindow ?? null;
-  const nextUsage = session.contextUsage
-    ? { ...session.contextUsage, contextWindow: nextContextWindow }
-    : { inputTokens: 0, outputTokens: 0, contextWindow: nextContextWindow, wasCompacted: false };
+  if (!p?.model) return;
+  const existing = ctx.getSession(sessionId).contextUsage;
+  const nextContextWindow = p.context_window ?? existing?.contextWindow ?? null;
+  const nextUsage = existing
+    ? { ...existing, contextWindow: nextContextWindow }
+    : {
+        inputTokens: 0,
+        outputTokens: 0,
+        contextWindow: nextContextWindow,
+        wasCompacted: false,
+        costUsd: null,
+      };
   ctx.set(
     updateSession(ctx.get(), sessionId, {
       currentProviderId: p.provider,

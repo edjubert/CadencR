@@ -147,6 +147,7 @@ function processMessageBlocks(
           outputTokens: 0,
           contextWindow: null,
           wasCompacted: true,
+          costUsd: null,
         };
   }
 

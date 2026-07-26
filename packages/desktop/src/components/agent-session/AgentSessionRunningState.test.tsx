@@ -108,6 +108,7 @@ function makeUsage(): ContextUsageState {
     outputTokens: 25_000,
     contextWindow: 100_000,
     wasCompacted: false,
+    costUsd: null,
   };
 }
 

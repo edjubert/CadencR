@@ -1436,6 +1436,7 @@ describe("ws-session-store", () => {
           outputTokens: 6789,
           contextWindow: 200000,
           wasCompacted: false,
+          costUsd: null,
         },
       }),
     );
@@ -1473,6 +1474,7 @@ describe("ws-session-store", () => {
           outputTokens: 200,
           contextWindow: 200000,
           wasCompacted: false,
+          costUsd: null,
         },
       }),
     );
