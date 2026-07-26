@@ -199,6 +199,31 @@ describe("ContextUsageBar", () => {
     expect(screen.queryByText("Context compacted")).not.toBeInTheDocument();
   });
 
+  it("shows session cost when costUsd is present", async () => {
+    const user = userEvent.setup();
+    render(
+      <ContextUsageBar
+        usage={makeUsage({ usageRatio: 0.3, costUsd: 0.0421 })}
+        isStreaming={false}
+      />,
+    );
+
+    await user.hover(screen.getByRole("button", { name: /context usage 30%/i }));
+
+    expect(await screen.findByText("Session cost")).toBeInTheDocument();
+    expect(screen.getByText("$0.04")).toBeInTheDocument();
+  });
+
+  it("omits session cost when costUsd is null", async () => {
+    const user = userEvent.setup();
+    render(<ContextUsageBar usage={makeUsage({ usageRatio: 0.3 })} isStreaming={false} />);
+
+    await user.hover(screen.getByRole("button", { name: /context usage 30%/i }));
+
+    expect(await screen.findByText("Context")).toBeInTheDocument();
+    expect(screen.queryByText("Session cost")).not.toBeInTheDocument();
+  });
+
   it("keeps keyboard hints outside the usage trigger", () => {
     render(<ContextUsageBar usage={makeUsage({ usageRatio: 0.3 })} isStreaming={false} />);
 

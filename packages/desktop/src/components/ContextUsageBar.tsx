@@ -100,6 +100,10 @@ const ContextUsageMeter = memo(function ContextUsageMeter({
   );
 });
 
+function formatCostUsd(costUsd: number): string {
+  return `$${costUsd.toFixed(2)}`;
+}
+
 function ContextUsageDetails({ usage }: { usage: ContextUsageState }): ReactElement {
   const windowSize = normalizeContextWindow(usage.contextWindow);
   const used = totalTokens(usage);
@@ -112,6 +116,14 @@ function ContextUsageDetails({ usage }: { usage: ContextUsageState }): ReactElem
       <span className="text-[11px] font-medium text-foreground">Context</span>
       <ContextUsageMeter ratio={ratio} appearance={appearance} className="h-1" />
       <p className="font-mono text-[10.5px] tabular-nums text-muted-foreground">{usedLabel}</p>
+      {usage.costUsd != null ? (
+        <div className="flex items-center justify-between gap-3 border-t border-border pt-1.5">
+          <span className="text-[10.5px] text-muted-foreground">Session cost</span>
+          <span className="font-mono text-[10.5px] font-medium tabular-nums text-foreground">
+            {formatCostUsd(usage.costUsd)}
+          </span>
+        </div>
+      ) : null}
       {usage.wasCompacted ? (
         <p className="border-t border-border pt-2 text-[10.5px] font-medium text-[var(--acc-orange)]">
           Context compacted
