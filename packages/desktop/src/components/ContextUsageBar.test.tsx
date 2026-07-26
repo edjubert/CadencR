@@ -1,8 +1,20 @@
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
-import { render, screen } from "@/test-utils";
+import { describe, expect, it, vi } from "vitest";
+import { render, screen, waitFor } from "@/test-utils";
 import { ContextUsageBar } from "./ContextUsageBar";
+import { useClaudeCodeOauthUsage } from "@/hooks/useClaudeCodeOauthUsage";
 import type { ContextUsageState } from "@/types/agent";
+
+vi.mock("@/hooks/useClaudeCodeOauthUsage", () => ({
+  useClaudeCodeOauthUsage: vi.fn(() => ({
+    status: "unavailable",
+    snapshot: null,
+    reason: "not authenticated via claude login",
+    fetchedAt: null,
+    isRefreshing: false,
+    refresh: vi.fn(),
+  })),
+}));
 
 function makeUsage(
   overrides: Partial<ContextUsageState> & { usageRatio?: number } = {},
@@ -172,7 +184,9 @@ describe("ContextUsageBar", () => {
     expect(await screen.findByText("Context")).toBeInTheDocument();
 
     await user.unhover(trigger);
-    expect(screen.queryByText("Context")).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByText("Context")).not.toBeInTheDocument();
+    });
   });
 
   it("shows the compacted note only when wasCompacted is true", async () => {
@@ -230,5 +244,104 @@ describe("ContextUsageBar", () => {
     const trigger = screen.getByRole("button", { name: /context usage 30%/i });
     expect(trigger).not.toHaveTextContent("send");
     expect(screen.getByText("send")).toBeInTheDocument();
+  });
+
+  it("shows quota bars when available", async () => {
+    vi.mocked(useClaudeCodeOauthUsage).mockReturnValue({
+      status: "available",
+      snapshot: {
+        five_hour: { utilization: 0.42 },
+        seven_day: { utilization: 0.1 },
+        seven_day_sonnet: { utilization: 0.05 },
+        seven_day_opus: { utilization: 0 },
+      },
+      reason: null,
+      fetchedAt: Math.floor(Date.now() / 1000) - 5,
+      isRefreshing: false,
+      refresh: vi.fn(),
+    });
+    const user = userEvent.setup();
+    render(<ContextUsageBar usage={makeUsage({ usageRatio: 0.3 })} isStreaming={false} />);
+    await user.hover(screen.getByRole("button", { name: /context usage 30%/i }));
+    expect(await screen.findByText("42%")).toBeInTheDocument();
+    expect(screen.getByText(/fetched 5s ago/i)).toBeInTheDocument();
+  });
+
+  it("hides the quota section when unavailable for a non-OAuth profile", async () => {
+    vi.mocked(useClaudeCodeOauthUsage).mockReturnValue({
+      status: "unavailable",
+      snapshot: null,
+      reason: "not authenticated via claude login",
+      fetchedAt: null,
+      isRefreshing: false,
+      refresh: vi.fn(),
+    });
+    const user = userEvent.setup();
+    render(<ContextUsageBar usage={makeUsage({ usageRatio: 0.3 })} isStreaming={false} />);
+    await user.hover(screen.getByRole("button", { name: /context usage 30%/i }));
+    expect(await screen.findByText("Context")).toBeInTheDocument();
+    expect(screen.queryByText("Account quota")).not.toBeInTheDocument();
+  });
+
+  it("shows a visible message when the quota fetch actually failed", async () => {
+    vi.mocked(useClaudeCodeOauthUsage).mockReturnValue({
+      status: "unavailable",
+      snapshot: null,
+      reason: "unexpected status 500",
+      fetchedAt: null,
+      isRefreshing: false,
+      refresh: vi.fn(),
+    });
+    const user = userEvent.setup();
+    render(<ContextUsageBar usage={makeUsage({ usageRatio: 0.3 })} isStreaming={false} />);
+    await user.hover(screen.getByRole("button", { name: /context usage 30%/i }));
+    expect(await screen.findByText(/quota unavailable right now/i)).toBeInTheDocument();
+  });
+
+  it("disables the refresh button while a refresh is in flight, and clicking it is a no-op", async () => {
+    const refresh = vi.fn();
+    vi.mocked(useClaudeCodeOauthUsage).mockReturnValue({
+      status: "available",
+      snapshot: {
+        five_hour: { utilization: 0.42 },
+        seven_day: { utilization: 0.1 },
+        seven_day_sonnet: { utilization: 0.05 },
+        seven_day_opus: { utilization: 0 },
+      },
+      reason: null,
+      fetchedAt: Math.floor(Date.now() / 1000),
+      isRefreshing: true,
+      refresh,
+    });
+    const user = userEvent.setup();
+    render(<ContextUsageBar usage={makeUsage({ usageRatio: 0.3 })} isStreaming={false} />);
+    await user.hover(screen.getByRole("button", { name: /context usage 30%/i }));
+    const button = await screen.findByRole("button", { name: /refresh quota/i });
+    expect(button).toBeDisabled();
+    await user.click(button);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("clicking refresh calls refresh() when not already in flight", async () => {
+    const refresh = vi.fn();
+    vi.mocked(useClaudeCodeOauthUsage).mockReturnValue({
+      status: "available",
+      snapshot: {
+        five_hour: { utilization: 0.42 },
+        seven_day: { utilization: 0.1 },
+        seven_day_sonnet: { utilization: 0.05 },
+        seven_day_opus: { utilization: 0 },
+      },
+      reason: null,
+      fetchedAt: Math.floor(Date.now() / 1000),
+      isRefreshing: false,
+      refresh,
+    });
+    const user = userEvent.setup();
+    render(<ContextUsageBar usage={makeUsage({ usageRatio: 0.3 })} isStreaming={false} />);
+    await user.hover(screen.getByRole("button", { name: /context usage 30%/i }));
+    const button = await screen.findByRole("button", { name: /refresh quota/i });
+    await user.click(button);
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 });
