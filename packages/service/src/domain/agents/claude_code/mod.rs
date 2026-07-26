@@ -6,6 +6,7 @@ pub mod custom_models;
 mod events;
 mod jsonl_surgery;
 mod model_alias;
+mod oauth_usage;
 mod post_plan_approval;
 pub mod profiles;
 mod prompt_receipts;
