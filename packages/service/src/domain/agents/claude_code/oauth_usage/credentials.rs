@@ -67,7 +67,6 @@ fn read_raw_credentials_file() -> Option<String> {
 
 /// Production entry point: resolves the OAuth access token, or `None` if the
 /// user isn't authenticated via `claude login` on this machine.
-#[allow(dead_code)]
 pub(super) fn resolve_access_token() -> Option<String> {
     parse_access_token(&read_raw_credentials()?)
 }

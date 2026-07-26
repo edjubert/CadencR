@@ -6,9 +6,7 @@
 
 use serde::Deserialize;
 
-#[allow(dead_code)] // wired in cache.rs (Task 11)
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
-#[allow(dead_code)] // wired in cache.rs (Task 11)
 const OAUTH_BETA_HEADER: &str = "oauth-2025-04-20";
 
 // `pub(crate)` (not `pub(super)`): `cache.rs` (this module's sibling) needs
@@ -16,13 +14,11 @@ const OAUTH_BETA_HEADER: &str = "oauth-2025-04-20";
 // HTTP response in Task 12 — it destructures `snapshot.five_hour.utilization`
 // directly. Keeping this `pub(crate)` avoids a chain of re-exports through
 // `oauth_usage/mod.rs` just to satisfy field-level privacy at every call site.
-#[allow(dead_code)] // wired in cache.rs (Task 11) / claude_code::routes (Task 12)
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 pub(crate) struct QuotaWindow {
     pub(crate) utilization: f64,
 }
 
-#[allow(dead_code)] // wired in cache.rs (Task 11) / claude_code::routes (Task 12)
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 pub(crate) struct OauthUsageSnapshot {
     pub(crate) five_hour: QuotaWindow,
@@ -31,7 +27,6 @@ pub(crate) struct OauthUsageSnapshot {
     pub(crate) seven_day_opus: QuotaWindow,
 }
 
-#[allow(dead_code)] // wired in cache.rs (Task 11)
 #[derive(Debug, Clone)]
 pub(super) enum OauthUsageError {
     Http(String),
@@ -49,7 +44,6 @@ impl std::fmt::Display for OauthUsageError {
     }
 }
 
-#[allow(dead_code)] // wired in cache.rs (Task 11)
 fn parse_usage_response(body: &str) -> Result<OauthUsageSnapshot, OauthUsageError> {
     serde_json::from_str(body).map_err(|e| OauthUsageError::Parse(e.to_string()))
 }
@@ -58,7 +52,6 @@ fn parse_usage_response(body: &str) -> Result<OauthUsageSnapshot, OauthUsageErro
 /// tests inject a fake closure instead (same seam pattern as
 /// `providers/opencode/cache.rs`), and this file's tests cover
 /// `parse_usage_response` in isolation.
-#[allow(dead_code)] // wired in cache.rs (Task 11)
 pub(super) async fn fetch_usage(
     access_token: &str,
 ) -> Result<OauthUsageSnapshot, OauthUsageError> {
