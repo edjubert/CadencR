@@ -93,7 +93,7 @@ impl StreamReaderState {
     fn new(initial_context_window: Option<u64>) -> Self {
         Self {
             runtime_session_id: None,
-            usage_state: RuntimeUsageState::new(initial_context_window),
+            usage_state: RuntimeUsageState::new(initial_context_window, None),
             last_runtime_activity: Instant::now(),
             last_provider_reconcile: Instant::now(),
             turn_state: StreamTurnState::new(),

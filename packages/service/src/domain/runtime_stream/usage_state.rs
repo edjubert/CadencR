@@ -3,18 +3,20 @@ use crate::domain::agents::adapter::{AgentRuntimeAdapter, RuntimeEvent, RuntimeS
 use super::subagent_window::SubagentWindow;
 use super::update_context_window;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct RuntimeUsageSnapshot {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub context_window: Option<u64>,
+    pub cost_usd: Option<f64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct RuntimeUsageUpdate {
     pub snapshot: RuntimeUsageSnapshot,
     pub changed: bool,
     pub context_window_changed: bool,
+    pub cost_usd_changed: bool,
     /// Result of `is_subagent_event` for this event. Surfaced so the
     /// stream reader can gate `persist_usage` without reclassifying.
     pub is_subagent: bool,
@@ -28,13 +30,14 @@ pub(crate) struct RuntimeUsageState {
 }
 
 impl RuntimeUsageState {
-    pub(crate) fn new(context_window: Option<u64>) -> Self {
+    pub(crate) fn new(context_window: Option<u64>, cost_usd: Option<f64>) -> Self {
         Self {
             active_model: None,
             snapshot: RuntimeUsageSnapshot {
                 input_tokens: 0,
                 output_tokens: 0,
                 context_window,
+                cost_usd,
             },
             root_session_id: None,
             subagent_window: SubagentWindow::new(),
@@ -96,6 +99,7 @@ impl RuntimeUsageState {
                 snapshot: self.snapshot,
                 changed: false,
                 context_window_changed: false,
+                cost_usd_changed: false,
                 is_subagent: true,
             };
         }
@@ -125,6 +129,13 @@ impl RuntimeUsageState {
             self.snapshot.context_window = Some(next_context_window);
         }
 
+        let mut cost_usd_changed = false;
+        if let Some(next_cost_usd) = runtime_event.cost_usd() {
+            cost_usd_changed = self.snapshot.cost_usd != Some(next_cost_usd);
+            changed |= cost_usd_changed;
+            self.snapshot.cost_usd = Some(next_cost_usd);
+        }
+
         if let Some(usage) = runtime_event.usage().filter(|usage| !usage.is_zero()) {
             changed |= self.snapshot.input_tokens != usage.input_tokens
                 || self.snapshot.output_tokens != usage.output_tokens;
@@ -151,6 +162,7 @@ impl RuntimeUsageState {
             snapshot: self.snapshot,
             changed,
             context_window_changed,
+            cost_usd_changed,
             is_subagent: false,
         }
     }
@@ -284,6 +296,19 @@ mod tests {
         )
     }
 
+    fn make_result_with_cost(session_id: &str, cost_usd: f64) -> RuntimeEvent {
+        RuntimeEvent::new(
+            RuntimeEventMetadata {
+                session_id: Some(session_id.into()),
+                usage: None,
+                context_window: None,
+                cost_usd: Some(cost_usd),
+                raw: json!({ "type": "result" }),
+            },
+            RuntimeEventKind::Result,
+        )
+    }
+
     fn make_init_with_context_window(session_id: &str, context_window: u64) -> RuntimeEvent {
         RuntimeEvent::new(
             RuntimeEventMetadata {
@@ -308,7 +333,7 @@ mod tests {
         // beta. The init event resolves the real window before any usage
         // arrives, so the first usage update already divides by 1M instead
         // of waiting for the turn's Result.
-        let mut state = RuntimeUsageState::new(Some(200_000));
+        let mut state = RuntimeUsageState::new(Some(200_000), None);
         state.set_root_session_id("root-1");
 
         let update = state.apply_event(None, &make_init_with_context_window("root-1", 1_000_000));
@@ -322,7 +347,7 @@ mod tests {
 
     #[test]
     fn apply_event_updates_snapshot_for_root_session() {
-        let mut state = RuntimeUsageState::new(None);
+        let mut state = RuntimeUsageState::new(None, None);
         state.set_root_session_id("root-1");
 
         let update = state.apply_event(None, &make_message_start("root-1", 1234, None));
@@ -347,7 +372,7 @@ mod tests {
 
     #[test]
     fn apply_event_ignores_subagent_events_with_parent_tool_use_id() {
-        let mut state = RuntimeUsageState::new(None);
+        let mut state = RuntimeUsageState::new(None, None);
         state.set_root_session_id("root-1");
         state.apply_event(
             None,
@@ -377,7 +402,7 @@ mod tests {
 
     #[test]
     fn apply_event_ignores_events_from_other_runtime_sessions() {
-        let mut state = RuntimeUsageState::new(None);
+        let mut state = RuntimeUsageState::new(None, None);
         state.set_root_session_id("root-1");
         state.apply_event(
             None,
@@ -407,7 +432,7 @@ mod tests {
 
     #[test]
     fn apply_event_accepts_all_events_before_root_is_known() {
-        let mut state = RuntimeUsageState::new(None);
+        let mut state = RuntimeUsageState::new(None, None);
         let update = state.apply_event(None, &make_message_start("root-1", 42, None));
         assert!(update.changed);
         assert_eq!(update.snapshot.input_tokens, 42);
@@ -415,7 +440,7 @@ mod tests {
 
     #[test]
     fn is_subagent_event_classifies_each_signal() {
-        let mut state = RuntimeUsageState::new(None);
+        let mut state = RuntimeUsageState::new(None, None);
         state.set_root_session_id("root-1");
         assert!(!state.is_subagent_event(&make_message_start("root-1", 1, None)));
         assert!(state.is_subagent_event(&make_message_start("root-1", 1, Some("toolu_abc"),)));
@@ -424,7 +449,7 @@ mod tests {
 
     #[test]
     fn set_root_session_id_is_idempotent() {
-        let mut state = RuntimeUsageState::new(None);
+        let mut state = RuntimeUsageState::new(None, None);
         state.set_root_session_id("root-1");
         state.set_root_session_id("child-2");
         let update = state.apply_event(
@@ -450,7 +475,7 @@ mod tests {
         // streams a MessageStart with sub-agent input_tokens but no
         // parent_tool_use_id (CLI dropped it). The active-window fallback
         // must filter it.
-        let mut state = RuntimeUsageState::new(None);
+        let mut state = RuntimeUsageState::new(None, None);
         state.set_root_session_id("root-1");
         state.apply_event(
             None,
@@ -474,7 +499,7 @@ mod tests {
 
     #[test]
     fn task_tool_result_closes_subagent_window() {
-        let mut state = RuntimeUsageState::new(None);
+        let mut state = RuntimeUsageState::new(None, None);
         state.set_root_session_id("root-1");
         state.apply_event(
             None,
@@ -506,7 +531,7 @@ mod tests {
         // Some transcripts include parent_tool_use_id on the root tool_result
         // that closes a Task. We still must close the fallback window, or
         // later root events will be misclassified as sub-agent traffic.
-        let mut state = RuntimeUsageState::new(None);
+        let mut state = RuntimeUsageState::new(None, None);
         state.set_root_session_id("root-1");
         state.apply_event(
             None,
@@ -542,7 +567,7 @@ mod tests {
     fn task_carrier_assistant_message_still_updates_root_snapshot() {
         // The very assistant message that emits the Task tool_use is itself
         // a root event and must update the snapshot when it carries usage.
-        let mut state = RuntimeUsageState::new(None);
+        let mut state = RuntimeUsageState::new(None, None);
         state.set_root_session_id("root-1");
         let update = state.apply_event(
             None,
@@ -565,7 +590,7 @@ mod tests {
     fn result_event_during_subagent_window_still_updates_context_window() {
         // The Result is the root turn boundary — its modelUsage.contextWindow
         // is authoritative for the root, even if a sub-agent window is open.
-        let mut state = RuntimeUsageState::new(Some(200_000));
+        let mut state = RuntimeUsageState::new(Some(200_000), None);
         state.set_root_session_id("root-1");
         state.apply_event(
             None,
@@ -589,7 +614,7 @@ mod tests {
         // Claude Code Task sub-agents share the parent's session_id. The
         // CLI sometimes drops `parent_tool_use_id` from sub-agent stream
         // events — only the SubagentWindow fallback prevents the leak.
-        let mut state = RuntimeUsageState::new(Some(200_000));
+        let mut state = RuntimeUsageState::new(Some(200_000), None);
         state.set_root_session_id("cc-root");
 
         // 1. Root MessageStart, then Assistant emits a Task tool_use
@@ -669,7 +694,7 @@ mod tests {
         // parent_tool_use_id once it pairs the subtask. Either signal is
         // enough to filter — verify both branches still hold even though
         // SubagentWindow also activates on the Task/Agent tool_use.
-        let mut state = RuntimeUsageState::new(Some(200_000));
+        let mut state = RuntimeUsageState::new(Some(200_000), None);
         state.set_root_session_id("oc-root");
 
         // 1. Root Assistant carries an Agent tool_use + its own usage.
@@ -733,7 +758,7 @@ mod tests {
         // Regression guard: the SubagentWindow fallback must not eat a
         // legitimate Result event from the OpenCode root turn even while a
         // child sub-agent is in flight (Result is exempted by design).
-        let mut state = RuntimeUsageState::new(Some(200_000));
+        let mut state = RuntimeUsageState::new(Some(200_000), None);
         state.set_root_session_id("oc-root");
         state.apply_event(
             None,
@@ -743,5 +768,30 @@ mod tests {
         let r = state.apply_event(None, &make_result_with_context_window("oc-root", 175_000));
         assert!(r.context_window_changed);
         assert_eq!(r.snapshot.context_window, Some(175_000));
+    }
+
+    #[test]
+    fn result_event_updates_cumulative_cost() {
+        let mut state = RuntimeUsageState::new(None, None);
+        state.set_root_session_id("root-1");
+
+        let update = state.apply_event(None, &make_result_with_cost("root-1", 0.042));
+        assert!(update.cost_usd_changed);
+        assert_eq!(update.snapshot.cost_usd, Some(0.042));
+
+        // A later, higher total overwrites — it is the CLI's authoritative
+        // running total, not a delta to sum.
+        let update = state.apply_event(None, &make_result_with_cost("root-1", 0.099));
+        assert!(update.cost_usd_changed);
+        assert_eq!(update.snapshot.cost_usd, Some(0.099));
+    }
+
+    #[test]
+    fn new_seeds_initial_cost_usd() {
+        let mut state = RuntimeUsageState::new(None, Some(1.23));
+        state.set_root_session_id("root-1");
+        let update = state.apply_event(None, &make_result_with_cost("root-1", 1.23));
+        assert!(!update.cost_usd_changed);
+        assert_eq!(update.snapshot.cost_usd, Some(1.23));
     }
 }
