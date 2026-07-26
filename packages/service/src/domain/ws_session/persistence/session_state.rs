@@ -152,6 +152,19 @@ impl WsSessionPersistence {
         .await;
     }
 
+    /// Write the cumulative session cost (USD). `None` clears the value —
+    /// not expected in practice (Claude Code's `Result.total_cost_usd` is
+    /// always present), but kept `Option` for symmetry with
+    /// `update_context_window` and to avoid a panic if a future provider
+    /// reports cost only intermittently.
+    pub async fn update_cost_usd(pool: &SqlitePool, session_id: i64, cost_usd: Option<f64>) {
+        let _ = sqlx::query("UPDATE agent_sessions SET cost_usd = ? WHERE id = ?")
+            .bind(cost_usd)
+            .bind(session_id)
+            .execute(pool)
+            .await;
+    }
+
     /// Write `context_window` to the session row. Pass `None` to clear the
     /// value (unknown — until the provider reports one). The DB column is
     /// nullable; callers that try to show a bar must treat NULL as "no data".

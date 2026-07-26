@@ -280,6 +280,14 @@ impl StreamReaderTask {
             )
             .await;
         }
+        if usage_update.cost_usd_changed {
+            WsSessionPersistence::update_cost_usd(
+                &self.write_pool,
+                self.db_session_id,
+                usage_update.snapshot.cost_usd,
+            )
+            .await;
+        }
 
         let persisted_message = persistence.persist_runtime_event(runtime_event).await;
         // Only stream-event blocks carry a stamped model, so skip the lookup

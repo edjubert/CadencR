@@ -90,10 +90,10 @@ enum ReaderAction {
 }
 
 impl StreamReaderState {
-    fn new(initial_context_window: Option<u64>) -> Self {
+    fn new(initial_context_window: Option<u64>, initial_cost_usd: Option<f64>) -> Self {
         Self {
             runtime_session_id: None,
-            usage_state: RuntimeUsageState::new(initial_context_window, None),
+            usage_state: RuntimeUsageState::new(initial_context_window, initial_cost_usd),
             last_runtime_activity: Instant::now(),
             last_provider_reconcile: Instant::now(),
             turn_state: StreamTurnState::new(),
@@ -138,13 +138,14 @@ impl StreamReaderTask {
     pub async fn run(mut self) {
         info!(self.db_session_id, "stream reader started");
         let initial_context_window = self.initial_context_window().await;
+        let initial_cost_usd = self.initial_cost_usd().await;
         let runtime_adapter = runtime_adapter(&self.runtime_provider);
         let mut persistence = WsSessionPersistence::with_session_id(
             self.write_pool.clone(),
             self.feature_id,
             Some(self.db_session_id),
         );
-        let mut state = StreamReaderState::new(initial_context_window);
+        let mut state = StreamReaderState::new(initial_context_window, initial_cost_usd);
 
         loop {
             match self.next_action(&mut state).await {
@@ -180,6 +181,12 @@ impl StreamReaderTask {
             self.cleanup_session_on_end,
         )
         .await;
+    }
+
+    async fn initial_cost_usd(&self) -> Option<f64> {
+        WsSessionPersistence::get_session_row(&self.write_pool, self.db_session_id)
+            .await
+            .and_then(|row| row.cost_usd)
     }
 
     async fn initial_context_window(&self) -> Option<u64> {
