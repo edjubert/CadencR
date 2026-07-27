@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { getClaudeCodeOauthUsage, useGetClaudeCodeOauthUsage } from "@/api/generated";
 import type { OauthUsageResponse } from "@/api/generated";
 
@@ -11,15 +11,26 @@ interface ClaudeCodeOauthUsage {
   refresh: () => void;
 }
 
+// Manual refresh bypasses the backend's 60s cache TTL by design (that's the
+// point of a refresh button), so nothing server-side stops rapid clicking
+// from hammering Anthropic's rate-limited oauth/usage endpoint. This is a
+// client-side cooldown on top of the isRefreshing guard, not tied to
+// success/failure — a failed fetch must stay retryable, just not on every
+// click.
+const REFRESH_COOLDOWN_MS = 10_000;
+
 export function useClaudeCodeOauthUsage(enabled: boolean): ClaudeCodeOauthUsage {
   const query = useGetClaudeCodeOauthUsage(undefined, { query: { enabled } });
   const [isForceRefreshing, setIsForceRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const isRefreshing = query.isFetching || isForceRefreshing;
   const { refetch } = query;
+  const lastRefreshAtRef = useRef(0);
 
   const refresh = useCallback(() => {
     if (isRefreshing) return;
+    if (Date.now() - lastRefreshAtRef.current < REFRESH_COOLDOWN_MS) return;
+    lastRefreshAtRef.current = Date.now();
     setIsForceRefreshing(true);
     setRefreshError(null);
     // `refetch()` alone would replay the same (unforced) params — the
@@ -49,7 +60,7 @@ export function useClaudeCodeOauthUsage(enabled: boolean): ClaudeCodeOauthUsage 
       return {
         status: "unavailable",
         snapshot: null,
-        reason: "quota fetch failed",
+        reason: query.error instanceof Error ? query.error.message : "quota fetch failed",
         fetchedAt: null,
         isRefreshing,
         refresh,

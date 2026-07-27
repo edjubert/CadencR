@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { useClaudeCodeOauthUsage } from "./useClaudeCodeOauthUsage";
 import * as generated from "@/api/generated";
@@ -6,6 +6,10 @@ import * as generated from "@/api/generated";
 vi.mock("@/api/generated", async () => {
   const actual = await vi.importActual<typeof generated>("@/api/generated");
   return { ...actual, useGetClaudeCodeOauthUsage: vi.fn() };
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("useClaudeCodeOauthUsage", () => {
@@ -88,6 +92,30 @@ describe("useClaudeCodeOauthUsage", () => {
       expect(forceCall).toHaveBeenCalledWith({ force: true });
       expect(refetch).toHaveBeenCalled();
     });
+  });
+
+  it("refresh() ignores a second click within the cooldown window, but stays retryable after an error", async () => {
+    const refetch = vi.fn();
+    const mocked = vi.mocked(generated.useGetClaudeCodeOauthUsage);
+    mocked.mockReturnValue({
+      data: undefined,
+      isFetching: false,
+      isError: true,
+      refetch,
+    } as unknown as ReturnType<typeof generated.useGetClaudeCodeOauthUsage>);
+    const forceCall = vi
+      .spyOn(generated, "getClaudeCodeOauthUsage")
+      .mockResolvedValue({ status: "available", fetched_at: 0 } as generated.OauthUsageResponse);
+
+    const { result } = renderHook(() => useClaudeCodeOauthUsage(true));
+
+    // First click: an errored polled query must not permanently block retry.
+    result.current.refresh();
+    await waitFor(() => expect(forceCall).toHaveBeenCalledTimes(1));
+
+    // Second click, immediately after: the cooldown (not the error) blocks it.
+    result.current.refresh();
+    expect(forceCall).toHaveBeenCalledTimes(1);
   });
 
   it("maps a failed polled query to a visible unavailable status, not a silent loading state", () => {
