@@ -1,5 +1,5 @@
 import { memo, type ReactElement, useEffect, useRef, useState } from "react";
-import { Loader2, RefreshCw } from "lucide-react";
+import { Loader2, RefreshCw, Trash2 } from "lucide-react";
 import { normalizeContextWindow, totalTokens, type ContextUsageState } from "@/types/agent";
 import { cn } from "@/lib/utils";
 import {
@@ -157,6 +157,74 @@ const QUOTA_WINDOWS: Array<{
   { key: "seven_day_opus", label: "7d Opus" },
 ];
 
+function QuotaSection({
+  quota,
+  snapshot,
+}: {
+  quota: NonNullable<ReturnType<typeof useClaudeCodeOauthUsage>>;
+  snapshot: NonNullable<ReturnType<typeof useClaudeCodeOauthUsage>["snapshot"]>;
+}): ReactElement {
+  return (
+    <div className="flex flex-col gap-1.5 border-t border-border pt-1.5">
+      <div className="flex items-center justify-between">
+        <span className="text-[10.5px] text-muted-foreground">Account quota</span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            aria-label="Reset cached quota"
+            disabled={quota.isResetting}
+            onClick={quota.reset}
+            className="text-muted-foreground hover:text-foreground disabled:opacity-50"
+          >
+            {quota.isResetting ? (
+              <Loader2 className="size-3 animate-spin" aria-hidden />
+            ) : (
+              <Trash2 className="size-3" aria-hidden />
+            )}
+          </button>
+          <button
+            type="button"
+            aria-label="Refresh quota"
+            disabled={quota.isRefreshing}
+            onClick={quota.refresh}
+            className="text-muted-foreground hover:text-foreground disabled:opacity-50"
+          >
+            {quota.isRefreshing ? (
+              <Loader2 className="size-3 animate-spin" aria-hidden />
+            ) : (
+              <RefreshCw className="size-3" aria-hidden />
+            )}
+          </button>
+        </div>
+      </div>
+      {QUOTA_WINDOWS.map(({ key, label }) => {
+        const window = snapshot[key];
+        const capped = Math.min(1, window.utilization);
+        const barAppearance = getContextUsageAppearance(capped);
+        return (
+          <div key={key} className="flex items-center justify-between gap-2">
+            <span className="w-16 shrink-0 text-[10px] text-muted-foreground">{label}</span>
+            <div className="h-1 flex-1 rounded-full bg-border/80">
+              <div
+                className={cn("h-full rounded-full", barAppearance.barClassName)}
+                style={{ width: `${capped * 100}%` }}
+              />
+            </div>
+            <span className="w-8 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
+              {Math.round(Math.min(1, window.utilization) * 100)}%
+            </span>
+          </div>
+        );
+      })}
+      {quota.fetchedAt != null ? (
+        <div className="text-right text-[10px] text-muted-foreground">
+          {formatFetchedAgo(quota.fetchedAt)}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ContextUsageDetails({
   usage,
   quota,
@@ -194,47 +262,7 @@ function ContextUsageDetails({
         </p>
       ) : null}
       {availableQuota && snapshot ? (
-        <div className="flex flex-col gap-1.5 border-t border-border pt-1.5">
-          <div className="flex items-center justify-between">
-            <span className="text-[10.5px] text-muted-foreground">Account quota</span>
-            <button
-              type="button"
-              aria-label="Refresh quota"
-              disabled={availableQuota.isRefreshing}
-              onClick={availableQuota.refresh}
-              className="text-muted-foreground hover:text-foreground disabled:opacity-50"
-            >
-              {availableQuota.isRefreshing ? (
-                <Loader2 className="size-3 animate-spin" aria-hidden />
-              ) : (
-                <RefreshCw className="size-3" aria-hidden />
-              )}
-            </button>
-          </div>
-          {QUOTA_WINDOWS.map(({ key, label }) => {
-            const window = snapshot[key];
-            const barAppearance = getContextUsageAppearance(window.utilization);
-            return (
-              <div key={key} className="flex items-center justify-between gap-2">
-                <span className="w-16 shrink-0 text-[10px] text-muted-foreground">{label}</span>
-                <div className="h-1 flex-1 rounded-full bg-border/80">
-                  <div
-                    className={cn("h-full rounded-full", barAppearance.barClassName)}
-                    style={{ width: `${window.utilization * 100}%` }}
-                  />
-                </div>
-                <span className="w-8 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
-                  {Math.round(window.utilization * 100)}%
-                </span>
-              </div>
-            );
-          })}
-          {availableQuota.fetchedAt != null ? (
-            <div className="text-right text-[10px] text-muted-foreground">
-              {formatFetchedAgo(availableQuota.fetchedAt)}
-            </div>
-          ) : null}
-        </div>
+        <QuotaSection quota={availableQuota} snapshot={snapshot} />
       ) : null}
       {quota?.status === "loading" ? (
         <div className="border-t border-border pt-1.5 text-[10.5px] text-muted-foreground">
@@ -243,7 +271,8 @@ function ContextUsageDetails({
       ) : null}
       {quota?.status === "unavailable" ? (
         <div className="border-t border-border pt-1.5 text-[10.5px] text-muted-foreground">
-          Quota unavailable right now
+          {quota.reason}
+          {quota?.isRefreshing ? <Loader2 className="mr-1.5 size-3 animate-spin" /> : null}
         </div>
       ) : null}
     </div>

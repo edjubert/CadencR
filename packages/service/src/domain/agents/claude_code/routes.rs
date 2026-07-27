@@ -11,7 +11,9 @@ use crate::app_state::AppState;
 use crate::domain::agents::runtime::ModelCatalogEntry;
 use crate::error::AppError;
 
-use super::oauth_usage::{live_usage, live_usage_force_refresh, UsageCacheEntry, UsageStatus};
+use super::oauth_usage::{
+    clear_oauth_cache, live_usage, live_usage_force_refresh, UsageCacheEntry, UsageStatus,
+};
 use super::{custom_models, profiles};
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -238,16 +240,24 @@ fn oauth_usage_response_from_entry(entry: UsageCacheEntry) -> OauthUsageResponse
             reason: None,
             snapshot: Some(OauthUsageSnapshotResponse {
                 five_hour: OauthQuotaWindow {
-                    utilization: snapshot.five_hour.utilization,
+                    utilization: (snapshot.five_hour.map(|w| w.utilization).unwrap_or(0.0)) / 100.0,
                 },
                 seven_day: OauthQuotaWindow {
-                    utilization: snapshot.seven_day.utilization,
+                    utilization: (snapshot.seven_day.map(|w| w.utilization).unwrap_or(0.0)) / 100.0,
                 },
                 seven_day_sonnet: OauthQuotaWindow {
-                    utilization: snapshot.seven_day_sonnet.utilization,
+                    utilization: (snapshot
+                        .seven_day_sonnet
+                        .map(|w| w.utilization)
+                        .unwrap_or(0.0))
+                        / 100.0,
                 },
                 seven_day_opus: OauthQuotaWindow {
-                    utilization: snapshot.seven_day_opus.utilization,
+                    utilization: (snapshot
+                        .seven_day_opus
+                        .map(|w| w.utilization)
+                        .unwrap_or(0.0))
+                        / 100.0,
                 },
             }),
             fetched_at: fetched_at_unix_secs,
@@ -284,6 +294,16 @@ pub async fn get_claude_code_oauth_usage_handler(
     Json(oauth_usage_response_from_entry(entry))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/claude-code/oauth-usage",
+    responses((status = 200, body = SuccessResponse))
+)]
+pub async fn delete_claude_code_oauth_usage_cache_handler() -> Json<SuccessResponse> {
+    clear_oauth_cache().await;
+    Json(SuccessResponse { ok: true })
+}
+
 pub fn claude_code_router() -> Router<AppState> {
     Router::new()
         .route("/api/claude-code/profiles", get(list_profiles_handler))
@@ -305,7 +325,8 @@ pub fn claude_code_router() -> Router<AppState> {
         )
         .route(
             "/api/claude-code/oauth-usage",
-            get(get_claude_code_oauth_usage_handler),
+            get(get_claude_code_oauth_usage_handler)
+                .delete(delete_claude_code_oauth_usage_cache_handler),
         )
 }
 

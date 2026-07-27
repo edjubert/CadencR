@@ -153,6 +153,7 @@ use crate::domain::ws_session::protocol as ws_protocol;
         claude_code_routes::upsert_custom_model_handler,
         claude_code_routes::delete_custom_model_handler,
         claude_code_routes::get_claude_code_oauth_usage_handler,
+        claude_code_routes::delete_claude_code_oauth_usage_cache_handler,
         lsp_routes::open_session_handler,
         lsp_routes::list_servers_handler,
         crate::domain::lsp::root::lsp_root_handler,

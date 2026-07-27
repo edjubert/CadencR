@@ -6,6 +6,7 @@ import { AgentSessionProvider } from "./agent-session-context";
 import { AgentSessionStreamContent } from "./AgentSessionStreamContent";
 import { shallowEqualSkipFunctions } from "./shallowEqualSkipFunctions";
 import type { AgentSessionHandle, AgentSessionProps } from "./types";
+import { PROVIDER_IDS } from "@/lib/providers";
 import {
   useAgentSessionController,
   type AgentSessionController,
@@ -14,10 +15,11 @@ import {
 export const AgentSession = memo(
   forwardRef<AgentSessionHandle, AgentSessionProps>(function AgentSession(props, ref) {
     const controller = useAgentSessionController(props, ref);
-    const { base } = controller;
+    const { base, meta } = controller;
 
     const isClaudeProvider =
-      base.activeProviderId === PROVIDER_IDS.CLAUDE_CODE || base.runtimeProvider === PROVIDER_IDS.CLAUDE_CODE;
+      meta.model.activeProviderId === PROVIDER_IDS.CLAUDE_CODE ||
+      props.runtimeProvider === PROVIDER_IDS.CLAUDE_CODE;
     return (
       <AgentSessionProvider value={controller.contextValue}>
         {props.wsSessionId && <BranchConfirmDialog wsSessionId={props.wsSessionId} />}
@@ -33,7 +35,13 @@ export const AgentSession = memo(
           status={props.status}
           blocks={props.blocks}
           streamContent={<SessionStream props={props} controller={controller} />}
-          bottomContent={<SessionComposer props={props} controller={controller} />}
+          bottomContent={
+            <SessionComposer
+              props={props}
+              controller={controller}
+              isClaudeProvider={isClaudeProvider}
+            />
+          }
           onToggle={base.handleToggle}
           IconComponent={base.IconComponent}
           badge={base.badge}
@@ -87,9 +95,11 @@ function SessionStream({
 function SessionComposer({
   props,
   controller,
+  isClaudeProvider,
 }: {
   props: AgentSessionProps;
   controller: AgentSessionController;
+  isClaudeProvider: boolean;
 }) {
   const { base, meta } = controller;
   return (
@@ -124,6 +134,7 @@ function SessionComposer({
       claudeProfilesLoading={meta.profile.claudeProfilesLoading}
       claudeProfilesError={meta.profile.claudeProfilesError}
       onClaudeProfileChange={meta.profile.handleClaudeProfileChange}
+      isClaudeProvider={isClaudeProvider}
     />
   );
 }

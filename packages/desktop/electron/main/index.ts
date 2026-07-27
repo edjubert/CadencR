@@ -57,8 +57,16 @@ async function prepareRuntime(): Promise<void> {
   } else {
     sidecar = createDevSidecarHandle();
   }
-  if (!app.isPackaged && browserBridge)
-    await registerBrowserBridgeWithService(sidecar, browserBridge);
+  if (!app.isPackaged && browserBridge) {
+    try {
+      await registerBrowserBridgeWithService(sidecar, browserBridge);
+    } catch (error) {
+      console.warn(
+        "Browser bridge registration failed (non-fatal in dev); browser MCP tools will be unavailable until the service is running.",
+        error,
+      );
+    }
+  }
   setRuntimeConfig({ baseUrl: sidecar.baseUrl, authToken: sidecar.authToken });
 }
 
@@ -69,7 +77,7 @@ async function registerBrowserBridgeWithService(
   if (!handle.authToken) {
     throw new Error("Cannot register Browser bridge: service auth token is missing.");
   }
-  const response = await retryBrowserBridgeRegistration(handle, bridge);
+  const response = await retryBrowserBridgeRegistration(handle, bridge, 3);
   if (!response.ok) {
     throw new Error(
       `Cannot register Browser bridge: service returned ${response.status} ${await response.text()}`,
@@ -80,9 +88,10 @@ async function registerBrowserBridgeWithService(
 async function retryBrowserBridgeRegistration(
   handle: SidecarHandle,
   bridge: BrowserBridgeHandle,
+  maxRetries: number = 60,
 ): Promise<Response> {
   let lastError: unknown = null;
-  for (let attempt = 0; attempt < 60; attempt += 1) {
+  for (let attempt = 0; attempt < maxRetries; attempt += 1) {
     try {
       return await fetch(`${handle.baseUrl}/api/browser-bridge`, {
         method: "PUT",

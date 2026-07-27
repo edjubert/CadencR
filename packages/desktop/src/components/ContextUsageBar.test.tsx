@@ -12,7 +12,9 @@ vi.mock("@/hooks/useClaudeCodeOauthUsage", () => ({
     reason: null,
     fetchedAt: null,
     isRefreshing: false,
+    isResetting: false,
     refresh: vi.fn(),
+    reset: vi.fn(),
   })),
 }));
 
@@ -328,7 +330,9 @@ describe("ContextUsageBar", () => {
       reason: null,
       fetchedAt: Math.floor(Date.now() / 1000) - 5,
       isRefreshing: false,
+      isResetting: false,
       refresh: vi.fn(),
+      reset: vi.fn(),
     });
     const user = userEvent.setup();
     render(
@@ -350,7 +354,9 @@ describe("ContextUsageBar", () => {
       reason: null,
       fetchedAt: null,
       isRefreshing: false,
+      isResetting: false,
       refresh: vi.fn(),
+      reset: vi.fn(),
     });
     const user = userEvent.setup();
     render(
@@ -389,7 +395,9 @@ describe("ContextUsageBar", () => {
       reason: "unexpected status 500",
       fetchedAt: null,
       isRefreshing: false,
+      isResetting: false,
       refresh: vi.fn(),
+      reset: vi.fn(),
     });
     const user = userEvent.setup();
     render(
@@ -400,7 +408,7 @@ describe("ContextUsageBar", () => {
       />,
     );
     await user.hover(screen.getByRole("button", { name: /context usage 30%/i }));
-    expect(await screen.findByText(/quota unavailable right now/i)).toBeInTheDocument();
+    expect(await screen.findByText("unexpected status 500")).toBeInTheDocument();
   });
 
   it("disables the refresh button while a refresh is in flight, and clicking it is a no-op", async () => {
@@ -416,7 +424,9 @@ describe("ContextUsageBar", () => {
       reason: null,
       fetchedAt: Math.floor(Date.now() / 1000),
       isRefreshing: true,
+      isResetting: false,
       refresh,
+      reset: vi.fn(),
     });
     const user = userEvent.setup();
     render(
@@ -446,7 +456,9 @@ describe("ContextUsageBar", () => {
       reason: null,
       fetchedAt: Math.floor(Date.now() / 1000),
       isRefreshing: false,
+      isResetting: false,
       refresh,
+      reset: vi.fn(),
     });
     const user = userEvent.setup();
     render(

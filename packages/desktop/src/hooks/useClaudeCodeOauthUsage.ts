@@ -1,5 +1,11 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { getClaudeCodeOauthUsage, useGetClaudeCodeOauthUsage } from "@/api/generated";
+import { useQueryClient } from "@tanstack/react-query";
+import {
+  getClaudeCodeOauthUsage,
+  getGetClaudeCodeOauthUsageQueryKey,
+  useDeleteClaudeCodeOauthUsageCache,
+  useGetClaudeCodeOauthUsage,
+} from "@/api/generated";
 import type { OauthUsageResponse } from "@/api/generated";
 
 interface ClaudeCodeOauthUsage {
@@ -8,7 +14,9 @@ interface ClaudeCodeOauthUsage {
   reason: string | null;
   fetchedAt: number | null;
   isRefreshing: boolean;
+  isResetting: boolean;
   refresh: () => void;
+  reset: () => void;
 }
 
 // Manual refresh bypasses the backend's 60s cache TTL by design (that's the
@@ -20,7 +28,9 @@ interface ClaudeCodeOauthUsage {
 const REFRESH_COOLDOWN_MS = 10_000;
 
 export function useClaudeCodeOauthUsage(enabled: boolean): ClaudeCodeOauthUsage {
+  const queryClient = useQueryClient();
   const query = useGetClaudeCodeOauthUsage(undefined, { query: { enabled } });
+  const deleteMutation = useDeleteClaudeCodeOauthUsageCache();
   const [isForceRefreshing, setIsForceRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const isRefreshing = query.isFetching || isForceRefreshing;
@@ -33,10 +43,6 @@ export function useClaudeCodeOauthUsage(enabled: boolean): ClaudeCodeOauthUsage 
     lastRefreshAtRef.current = Date.now();
     setIsForceRefreshing(true);
     setRefreshError(null);
-    // `refetch()` alone would replay the same (unforced) params — the
-    // backend's TTL cache would just hand back the same stale snapshot. A
-    // forced refresh needs its own request with `force: true`, then a
-    // normal refetch to pull the now-fresh cache entry into this query.
     void getClaudeCodeOauthUsage({ force: true })
       .then(() => refetch())
       .catch((error: unknown) => {
@@ -44,6 +50,17 @@ export function useClaudeCodeOauthUsage(enabled: boolean): ClaudeCodeOauthUsage 
       })
       .finally(() => setIsForceRefreshing(false));
   }, [isRefreshing, refetch]);
+
+  const reset = useCallback(() => {
+    if (deleteMutation.isPending) return;
+    void deleteMutation.mutateAsync().then(() => {
+      void queryClient.invalidateQueries({
+        queryKey: getGetClaudeCodeOauthUsageQueryKey(),
+      });
+    });
+  }, [deleteMutation, queryClient]);
+
+  const isResetting = deleteMutation.isPending;
 
   return useMemo<ClaudeCodeOauthUsage>(() => {
     if (refreshError != null) {
@@ -53,7 +70,9 @@ export function useClaudeCodeOauthUsage(enabled: boolean): ClaudeCodeOauthUsage 
         reason: refreshError,
         fetchedAt: null,
         isRefreshing,
+        isResetting,
         refresh,
+        reset,
       };
     }
     if (query.isError) {
@@ -63,7 +82,9 @@ export function useClaudeCodeOauthUsage(enabled: boolean): ClaudeCodeOauthUsage 
         reason: query.error instanceof Error ? query.error.message : "quota fetch failed",
         fetchedAt: null,
         isRefreshing,
+        isResetting,
         refresh,
+        reset,
       };
     }
     const data = query.data;
@@ -74,7 +95,9 @@ export function useClaudeCodeOauthUsage(enabled: boolean): ClaudeCodeOauthUsage 
         reason: null,
         fetchedAt: null,
         isRefreshing,
+        isResetting,
         refresh,
+        reset,
       };
     }
     return {
@@ -83,7 +106,9 @@ export function useClaudeCodeOauthUsage(enabled: boolean): ClaudeCodeOauthUsage 
       reason: data.reason ?? null,
       fetchedAt: data.fetched_at,
       isRefreshing,
+      isResetting,
       refresh,
+      reset,
     };
-  }, [query.data, query.isError, refreshError, isRefreshing, refresh]);
+  }, [query.data, query.isError, refreshError, isRefreshing, isResetting, refresh, reset]);
 }

@@ -3886,6 +3886,73 @@ export function useGetClaudeCodeOauthUsage<
   return query;
 }
 
+export const deleteClaudeCodeOauthUsageCache = () => {
+  return customInstance<ClaudeCodeSuccessResponse>({
+    url: `/api/claude-code/oauth-usage`,
+    method: "DELETE",
+  });
+};
+
+export const getDeleteClaudeCodeOauthUsageCacheMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteClaudeCodeOauthUsageCache>>,
+    TError,
+    void,
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteClaudeCodeOauthUsageCache>>,
+  TError,
+  void,
+  TContext
+> => {
+  const mutationKey = ["deleteClaudeCodeOauthUsageCache"];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteClaudeCodeOauthUsageCache>>,
+    void
+  > = () => {
+    return deleteClaudeCodeOauthUsageCache();
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteClaudeCodeOauthUsageCacheMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deleteClaudeCodeOauthUsageCache>>
+>;
+
+export type DeleteClaudeCodeOauthUsageCacheMutationError = ErrorType<unknown>;
+
+export const useDeleteClaudeCodeOauthUsageCache = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteClaudeCodeOauthUsageCache>>,
+    TError,
+    void,
+    TContext
+  >;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deleteClaudeCodeOauthUsageCache>>,
+  TError,
+  void,
+  TContext
+> => {
+  const mutationOptions = getDeleteClaudeCodeOauthUsageCacheMutationOptions(options);
+
+  return useMutation(mutationOptions);
+};
+
 export const listProfiles = (signal?: AbortSignal) => {
   return customInstance<ProfilesResponse>({
     url: `/api/claude-code/profiles`,

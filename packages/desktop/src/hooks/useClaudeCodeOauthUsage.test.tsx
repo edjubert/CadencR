@@ -1,11 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useClaudeCodeOauthUsage } from "./useClaudeCodeOauthUsage";
 import * as generated from "@/api/generated";
 
 vi.mock("@/api/generated", async () => {
   const actual = await vi.importActual<typeof generated>("@/api/generated");
-  return { ...actual, useGetClaudeCodeOauthUsage: vi.fn() };
+  return {
+    ...actual,
+    useGetClaudeCodeOauthUsage: vi.fn(),
+    useDeleteClaudeCodeOauthUsageCache: vi.fn(() => ({
+      mutateAsync: vi.fn(() => Promise.resolve({ ok: true })),
+      isPending: false,
+    })),
+  };
 });
 
 afterEach(() => {
@@ -13,6 +21,10 @@ afterEach(() => {
 });
 
 describe("useClaudeCodeOauthUsage", () => {
+  const TestWrapper = ({ children }: { children: React.ReactNode }) => (
+    <QueryClientProvider client={new QueryClient()}>{children}</QueryClientProvider>
+  );
+
   it("is disabled (no fetch) when enabled=false", () => {
     const mocked = vi.mocked(generated.useGetClaudeCodeOauthUsage);
     mocked.mockReturnValue({
@@ -21,7 +33,7 @@ describe("useClaudeCodeOauthUsage", () => {
       refetch: vi.fn(),
     } as unknown as ReturnType<typeof generated.useGetClaudeCodeOauthUsage>);
 
-    renderHook(() => useClaudeCodeOauthUsage(false));
+    renderHook(() => useClaudeCodeOauthUsage(false), { wrapper: TestWrapper });
 
     expect(mocked).toHaveBeenCalledWith(
       undefined,
@@ -46,7 +58,7 @@ describe("useClaudeCodeOauthUsage", () => {
       refetch: vi.fn(),
     } as unknown as ReturnType<typeof generated.useGetClaudeCodeOauthUsage>);
 
-    const { result } = renderHook(() => useClaudeCodeOauthUsage(true));
+    const { result } = renderHook(() => useClaudeCodeOauthUsage(true), { wrapper: TestWrapper });
 
     await waitFor(() => {
       expect(result.current.status).toBe("available");
@@ -65,7 +77,7 @@ describe("useClaudeCodeOauthUsage", () => {
       refetch,
     } as unknown as ReturnType<typeof generated.useGetClaudeCodeOauthUsage>);
 
-    const { result } = renderHook(() => useClaudeCodeOauthUsage(true));
+    const { result } = renderHook(() => useClaudeCodeOauthUsage(true), { wrapper: TestWrapper });
     result.current.refresh();
 
     expect(forceCall).not.toHaveBeenCalled();
@@ -85,7 +97,7 @@ describe("useClaudeCodeOauthUsage", () => {
       .spyOn(generated, "getClaudeCodeOauthUsage")
       .mockResolvedValue({ status: "available", fetched_at: 0 } as generated.OauthUsageResponse);
 
-    const { result } = renderHook(() => useClaudeCodeOauthUsage(true));
+    const { result } = renderHook(() => useClaudeCodeOauthUsage(true), { wrapper: TestWrapper });
     result.current.refresh();
 
     await waitFor(() => {
@@ -107,7 +119,7 @@ describe("useClaudeCodeOauthUsage", () => {
       .spyOn(generated, "getClaudeCodeOauthUsage")
       .mockResolvedValue({ status: "available", fetched_at: 0 } as generated.OauthUsageResponse);
 
-    const { result } = renderHook(() => useClaudeCodeOauthUsage(true));
+    const { result } = renderHook(() => useClaudeCodeOauthUsage(true), { wrapper: TestWrapper });
 
     // First click: an errored polled query must not permanently block retry.
     result.current.refresh();
@@ -127,7 +139,7 @@ describe("useClaudeCodeOauthUsage", () => {
       refetch: vi.fn(),
     } as unknown as ReturnType<typeof generated.useGetClaudeCodeOauthUsage>);
 
-    const { result } = renderHook(() => useClaudeCodeOauthUsage(true));
+    const { result } = renderHook(() => useClaudeCodeOauthUsage(true), { wrapper: TestWrapper });
 
     expect(result.current.status).toBe("unavailable");
     expect(result.current.reason).not.toBeNull();
@@ -152,7 +164,7 @@ describe("useClaudeCodeOauthUsage", () => {
     } as unknown as ReturnType<typeof generated.useGetClaudeCodeOauthUsage>);
     vi.spyOn(generated, "getClaudeCodeOauthUsage").mockRejectedValue(new Error("network down"));
 
-    const { result } = renderHook(() => useClaudeCodeOauthUsage(true));
+    const { result } = renderHook(() => useClaudeCodeOauthUsage(true), { wrapper: TestWrapper });
     result.current.refresh();
 
     await waitFor(() => {
@@ -160,5 +172,29 @@ describe("useClaudeCodeOauthUsage", () => {
       expect(result.current.reason).toBe("network down");
     });
     expect(refetch).not.toHaveBeenCalled();
+  });
+
+  it("reset() calls the DELETE endpoint and invalidates the query key", async () => {
+    const mocked = vi.mocked(generated.useGetClaudeCodeOauthUsage);
+    mocked.mockReturnValue({
+      data: undefined,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof generated.useGetClaudeCodeOauthUsage>);
+    const mutateAsync = vi.fn(() => Promise.resolve({ ok: true }));
+    const deleteMocked = vi.mocked(generated.useDeleteClaudeCodeOauthUsageCache);
+    deleteMocked.mockReturnValue({
+      mutateAsync,
+      isPending: false,
+    } as unknown as ReturnType<typeof generated.useDeleteClaudeCodeOauthUsageCache>);
+
+    const { result } = renderHook(() => useClaudeCodeOauthUsage(true), { wrapper: TestWrapper });
+
+    expect(result.current).toHaveProperty("reset");
+    result.current.reset();
+
+    await waitFor(() => {
+      expect(mutateAsync).toHaveBeenCalled();
+    });
   });
 });
