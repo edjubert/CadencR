@@ -6,7 +6,7 @@ use super::{
 };
 use crate::app_state::AppState;
 use crate::domain::agents::adapter::RuntimeSpawnConfig;
-use crate::domain::agents::{default_provider_id, resolve_effective_provider, runtime_adapter};
+use crate::domain::agents::{default_provider_id, runtime_adapter};
 use crate::domain::settings;
 use crate::domain::workflow::worktree;
 use std::sync::Arc;
@@ -149,21 +149,38 @@ pub(super) async fn handle_init(
     }
 
     let stored_model = row.as_ref().and_then(|r| r.model.clone());
-    let effective_model = stored_model.clone().or(payload.model.clone());
     let stored_thinking_effort = row.as_ref().and_then(|r| r.thinking_effort.clone());
     let stored_fast_mode = row.as_ref().is_some_and(|r| r.fast_mode);
-    let selected_provider = runtime_provider.or(payload.provider.clone());
-    let effective_provider = match selected_provider {
-        Some(provider) => provider,
-        None => {
-            resolve_effective_provider(
-                &app_state.read_pool,
-                Some(std::path::Path::new(&cwd)),
-                configured_provider,
-                effective_model.as_deref(),
-            )
-            .await
-        }
+    // `payload` has no `profile` field for session.init — the profile lives on
+    // the persisted session row, same source `effective_profile` reads below.
+    let profile_for_resolver = row.as_ref().and_then(|r| r.profile.clone());
+
+    // A session that already ran keeps the provider it ran with. The resolver
+    // only decides for sessions that have not pinned one yet.
+    let pinned_provider = runtime_provider.or(payload.provider.clone());
+    let (effective_provider, effective_model) = match pinned_provider {
+        Some(provider) => (provider, stored_model.clone().or(payload.model.clone())),
+        None => match crate::domain::agents::resolve_selection(
+            &app_state.read_pool,
+            Some(std::path::Path::new(&cwd)),
+            "session",
+            Some(feature_id),
+            Some(project_id),
+            profile_for_resolver.as_deref(),
+        )
+        .await
+        {
+            Ok(selection) => (selection.provider_id, Some(selection.model_id)),
+            Err(error) => {
+                send_error(
+                    sender,
+                    &envelope.id,
+                    "NO_MODEL_AVAILABLE",
+                    &error.to_string(),
+                );
+                return;
+            }
+        },
     };
 
     let (effective_thinking_effort, cleared_unsupported_effort) = session_init_effort::resolve(

@@ -12,9 +12,10 @@ use sqlx::SqlitePool;
 use utoipa::ToSchema;
 
 use super::providers::{
-    canonical_provider_or_error, provider_default_model, provider_model_catalog_entry,
+    canonical_provider_or_error, default_provider_id, provider_default_model,
+    provider_model_catalog_entry,
 };
-use super::runtime::{runtime_setting_key, DEFAULT_PROVIDER};
+use super::runtime::runtime_setting_key;
 use crate::domain::settings::{self, SettingOrigin};
 
 /// Where each half of the selection came from. `ProviderDefault` means no level
@@ -111,13 +112,13 @@ async fn resolve_provider(
                     "stored provider is not a known provider; falling back to the default"
                 );
                 (
-                    DEFAULT_PROVIDER.to_string(),
+                    default_provider_id().to_string(),
                     SelectionOrigin::ProviderDefault,
                 )
             }
         },
         None => (
-            DEFAULT_PROVIDER.to_string(),
+            default_provider_id().to_string(),
             SelectionOrigin::ProviderDefault,
         ),
     }
