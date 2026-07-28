@@ -161,6 +161,7 @@ use crate::domain::ws_session::routes as ws_routes;
         terminal_routes::list_terminal_sessions_handler,
         terminal_routes::kill_terminal_sessions_handler,
         super::get_agent_catalog,
+        super::get_agent_selection,
         discovery_routes::binary_discovery_handler,
         installed_provider_routes::installed_providers_handler,
         installed_provider_routes::install_provider_handler,
@@ -447,6 +448,9 @@ use crate::domain::ws_session::routes as ws_routes;
         ws_protocol::CommandsGetPayload,
         ws_protocol::CommandsListPayload,
         ws_protocol::CommandsUpdatedPayload,
+        super::AgentSelectionResponse,
+        crate::domain::agents::ResolvedSelection,
+        crate::domain::agents::SelectionOrigin,
     ))
 )]
 struct ApiDoc;
