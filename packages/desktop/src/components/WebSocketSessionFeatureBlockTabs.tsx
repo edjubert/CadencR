@@ -1,6 +1,9 @@
 import { lazy, Suspense, useCallback, useMemo, useRef, type ReactElement } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { BotIcon, CodeIcon, GitCompareArrowsIcon, GlobeIcon, TerminalIcon } from "lucide-react";
+import { AgentSession } from "@/components/agent-session";
+import { SessionInfoMcpServersProvider } from "@/components/agent-session/SessionInfoChip";
+import { supportedThinkingEffortLevels } from "@/shared/thinking-effort";
 import { resolveWorktreeChoice } from "@/lib/worktree-mode";
 import { checkoutSelectedBranch, saveWorktreeChoice } from "@/components/worktree-send-helpers";
 import type { FirstPromptBranchSetup } from "@/lib/ws-envelope";
@@ -18,7 +21,6 @@ import type {
   useSessionRefs,
 } from "@/components/WebSocketSessionFeatureBlockHooks";
 import type { NonAgentTabReadiness } from "@/components/useAgentFirstNonAgentWork";
-import { SessionAgentTab } from "@/components/WebSocketSessionAgentTab";
 const FeatureEditorTab = lazy(() => import("@/components/editor/FeatureEditorTab"));
 const BrowserWorkspaceTab = lazy(() =>
   import("@/components/BrowserWorkspaceTab").then((module) => ({
@@ -61,6 +63,96 @@ export function useSessionTabs(args: UseSessionTabsArgs): FeatureTabs {
   );
 }
 
+function AgentTabContent({
+  args,
+  onSend,
+  hasAccessModes,
+}: {
+  args: UseSessionTabsArgs;
+  onSend: ReturnType<typeof useAgentSendHandler>;
+  hasAccessModes: boolean;
+}): ReactElement {
+  const { sessionId, featureId, projectId, data, controls, refs, agentVisible, hotkeysEnabled } =
+    args;
+  return (
+    <SessionInfoMcpServersProvider mcpServers={controls.ws.mcpServers}>
+      <AgentSession
+        ref={refs.agent}
+        agentType="session"
+        featureId={featureId}
+        projectId={projectId}
+        wsSessionId={sessionId}
+        blocks={controls.ws.blocks}
+        rootBlocks={controls.ws.rootBlocks}
+        toolResultMap={controls.ws.toolResultMap}
+        historyPrependDisplayOffset={controls.ws.historyPrependDisplayOffset}
+        status={controls.ws.status}
+        isCompacting={controls.ws.isCompacting}
+        lifecycle={controls.ws.lifecycle}
+        turnTiming={controls.ws.turnTiming}
+        onSend={onSend}
+        onStop={controls.ws.interrupt}
+        disabled={hasAccessModes && controls.isAccessModePending}
+        pendingPermission={controls.ws.pendingPermission}
+        onPermissionDecision={(decision, feedback, optionId) => {
+          controls.ws.respondToPermission(
+            controls.ws.pendingRequestId,
+            decision,
+            feedback,
+            optionId,
+          );
+        }}
+        isSubmittingPermission={controls.ws.isSubmittingPermission}
+        pendingQuestions={
+          controls.ws.pendingQuestions.length > 0 ? controls.ws.pendingQuestions : undefined
+        }
+        onAnswerSubmit={controls.ws.respondToQuestion}
+        permissionMode={controls.ws.permissionMode}
+        enabledOptInModes={controls.enabledOptInModes}
+        providerModes={controls.providerModes}
+        providerAccessModes={controls.providerAccessModes}
+        accessMode={hasAccessModes ? controls.accessMode : undefined}
+        accessModeDefault={hasAccessModes ? controls.accessModeDefault : undefined}
+        isAccessModePending={hasAccessModes ? controls.isAccessModePending : false}
+        onAccessModeChange={hasAccessModes ? controls.handleAccessModeChange : undefined}
+        agentCatalog={controls.agentCatalog}
+        onPermissionModeToggle={controls.handlePermissionModeToggle}
+        pendingPlanApproval={controls.ws.pendingPlanApproval}
+        onPlanApprove={controls.ws.approvePlan}
+        onPlanRequestChanges={controls.ws.requestPlanChanges}
+        onGateClose={() => controls.ws.closeGate("escape")}
+        contextUsage={controls.ws.contextUsage}
+        selection={controls.ws.currentSelection}
+        onProviderChange={controls.ws.setProvider}
+        onModelChange={(nextProviderId, modelId) =>
+          handleModelChange(nextProviderId, modelId, controls)
+        }
+        currentThinkingEffort={controls.ws.currentThinkingEffort}
+        onThinkingEffortChange={controls.ws.setThinkingEffort}
+        runtimeProvider={controls.ws.currentSelection?.providerId}
+        runtimeSessionId={controls.ws.runtimeSessionId || undefined}
+        slashCommandsOverride={data.session?.slashCommands ?? []}
+        slashCommandsLoading={data.session?.slashCommandsLoading ?? false}
+        promptCommandPolicy={data.session?.promptCommandPolicy}
+        todos={agentVisible ? (data.session?.todos ?? null) : null}
+        disableShortcuts={!hotkeysEnabled}
+        agentTabActive={agentVisible && hotkeysEnabled}
+        claudeProfileSelection={controls.claudeProfile}
+        hasMore={controls.ws.hasMore}
+        onLoadOlder={controls.ws.loadOlderMessages}
+        worktreeMode={controls.worktreeMode}
+        onWorktreeModeChange={controls.setWorktreeMode}
+        worktreeProjectId={projectId}
+        worktreeDefaultBranch={data.defaultBranch}
+        worktreeProjectPath={data.projectPath}
+        worktreeSelectedBranch={controls.selectedBranch}
+        onWorktreeBranchChange={controls.setSelectedBranch}
+        className="h-full"
+      />
+    </SessionInfoMcpServersProvider>
+  );
+}
+
 function useAgentTab(args: UseSessionTabsArgs): FeatureTabDef {
   const { sessionId, featureId, projectId, data, controls, refs, agentVisible, hotkeysEnabled } =
     args;
@@ -71,23 +163,11 @@ function useAgentTab(args: UseSessionTabsArgs): FeatureTabDef {
       label: "Agent",
       Icon: BotIcon,
       shortcut: ["cmd", "shift", "A"],
-      content: (
-        <SessionAgentTab
-          sessionId={sessionId}
-          featureId={featureId}
-          projectId={projectId}
-          data={data}
-          controls={controls}
-          agentRef={refs.agent}
-          agentVisible={agentVisible}
-          hotkeysEnabled={hotkeysEnabled}
-          hasAccessModes={hasAccessModes}
-          onSend={onSend}
-        />
-      ),
+      content: <AgentTabContent args={args} onSend={onSend} hasAccessModes={hasAccessModes} />,
     }),
     [
       agentVisible,
+      args,
       controls,
       data,
       featureId,
@@ -300,4 +380,23 @@ function useAgentSendHandler(args: {
       setFeatureSetting,
     ],
   );
+}
+
+function handleModelChange(
+  nextProviderId: string,
+  modelId: string,
+  controls: ReturnType<typeof useSessionControls>,
+): void {
+  if (modelId !== controls.ws.currentSelection?.modelId)
+    controls.ws.setModel(modelId, nextProviderId);
+  const nextModel = controls.agentCatalog.data?.providers
+    .find((provider) => provider.id === nextProviderId)
+    ?.models.find((model) => model.id === modelId);
+  const nextLevels = supportedThinkingEffortLevels(nextModel);
+  const nextEffort = controls.resolveModelThinkingEffort(nextProviderId, modelId);
+  if (nextEffort) {
+    controls.ws.setThinkingEffort(nextEffort);
+  } else if (!nextLevels.includes(controls.ws.currentThinkingEffort as never)) {
+    controls.ws.setThinkingEffort(undefined);
+  }
 }
