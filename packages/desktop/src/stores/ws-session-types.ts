@@ -28,6 +28,7 @@ import {
 } from "./ws-turn-timing";
 import { blocksPatchWithDerived } from "./ws-block-mutations";
 import { DEFAULT_PROVIDER } from "../shared/models";
+import type { RuntimeSelection } from "../shared/models";
 import { defaultEditModeFor } from "../lib/provider-modes";
 import type { PermissionMode } from "../types/permission-mode";
 import type { AccessMode } from "@/types/access-mode";
@@ -51,9 +52,10 @@ export interface PersistedStatePayload {
   featureId?: number;
   sessionDbId?: number;
   currentProviderId?: string;
-  currentModelId?: string;
+  currentSelection?: RuntimeSelection;
   currentThinkingEffort?: string;
   currentProfile?: string;
+  currentModelId?: string;
   permissionMode?: PermissionMode;
   accessMode?: AccessMode;
   runtimeProvider?: string | null;
@@ -154,9 +156,13 @@ export interface SessionEntry {
   pendingManualCompact: boolean;
   /** True while the provider-neutral runtime reports an active compaction turn. */
   runtimeCompacting: boolean;
-  currentProviderId: string;
-  currentModelId: string;
-  runtimeProvider: string;
+  /**
+   * The session's runtime provider/model pair, or `null` while the backend has
+   * not confirmed one. Written whole or not at all — no code path may update
+   * one half, which is what allowed an opencode model to render under a Claude
+   * provider. Never seeded: `null` renders a loading state, not a guess.
+   */
+  currentSelection: RuntimeSelection | null;
   runtimeSessionId: string;
   mcpServers: McpServerStatus[] | null;
   supportsPromptReceipts: boolean;
@@ -233,9 +239,7 @@ export function createSessionEntry(): SessionEntry {
     compactRequestPending: false,
     pendingManualCompact: false,
     runtimeCompacting: false,
-    currentProviderId: "",
-    currentModelId: "",
-    runtimeProvider: "",
+    currentSelection: null,
     runtimeSessionId: "",
     currentProfile: undefined,
     mcpServers: null,

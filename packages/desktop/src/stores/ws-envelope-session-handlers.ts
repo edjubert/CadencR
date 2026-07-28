@@ -62,12 +62,10 @@ export function handleInitialized(ctx: StoreAccessors, sessionId: string, payloa
     supportsPromptReceipts: p.supports_prompt_receipts ?? false,
   };
   if (p.sessionDbId != null) updates.sessionDbId = p.sessionDbId;
-  if (p.provider || p.model) {
-    updates.currentProviderId = p.provider ?? "";
-    updates.currentModelId = p.model ?? "";
-    updates.runtimeProvider = p.provider ?? "";
-  } else {
-    updates.runtimeProvider = session.currentProviderId;
+  // Written as a pair or not at all: a provider without its model would
+  // reintroduce the split that this store shape exists to prevent.
+  if (p.provider && p.model) {
+    updates.currentSelection = { providerId: p.provider, modelId: p.model };
   }
   if (p.profile) updates.currentProfile = p.profile;
   const accessMode = p.access_mode ?? p.codex_permission_mode;

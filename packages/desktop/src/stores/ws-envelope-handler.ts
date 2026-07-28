@@ -236,7 +236,8 @@ function handleModeChanged(ctx: StoreAccessors, sessionId: string, payload: unkn
   const session = p?.mode ? ctx.getSession(sessionId) : null;
   const parsedMode = p?.mode ? parsePermissionMode(p.mode) : null;
   if (!parsedMode || !session) return;
-  const providerId = session.currentProviderId || session.runtimeProvider;
+  const providerId = session.currentSelection?.providerId;
+  if (providerId == null) return;
   const acceptsMode =
     !!findProviderMode(providerId, parsedMode) || parsedMode.startsWith(OPENCODE_AGENT_MODE_PREFIX);
   if (acceptsMode) {
@@ -246,15 +247,13 @@ function handleModeChanged(ctx: StoreAccessors, sessionId: string, payload: unkn
 
 function handleProviderSetOk(ctx: StoreAccessors, sessionId: string, payload: unknown): void {
   const p = parseProviderPayload(payload);
-  if (!p?.provider) return;
+  if (!p?.provider || !p.model) return;
   const session = ctx.getSession(sessionId);
-  const providerChanged = p.provider !== session.currentProviderId;
+  const providerChanged = p.provider !== session.currentSelection?.providerId;
   const accessMode = p.access_mode ?? p.codex_permission_mode;
   ctx.set(
     updateSession(ctx.get(), sessionId, {
-      currentProviderId: p.provider,
-      runtimeProvider: p.provider,
-      ...(providerChanged ? { currentModelId: "" } : {}),
+      currentSelection: { providerId: p.provider, modelId: p.model },
       ...(providerChanged ? { fastMode: false } : {}),
       mcpServers: null,
       supportsPromptReceipts: p.supports_prompt_receipts ?? false,
@@ -269,21 +268,19 @@ function handleProviderSetOk(ctx: StoreAccessors, sessionId: string, payload: un
 
 function handleModelSetOk(ctx: StoreAccessors, sessionId: string, payload: unknown): void {
   const p = parseModelPayload(payload);
-  if (!p) return;
-  const session = ctx.getSession(sessionId);
+  if (!p?.model || !p.provider) return;
+  const existing = ctx.getSession(sessionId).contextUsage;
   // The window belongs to the model, so the outgoing one is never carried over.
   // The backend seeds the incoming model's window when its adapter can answer;
   // otherwise the bar hides until the next `result`, which beats scaling by the
   // old model's window (1M → 200k reads 5x low, 200k → 1M reads 5x high).
   const nextContextWindow = normalizeContextWindow(p.context_window);
-  const nextUsage = session.contextUsage
-    ? { ...session.contextUsage, contextWindow: nextContextWindow }
+  const nextUsage = existing
+    ? { ...existing, contextWindow: nextContextWindow }
     : { inputTokens: 0, outputTokens: 0, contextWindow: nextContextWindow, wasCompacted: false };
   ctx.set(
     updateSession(ctx.get(), sessionId, {
-      currentProviderId: p.provider,
-      currentModelId: p.model,
-      runtimeProvider: p.provider,
+      currentSelection: { providerId: p.provider, modelId: p.model },
       contextUsage: nextUsage,
     }),
   );
