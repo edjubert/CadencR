@@ -11,6 +11,12 @@ use crate::{app_state::AppState, domain::neovim::protocol::NeovimStartResponse, 
 ///
 /// Spawns a headless Neovim instance for the given feature (session).
 /// Returns the spawn status and process info once the handshake completes.
+#[utoipa::path(
+    post,
+    path = "/api/features/{feature_id}/neovim/start",
+    params(("feature_id" = String, Path, description = "Feature ID")),
+    responses((status = 200, description = "Neovim spawn result", body = NeovimStartResponse)),
+)]
 pub async fn start_route(
     State(app_state): State<AppState>,
     Path(feature_id): Path<String>,
@@ -22,6 +28,12 @@ pub async fn start_route(
 /// POST /api/features/{feature_id}/neovim/stop
 ///
 /// Stops the headless Neovim instance for the given feature (session).
+#[utoipa::path(
+    post,
+    path = "/api/features/{feature_id}/neovim/stop",
+    params(("feature_id" = String, Path, description = "Feature ID")),
+    responses((status = 200, description = "Neovim stopped successfully")),
+)]
 pub async fn stop_route(
     State(app_state): State<AppState>,
     Path(feature_id): Path<String>,
