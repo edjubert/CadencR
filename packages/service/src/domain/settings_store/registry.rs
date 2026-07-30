@@ -106,7 +106,7 @@ pub fn workspace_spec(key: &str) -> Option<SettingSpec> {
         ),
         "git_diff_view_mode" => {
             SettingSpec::new(ValueKind::Enum(&["unified", "split"]), Some("unified"))
-        },
+        }
         "editor_vim_mode_level" => {
             SettingSpec::new(ValueKind::Enum(&["0", "1", "2", "3"]), Some("0"))
         }
