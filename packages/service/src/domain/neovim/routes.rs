@@ -7,7 +7,7 @@ use axum::{
 
 use crate::{app_state::AppState, domain::neovim::protocol::NeovimStartResponse, error::AppError};
 
-/// POST /features/{feature_id}/neovim/start
+/// POST /api/features/{feature_id}/neovim/start
 ///
 /// Spawns a headless Neovim instance for the given feature (session).
 /// Returns the spawn status and process info once the handshake completes.
@@ -19,7 +19,7 @@ pub async fn start_route(
     Ok((StatusCode::OK, axum::Json(result)))
 }
 
-/// POST /features/{feature_id}/neovim/stop
+/// POST /api/features/{feature_id}/neovim/stop
 ///
 /// Stops the headless Neovim instance for the given feature (session).
 pub async fn stop_route(
@@ -33,8 +33,8 @@ pub async fn stop_route(
 /// Register neovim routes on the router.
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/features/{feature_id}/neovim/start", post(start_route))
-        .route("/features/{feature_id}/neovim/stop", post(stop_route))
+        .route("/api/features/{feature_id}/neovim/start", post(start_route))
+        .route("/api/features/{feature_id}/neovim/stop", post(stop_route))
 }
 
 #[cfg(test)]

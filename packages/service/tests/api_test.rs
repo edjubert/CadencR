@@ -1,6 +1,7 @@
 mod common;
 
 use common::{apply_ws_upgrade_headers, start_test_server};
+use axum::http::StatusCode;
 
 #[tokio::test]
 async fn test_health_check() {
@@ -375,4 +376,34 @@ async fn test_terminal_ws_rejects_cross_origin() {
     .await
     .unwrap();
     assert_eq!(resp.status(), reqwest::StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn test_neovim_start_route_is_mounted() {
+    let server = start_test_server().await;
+    let resp = server
+        .client
+        .post(format!(
+            "{}/api/features/1/neovim/start",
+            server.base_url
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_neovim_stop_route_is_mounted() {
+    let server = start_test_server().await;
+    let resp = server
+        .client
+        .post(format!(
+            "{}/api/features/1/neovim/stop",
+            server.base_url
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(resp.status(), StatusCode::NOT_FOUND);
 }
