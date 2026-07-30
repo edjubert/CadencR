@@ -38,8 +38,11 @@ pub async fn stop_route(
     State(app_state): State<AppState>,
     Path(feature_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    app_state.neovim_manager.stop(&feature_id).await?;
-    Ok(StatusCode::OK)
+    match app_state.neovim_manager.stop(&feature_id).await {
+        Ok(()) => Ok(StatusCode::OK),
+        Err(AppError::NeovimNotRunning { .. }) => Ok(StatusCode::OK),
+        Err(e) => Err(e),
+    }
 }
 
 /// Register neovim routes on the router.

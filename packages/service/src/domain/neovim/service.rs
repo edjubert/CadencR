@@ -90,10 +90,16 @@ impl NeovimManager {
 
     pub async fn stop(&self, feature_id: &str) -> Result<(), AppError> {
         let mut processes = self.processes.lock().await;
-        if let Some(handle) = processes.remove(feature_id) {
-            let _ = handle.child.lock().await.kill().await;
+        match processes.remove(feature_id) {
+            Some(handle) => {
+                drop(processes);
+                let _ = handle.child.lock().await.kill().await;
+                Ok(())
+            }
+            None => Err(AppError::NeovimNotRunning {
+                feature_id: feature_id.to_string(),
+            }),
         }
-        Ok(())
     }
 
     pub(crate) async fn is_running(&self, feature_id: &str) -> bool {
@@ -162,7 +168,7 @@ impl nvim_rs::Handler for DefaultHandler {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     pub(crate) fn nvim_available() -> bool {
@@ -192,9 +198,10 @@ mod tests {
         }
         let manager = NeovimManager::new();
         manager.start("7").await.unwrap();
-        manager.stop("7").await.unwrap(); // should not error
+        manager.stop("7").await.unwrap(); // should kill and remove
         assert!(!manager.is_running("7").await);
-        manager.stop("7").await.unwrap(); // stopping again: still should not error
+        let result = manager.stop("7").await; // stopping again: returns error (idempotent at route level)
+        assert!(result.is_err());
     }
 
     #[tokio::test]
