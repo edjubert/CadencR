@@ -13,7 +13,7 @@ pub struct NeovimKeyInputPayload {
 
 /// Server → Client: cursor position update from neovim.
 #[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct NeovimCursorMovedPayload {
     pub file_path: String,
     pub line: u32,
@@ -22,7 +22,7 @@ pub struct NeovimCursorMovedPayload {
 
 /// Server → Client: mode change (e.g. "normal", "insert", "visual") from neovim.
 #[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct NeovimModeChangedPayload {
     pub file_path: String,
     pub mode: String,
