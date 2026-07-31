@@ -7,15 +7,27 @@ import BaseCodeMirrorEditor from "../BaseCodeMirrorEditor";
 const mockDispatch = vi.fn();
 const mockDestroy = vi.fn();
 const mockFocus = vi.fn();
+const mockDomEventHandlers = vi.fn((handlers: unknown) => ({ __handlers: handlers }));
+const mockSendNeovimKeyInput = vi.fn();
+const mockSubscribeToNeovimEvents = vi.fn();
 
 vi.mock("@codemirror/view", () => {
   class MockEditorView {
     static updateListener = { of: vi.fn(() => []) };
+    static domEventHandlers = mockDomEventHandlers;
     parent: HTMLElement | null = null;
     dispatch = mockDispatch;
     destroy = mockDestroy;
     focus = mockFocus;
-    state = { doc: { toString: () => "", length: 0 }, selection: { main: { head: 0 } } };
+    state = {
+      doc: {
+        toString: () => "",
+        length: 0,
+        lines: 5,
+        line: (n: number) => ({ from: (n - 1) * 10, to: (n - 1) * 10 + 9 }),
+      },
+      selection: { main: { head: 0 } },
+    };
     constructor({ parent }: { parent: HTMLElement }) {
       this.parent = parent;
     }
@@ -72,10 +84,21 @@ vi.mock("@/lib/editor/ergonomics-extensions", () => ({
   ergonomicsExtensions: [],
 }));
 
+vi.mock("../neovim-ws-send", () => ({
+  sendNeovimKeyInput: mockSendNeovimKeyInput,
+}));
+
+vi.mock("@/stores/ws-neovim-store", () => ({
+  subscribeToNeovimEvents: mockSubscribeToNeovimEvents,
+}));
+
 beforeEach(() => {
   mockDispatch.mockClear();
   mockDestroy.mockClear();
   mockFocus.mockClear();
+  mockDomEventHandlers.mockClear();
+  mockSendNeovimKeyInput.mockClear();
+  mockSubscribeToNeovimEvents.mockReset().mockReturnValue(vi.fn());
   vi.mocked(tooltips).mockClear();
 });
 
@@ -145,5 +168,82 @@ describe("BaseCodeMirrorEditor", () => {
     mockDispatch.mockClear();
     rerender(<BaseCodeMirrorEditor readOnly={true} />);
     expect(mockDispatch).toHaveBeenCalled();
+  });
+
+  describe("neovimCompartment", () => {
+    it("forwards keydown as key_input over WS when neovim-integrated is active", () => {
+      render(
+        <BaseCodeMirrorEditor
+          isNeovimIntegrated={true}
+          neovimFeatureId="7"
+          neovimFilePath="src/main.rs"
+        />,
+      );
+
+      expect(mockDomEventHandlers).toHaveBeenCalled();
+      const handlers = mockDomEventHandlers.mock.calls[0][0] as {
+        keydown: (event: { key: string; preventDefault: () => void }) => boolean;
+      };
+      const preventDefault = vi.fn();
+      const handled = handlers.keydown({ key: "j", preventDefault });
+
+      expect(mockSendNeovimKeyInput).toHaveBeenCalledWith("7", "src/main.rs", "j");
+      expect(preventDefault).toHaveBeenCalled();
+      expect(handled).toBe(true);
+    });
+
+    it("does not register the keydown handler when not neovim-integrated", () => {
+      render(<BaseCodeMirrorEditor isNeovimIntegrated={false} />);
+      expect(mockDomEventHandlers).not.toHaveBeenCalled();
+    });
+
+    it("subscribes to neovim events for the active (feature, file) pair", () => {
+      render(
+        <BaseCodeMirrorEditor
+          isNeovimIntegrated={true}
+          neovimFeatureId="7"
+          neovimFilePath="src/main.rs"
+        />,
+      );
+
+      expect(mockSubscribeToNeovimEvents).toHaveBeenCalledWith(
+        "7",
+        "src/main.rs",
+        expect.objectContaining({
+          onCursorMoved: expect.any(Function),
+          onModeChanged: expect.any(Function),
+          onBufferLinesChanged: expect.any(Function),
+        }),
+      );
+    });
+
+    it("applies cursor_moved and buffer_lines_changed callbacks to the document via dispatch", () => {
+      render(
+        <BaseCodeMirrorEditor
+          isNeovimIntegrated={true}
+          neovimFeatureId="7"
+          neovimFilePath="src/main.rs"
+        />,
+      );
+
+      const handlers = mockSubscribeToNeovimEvents.mock.calls[0][2] as {
+        onCursorMoved: (line: number, col: number) => void;
+        onBufferLinesChanged: (firstline: number, lastline: number, lines: string[]) => void;
+      };
+
+      mockDispatch.mockClear();
+      handlers.onCursorMoved(3, 0);
+      expect(mockDispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ selection: expect.objectContaining({ anchor: expect.any(Number) }) }),
+      );
+
+      mockDispatch.mockClear();
+      handlers.onBufferLinesChanged(1, 2, ["replaced line"]);
+      expect(mockDispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          changes: expect.objectContaining({ insert: "replaced line" }),
+        }),
+      );
+    });
   });
 });
