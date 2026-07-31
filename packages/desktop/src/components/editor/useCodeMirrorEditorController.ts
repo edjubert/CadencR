@@ -1,13 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Compartment } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { useGetBlame, useGetFeatureWorkingDir, useReadFile } from "@/api/generated";
+import {
+  pushBufferRoute,
+  startRoute,
+  useGetBlame,
+  useGetFeatureWorkingDir,
+  useReadFile,
+} from "@/api/generated";
 import { useDebouncedSetting } from "@/hooks/useDebouncedSetting";
 import { useEditorLanguage } from "@/hooks/useEditorLanguage";
 import { useScopedShortcut } from "@/hooks/useShortcut";
 import { setGitGutterBaseline } from "@/lib/editor/git-gutter/git-gutter-extension";
 import { useGitGutter } from "@/lib/editor/git-gutter/useGitGutter";
 import { getPreviewKind } from "@/lib/file-language";
+import { toastError } from "@/lib/api-errors";
 import { useLsp } from "@/lib/lsp/useLsp";
 import { useEditorStore } from "@/stores/editor-store";
 import { scrollToEditorLine } from "./editor-lines";
@@ -36,9 +43,50 @@ export interface CodeMirrorEditorProps {
 
 const AUTO_SAVE_DELAY_MS = 1500;
 
+/**
+ * Lazily spawns a headless Neovim instance and pushes the current file's
+ * content into its buffer, once per (feature, file) pair — on first open at
+ * level 2, not eagerly on feature open. Marks the pair initialized before
+ * awaiting so a fast re-render (e.g. tab switch back) can't trigger a second
+ * concurrent spawn; on failure it un-marks the pair so the next open retries,
+ * and surfaces the failure as a toast rather than swallowing it.
+ */
+export function useNeovimSpawnTrigger(
+  featureId: number,
+  filePath: string,
+  content: string | undefined,
+  isNeovimIntegrated: boolean,
+) {
+  const initializedFiles = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (!isNeovimIntegrated || !filePath || content == null) return;
+    const key = `${featureId}:${filePath}`;
+    if (initializedFiles.current.has(key)) return;
+    initializedFiles.current.add(key);
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        await startRoute(String(featureId));
+        if (cancelled) return;
+        await pushBufferRoute(String(featureId), { file_path: filePath, content });
+      } catch (error) {
+        if (cancelled) return;
+        initializedFiles.current.delete(key);
+        toastError(error, "Failed to start integrated Neovim for this file");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [content, featureId, filePath, isNeovimIntegrated]);
+}
+
 function useEditorFileData(props: CodeMirrorEditorProps) {
   const language = useEditorLanguage(props.projectId, props.filePath);
-  const { value: vimModeSetting } = useDebouncedSetting("editor_vim_mode");
+  const { value: vimModeLevelSetting } = useDebouncedSetting("editor_vim_mode_level");
   const { value: autoSaveSetting } = useDebouncedSetting("editor_auto_save");
   const { value: gitBlameSetting } = useDebouncedSetting("editor_git_blame");
   const fileQuery = useReadFile(
@@ -96,13 +144,23 @@ function useEditorFileData(props: CodeMirrorEditorProps) {
     filePath: props.filePath,
     enabled: !largeFile.largeMode,
   });
+  const vimModeLevel = vimModeLevelSetting ?? "0";
+  const isNeovimIntegrated = vimModeLevel === "2";
+  useNeovimSpawnTrigger(
+    props.featureId,
+    props.filePath,
+    fileQuery.data?.content,
+    isNeovimIntegrated,
+  );
   return {
     blame,
     fileQuery,
     gitGutter,
     isAutoSaveEnabled: (autoSaveSetting ?? "false") === "true",
     isBlameEnabled,
-    isVimEnabled: (vimModeSetting ?? "false") === "true",
+    // Level 1 keeps using @replit/codemirror-vim, unchanged from before this setting split.
+    isVimEnabled: vimModeLevel === "1",
+    isNeovimIntegrated,
     language,
     largeFile,
     lsp,
