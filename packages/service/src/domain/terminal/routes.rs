@@ -448,7 +448,7 @@ mod tests {
         // Start a neovim process for the same feature_id before closing
         state
             .neovim_manager
-            .start(feature_id)
+            .start(feature_id, state.ws_feature_senders.clone())
             .await
             .unwrap();
         assert!(
