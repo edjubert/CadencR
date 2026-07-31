@@ -21,7 +21,7 @@ pub struct PullBufferRequest {
 }
 
 #[allow(dead_code)]
-#[derive(Serialize, ToSchema)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct PullBufferResponse {
     pub content: String,
 }

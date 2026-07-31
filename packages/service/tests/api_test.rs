@@ -401,3 +401,40 @@ async fn test_neovim_stop_route_is_mounted() {
         .unwrap();
     assert_ne!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn test_neovim_push_buffer_route_is_mounted() {
+    let server = start_test_server().await;
+    let resp = server
+        .client
+        .post(format!(
+            "{}/api/features/1/neovim/buffer/push",
+            server.base_url
+        ))
+        .json(&serde_json::json!({
+            "file_path": "test.txt",
+            "content": "hello"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_neovim_pull_buffer_route_is_mounted() {
+    let server = start_test_server().await;
+    let resp = server
+        .client
+        .post(format!(
+            "{}/api/features/1/neovim/buffer/pull",
+            server.base_url
+        ))
+        .json(&serde_json::json!({
+            "file_path": "test.txt"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(resp.status(), StatusCode::NOT_FOUND);
+}
