@@ -26,7 +26,15 @@ pub async fn start_route(
     let feature_id: i64 = feature_id.parse().map_err(|e: ParseIntError| AppError::BadRequest(
         format!("Invalid feature_id: {e}"),
     ))?;
-    let result = app_state.neovim_manager.start(feature_id).await?;
+    // A feature may have zero active WS connections when /neovim/start is
+    // called (e.g. HTTP called before any WS session opened) — the registry
+    // itself handles that as a no-op fan-out (an empty sender list), the same
+    // way it already does for HTTP-triggered git.status/session_status
+    // pushes, so there's nothing to branch on here.
+    let result = app_state
+        .neovim_manager
+        .start(feature_id, app_state.ws_feature_senders.clone())
+        .await?;
     Ok((StatusCode::OK, axum::Json(result)))
 }
 
@@ -128,6 +136,36 @@ mod tests {
     #[test]
     fn routes_module_exists_and_returns_router() {
         let _router: Router<AppState> = routes();
+    }
+
+    #[tokio::test]
+    async fn start_route_compiles_and_succeeds_with_active_ws_session() {
+        if !nvim_available() {
+            eprintln!("SKIP: nvim binary not found");
+            return;
+        }
+
+        let pool = SqlitePool::connect("sqlite::memory:").await.expect("memory pool");
+        let state = AppState::with_pool(pool);
+
+        // Establish an active WS session for the feature the same way a real
+        // WS connection registers itself on upgrade.
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<axum::extract::ws::Message>();
+        state.ws_feature_senders.register(301, tx).await;
+
+        let app = build_router(state);
+        let start_resp = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/features/301/neovim/start")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("start should not return 404");
+
+        assert_eq!(start_resp.status(), StatusCode::OK);
     }
 
     #[tokio::test]
