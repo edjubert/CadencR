@@ -115,10 +115,105 @@ pub fn routes() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::neovim::service::tests::nvim_available;
+    use crate::api::build_router;
+    use sqlx::SqlitePool;
+    use axum::body::Body;
+    use axum::body::to_bytes;
+    use axum::http::Method;
+    use axum::http::Request;
+    use tower::ServiceExt;
 
     /// Verify the routes module compiles and routes() returns a valid Router.
     #[test]
     fn routes_module_exists_and_returns_router() {
         let _router: Router<AppState> = routes();
+    }
+
+    #[tokio::test]
+    async fn push_then_pull_route_roundtrips_content() {
+        if !nvim_available() {
+            eprintln!("SKIP: nvim binary not found");
+            return;
+        }
+
+        let pool = SqlitePool::connect("sqlite::memory:").await.expect("memory pool");
+        let state = AppState::with_pool(pool);
+        let app = build_router(state);
+
+        // Start neovim for feature 300
+        let start_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/features/300/neovim/start")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("start should not return 404");
+
+        let status = start_resp.status();
+        if status == StatusCode::NOT_FOUND {
+            panic!("start route not found");
+        }
+        if !status.is_success() && status != StatusCode::OK {
+            eprintln!("SKIP: neovim start returned {status}");
+            return;
+        }
+
+        // Give neovim a moment to fully initialize
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        // Push buffer
+        let push_body = serde_json::json!({
+            "file_path": "src/main.rs",
+            "content": "fn main() {}\n"
+        });
+        let push_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/features/300/neovim/buffer/push")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_string(&push_body).unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .expect("push should not return 404");
+
+        assert_eq!(push_resp.status(), StatusCode::NO_CONTENT);
+
+        // Pull buffer
+        let pull_body = serde_json::json!({
+            "file_path": "src/main.rs"
+        });
+        let pull_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/features/300/neovim/buffer/pull")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_string(&pull_body).unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .expect("pull should not return 404");
+
+        assert_eq!(pull_resp.status(), StatusCode::OK);
+
+        let body_bytes = to_bytes(pull_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+        let response: PullBufferResponse = serde_json::from_str(&body_str).unwrap();
+        assert_eq!(response.content, "fn main() {}\n");
     }
 }

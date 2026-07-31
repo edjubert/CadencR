@@ -122,11 +122,14 @@ impl From<WsEnvelope> for String {
 mod actions;
 mod client;
 mod commands;
+mod neovim;
 mod server;
 
 pub use actions::*;
 pub use client::*;
 pub use commands::*;
+#[allow(unused_imports)]
+pub use neovim::*;
 pub use server::*;
 
 #[cfg(test)]
