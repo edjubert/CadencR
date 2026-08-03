@@ -38,6 +38,7 @@ struct NeovimHandle {
 
 pub struct NeovimManager {
     processes: Arc<Mutex<HashMap<i64, NeovimHandle>>>,
+    spawn_lock: Arc<Mutex<()>>,
 }
 
 #[allow(dead_code)]
@@ -45,6 +46,7 @@ impl NeovimManager {
     pub fn new() -> Self {
         Self {
             processes: Arc::new(Mutex::new(HashMap::new())),
+            spawn_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -62,11 +64,23 @@ impl NeovimManager {
         ws_sender: WsSessionSender,
         env_overrides: &[(&str, &str)],
     ) -> Result<NeovimStartResponse, AppError> {
-        let mut processes = self.processes.lock().await;
+        let processes = self.processes.lock().await;
         if let Some(existing) = processes.get(&feature_id) {
             return Ok(NeovimStartResponse {
                 version: existing.api_info.version.clone(),
             });
+        }
+        drop(processes);
+
+        let _spawn_guard = self.spawn_lock.lock().await;
+
+        {
+            let processes = self.processes.lock().await;
+            if let Some(existing) = processes.get(&feature_id) {
+                return Ok(NeovimStartResponse {
+                    version: existing.api_info.version.clone(),
+                });
+            }
         }
 
         let mut cmd = build_nvim_command();
@@ -120,6 +134,7 @@ impl NeovimManager {
             nvim,
             buffers,
         };
+        let mut processes = self.processes.lock().await;
         processes.insert(feature_id, handle);
         drop(processes);
 
@@ -166,6 +181,17 @@ impl NeovimManager {
         fixture_path: &std::path::Path,
     ) -> Result<NeovimStartResponse, AppError> {
         self.start_with_env_override(feature_id, ws_sender, &[("XDG_CONFIG_HOME", fixture_path.to_str().unwrap())])
+            .await
+    }
+
+    #[cfg(test)]
+    pub async fn start_with_config_dir_override(
+        &self,
+        feature_id: i64,
+        ws_sender: WsSessionSender,
+        config_dir: &std::path::Path,
+    ) -> Result<NeovimStartResponse, AppError> {
+        self.start_with_env_override(feature_id, ws_sender, &[("XDG_CONFIG_HOME", config_dir.to_str().unwrap())])
             .await
     }
 
@@ -395,6 +421,7 @@ impl Clone for NeovimManager {
     fn clone(&self) -> Self {
         Self {
             processes: self.processes.clone(),
+            spawn_lock: self.spawn_lock.clone(),
         }
     }
 }
@@ -892,5 +919,124 @@ pub(crate) mod tests {
             }
         }
         assert!(saw_cursor_moved, "expected a cursor_moved WsEnvelope via rx, proving the CadencrInternal augroup's autocmd survived the fixture config's bare `autocmd!`");
+    }
+
+    #[tokio::test]
+    async fn concurrent_first_time_spawns_do_not_overlap() {
+        if !nvim_available() {
+            eprintln!("SKIP: nvim binary not found");
+            return;
+        }
+
+        let events: Arc<Mutex<Vec<(i64, &'static str, std::time::Instant)>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let fixture_a = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(fixture_a.path().join("nvim")).unwrap();
+        std::fs::write(fixture_a.path().join("nvim/init.lua"), "vim.wait(2000)").unwrap();
+
+        let fixture_b = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(fixture_b.path().join("nvim")).unwrap();
+        std::fs::write(fixture_b.path().join("nvim/init.lua"), "vim.wait(2000)").unwrap();
+
+        let manager = NeovimManager::new();
+        let registry_a = test_ws_sender();
+        let (tx_a, _rx_a) = tokio::sync::mpsc::unbounded_channel::<axum::extract::ws::Message>();
+        registry_a.register(901, tx_a).await;
+        let registry_b = test_ws_sender();
+        let (tx_b, _rx_b) = tokio::sync::mpsc::unbounded_channel::<axum::extract::ws::Message>();
+        registry_b.register(902, tx_b).await;
+
+        let events_a = events.clone();
+        let manager_a = manager.clone();
+        let path_a = fixture_a.path().to_path_buf();
+        let handle_a = tokio::spawn(async move {
+            events_a.lock().await.push((901, "spawn_start", std::time::Instant::now()));
+            manager_a
+                .start_with_config_dir_override(901, registry_a, &path_a)
+                .await
+                .unwrap();
+            events_a.lock().await.push((901, "spawn_end", std::time::Instant::now()));
+        });
+
+        let events_b = events.clone();
+        let manager_b = manager.clone();
+        let path_b = fixture_b.path().to_path_buf();
+        let handle_b = tokio::spawn(async move {
+            events_b.lock().await.push((902, "spawn_start", std::time::Instant::now()));
+            manager_b
+                .start_with_config_dir_override(902, registry_b, &path_b)
+                .await
+                .unwrap();
+            events_b.lock().await.push((902, "spawn_end", std::time::Instant::now()));
+        });
+
+        let _ = tokio::join!(handle_a, handle_b);
+
+        let log = events.lock().await;
+        let end_901 = log.iter().find(|(id, kind, _)| *id == 901 && *kind == "spawn_end").unwrap().2;
+        let start_902 = log.iter().find(|(id, kind, _)| *id == 902 && *kind == "spawn_start").unwrap().2;
+        let end_902 = log.iter().find(|(id, kind, _)| *id == 902 && *kind == "spawn_end").unwrap().2;
+        let start_901 = log.iter().find(|(id, kind, _)| *id == 901 && *kind == "spawn_start").unwrap().2;
+
+        let (first_end, second_start) = if start_901 <= start_902 { (end_901, start_902) } else { (end_902, start_901) };
+        assert!(
+            second_start >= first_end - std::time::Duration::from_millis(50),
+            "spawns overlapped"
+        );
+    }
+
+    #[tokio::test]
+    async fn already_running_feature_start_is_not_blocked_by_concurrent_spawn() {
+        if !nvim_available() {
+            eprintln!("SKIP: nvim binary not found");
+            return;
+        }
+
+        let fast_fixture = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(fast_fixture.path().join("nvim")).unwrap();
+        std::fs::write(fast_fixture.path().join("nvim/init.lua"), "").unwrap();
+
+        let slow_fixture = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(slow_fixture.path().join("nvim")).unwrap();
+        std::fs::write(slow_fixture.path().join("nvim/init.lua"), "vim.wait(5000)").unwrap();
+
+        let manager = NeovimManager::new();
+        let registry_a = test_ws_sender();
+        let (tx_a, _rx_a) = tokio::sync::mpsc::unbounded_channel::<axum::extract::ws::Message>();
+        registry_a.register(903, tx_a).await;
+        manager
+            .start_with_config_dir_override(903, registry_a, fast_fixture.path())
+            .await
+            .unwrap();
+
+        let registry_b = test_ws_sender();
+        let (tx_b, _rx_b) = tokio::sync::mpsc::unbounded_channel::<axum::extract::ws::Message>();
+        registry_b.register(904, tx_b).await;
+        let slow_path = slow_fixture.path().to_path_buf();
+        let manager_for_slow = manager.clone();
+        let slow_handle = tokio::spawn(async move {
+            manager_for_slow
+                .start_with_config_dir_override(904, registry_b, &slow_path)
+                .await
+                .unwrap();
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let registry_a2 = test_ws_sender();
+        let (tx_a2, _rx_a2) = tokio::sync::mpsc::unbounded_channel::<axum::extract::ws::Message>();
+        registry_a2.register(903, tx_a2).await;
+        let redundant_start = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            manager.start_with_config_dir_override(903, registry_a2, fast_fixture.path()),
+        )
+        .await;
+
+        assert!(
+            redundant_start.is_ok(),
+            "redundant start for an already-running feature should return immediately, not wait on an unrelated feature's spawn_lock"
+        );
+
+        slow_handle.await.unwrap();
     }
 }
