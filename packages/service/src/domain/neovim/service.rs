@@ -83,7 +83,7 @@ impl NeovimManager {
             })?;
 
         let api_info_result =
-            tokio::time::timeout(std::time::Duration::from_secs(15), nvim.get_api_info())
+            tokio::time::timeout(std::time::Duration::from_secs(90), nvim.get_api_info())
                 .await
                 .map_err(|_| AppError::NeovimHandshakeTimeout)?
                 .map_err(|e| AppError::NeovimSpawnError {
@@ -812,6 +812,27 @@ pub(crate) mod tests {
             .unwrap();
         let result = manager.send_keys(604, "never/pushed.rs", "j").await;
         assert!(matches!(result, Err(AppError::NeovimBufferNotFound { .. })));
+    }
+
+    #[tokio::test]
+    async fn start_succeeds_with_config_delay_between_15_and_90_seconds() {
+        if !nvim_available() {
+            eprintln!("SKIP: nvim binary not found in test environment");
+            return;
+        }
+
+        let fixture_dir = tempfile::tempdir().unwrap();
+        let nvim_config_dir = fixture_dir.path().join("nvim");
+        std::fs::create_dir_all(&nvim_config_dir).unwrap();
+        // Simulate a slow first-time plugin install: a startup delay longer
+        // than the old 15s ceiling but comfortably under the new 90s one.
+        std::fs::write(nvim_config_dir.join("init.lua"), "vim.wait(20000)").unwrap();
+
+        let manager = NeovimManager::new();
+        let result = manager
+            .start_with_fixture_path(900, test_ws_sender(), fixture_dir.path())
+            .await;
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
