@@ -1693,12 +1693,12 @@ export interface MovePathResponse {
   new_path: string;
 }
 
-export interface NeovimStartResponse {
-  version: string;
-}
-
 export interface NeovimDetectResponse {
   available: boolean;
+}
+
+export interface NeovimStartResponse {
+  version: string;
 }
 
 export type NewProjectBranchPayloadBase = string | null;
@@ -7700,6 +7700,69 @@ export const usePushBufferRoute = <TError = ErrorType<unknown>, TContext = unkno
 };
 
 /**
+ * Reports whether `nvim` is available on this machine. Kept under the
+existing `/features/{feature_id}/neovim/...` prefix for routing
+consistency even though availability is a machine-wide fact, not
+feature-scoped — `feature_id` is accepted but unused.
+ * @summary GET /api/features/{feature_id}/neovim/detect
+ */
+export const detectRoute = (featureId: string, signal?: AbortSignal) => {
+  return customInstance<NeovimDetectResponse>({
+    url: `/api/features/${featureId}/neovim/detect`,
+    method: "GET",
+    signal,
+  });
+};
+
+export const getDetectRouteQueryKey = (featureId?: string) => {
+  return [`/api/features/${featureId}/neovim/detect`] as const;
+};
+
+export const getDetectRouteQueryOptions = <
+  TData = Awaited<ReturnType<typeof detectRoute>>,
+  TError = ErrorType<unknown>,
+>(
+  featureId: string,
+  options?: { query?: UseQueryOptions<Awaited<ReturnType<typeof detectRoute>>, TError, TData> },
+) => {
+  const { query: queryOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getDetectRouteQueryKey(featureId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof detectRoute>>> = ({ signal }) =>
+    detectRoute(featureId, signal);
+
+  return { queryKey, queryFn, enabled: !!featureId, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof detectRoute>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type DetectRouteQueryResult = NonNullable<Awaited<ReturnType<typeof detectRoute>>>;
+export type DetectRouteQueryError = ErrorType<unknown>;
+
+/**
+ * @summary GET /api/features/{feature_id}/neovim/detect
+ */
+
+export function useDetectRoute<
+  TData = Awaited<ReturnType<typeof detectRoute>>,
+  TError = ErrorType<unknown>,
+>(
+  featureId: string,
+  options?: { query?: UseQueryOptions<Awaited<ReturnType<typeof detectRoute>>, TError, TData> },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getDetectRouteQueryOptions(featureId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  query.queryKey = queryOptions.queryKey;
+
+  return query;
+}
+
+/**
  * Spawns a headless Neovim instance for the given feature (session).
 Returns the spawn status and process info once the handshake completes.
  * @summary POST /api/features/{feature_id}/neovim/start
@@ -7843,65 +7906,6 @@ export const useStopRoute = <TError = ErrorType<unknown>, TContext = unknown>(op
 
   return useMutation(mutationOptions);
 };
-
-/**
- * Reports whether `nvim` is available on this machine. Kept under the
-existing `/features/{feature_id}/neovim/...` prefix for routing
-consistency even though availability is a machine-wide fact, not
-feature-scoped — `feature_id` is accepted but unused.
- * @summary GET /api/features/{feature_id}/neovim/detect
- */
-export const detectRoute = (featureId: string, signal?: AbortSignal) => {
-  return customInstance<NeovimDetectResponse>({
-    url: `/api/features/${featureId}/neovim/detect`,
-    method: "GET",
-    signal,
-  });
-};
-
-export const getDetectRouteQueryKey = (featureId: string) => {
-  return [`/api/features/${featureId}/neovim/detect`] as const;
-};
-
-export const getDetectRouteQueryOptions = <
-  TData = Awaited<ReturnType<typeof detectRoute>>,
-  TError = ErrorType<unknown>,
->(
-  featureId: string,
-  options?: { query?: UseQueryOptions<Awaited<ReturnType<typeof detectRoute>>, TError, TData> },
-) => {
-  const { query: queryOptions } = options ?? {};
-
-  const queryKey = queryOptions?.queryKey ?? getDetectRouteQueryKey(featureId);
-
-  const queryFn: QueryFunction<Awaited<ReturnType<typeof detectRoute>>> = ({ signal }) =>
-    detectRoute(featureId, signal);
-
-  return { queryKey, queryFn, enabled: !!featureId, ...queryOptions } as UseQueryOptions<
-    Awaited<ReturnType<typeof detectRoute>>,
-    TError,
-    TData
-  > & { queryKey: QueryKey };
-};
-
-export type DetectRouteQueryResult = NonNullable<Awaited<ReturnType<typeof detectRoute>>>;
-export type DetectRouteQueryError = ErrorType<unknown>;
-
-export function useDetectRoute<
-  TData = Awaited<ReturnType<typeof detectRoute>>,
-  TError = ErrorType<unknown>,
->(
-  featureId: string,
-  options?: { query?: UseQueryOptions<Awaited<ReturnType<typeof detectRoute>>, TError, TData> },
-): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
-  const queryOptions = getDetectRouteQueryOptions(featureId, options);
-
-  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & { queryKey: QueryKey };
-
-  query.queryKey = queryOptions.queryKey;
-
-  return query;
-}
 
 export const refreshSession = (featureId: number, signal?: AbortSignal) => {
   return customInstance<RefreshSessionResponse>({

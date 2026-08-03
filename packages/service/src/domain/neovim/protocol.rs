@@ -27,7 +27,7 @@ pub struct PullBufferResponse {
 }
 
 #[allow(dead_code)]
-#[derive(Serialize, Deserialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
 pub struct NeovimDetectResponse {
     pub available: bool,
 }
