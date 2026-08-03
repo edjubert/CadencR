@@ -53,6 +53,15 @@ impl NeovimManager {
         feature_id: i64,
         ws_sender: WsSessionSender,
     ) -> Result<NeovimStartResponse, AppError> {
+        self.start_with_env_override(feature_id, ws_sender, &[]).await
+    }
+
+    async fn start_with_env_override(
+        &self,
+        feature_id: i64,
+        ws_sender: WsSessionSender,
+        env_overrides: &[(&str, &str)],
+    ) -> Result<NeovimStartResponse, AppError> {
         let mut processes = self.processes.lock().await;
         if let Some(existing) = processes.get(&feature_id) {
             return Ok(NeovimStartResponse {
@@ -61,6 +70,9 @@ impl NeovimManager {
         }
 
         let mut cmd = build_nvim_command();
+        for (key, value) in env_overrides {
+            cmd.env(key, value);
+        }
         let buffers: SharedBuffers = Arc::new(Mutex::new(HashMap::new()));
         let handler = NeovimEventHandler::new(feature_id, buffers.clone(), ws_sender);
 
@@ -71,7 +83,7 @@ impl NeovimManager {
             })?;
 
         let api_info_result =
-            tokio::time::timeout(std::time::Duration::from_secs(5), nvim.get_api_info())
+            tokio::time::timeout(std::time::Duration::from_secs(15), nvim.get_api_info())
                 .await
                 .map_err(|_| AppError::NeovimHandshakeTimeout)?
                 .map_err(|e| AppError::NeovimSpawnError {
@@ -83,18 +95,21 @@ impl NeovimManager {
 
         // Once-per-process autocmds forwarding cursor/mode changes as RPC
         // notifications the handler above already knows how to translate.
-        nvim.command(
-            "autocmd CursorMoved,CursorMovedI * call rpcnotify(0, 'cadencr_cursor_moved', line('.'), col('.'))",
+        // Wrapped in CadencrInternal augroup so `autocmd!` inside the group
+        // only clears these autocmds — surviving a user config's bare
+        // `autocmd!` which clears global autocmds outside this group.
+        nvim.exec(
+            "augroup CadencrInternal\n\
+             autocmd!\n\
+             autocmd CursorMoved,CursorMovedI * call rpcnotify(0, 'cadencr_cursor_moved', line('.'), col('.'))\n\
+             autocmd ModeChanged * call rpcnotify(0, 'cadencr_mode_changed', mode())\n\
+             augroup END",
+            false,
         )
         .await
         .map_err(|e| AppError::NeovimSpawnError {
             detail: e.to_string(),
         })?;
-        nvim.command("autocmd ModeChanged * call rpcnotify(0, 'cadencr_mode_changed', mode())")
-            .await
-            .map_err(|e| AppError::NeovimSpawnError {
-                detail: e.to_string(),
-            })?;
 
         let handle = NeovimHandle {
             feature_id,
@@ -123,6 +138,35 @@ impl NeovimManager {
         });
 
         Ok(NeovimStartResponse { version })
+    }
+
+    pub fn empty_fixture_path() -> std::io::Result<tempfile::TempDir> {
+        let fixture_dir = tempfile::tempdir()?;
+        std::fs::create_dir_all(fixture_dir.path().join("nvim"))?;
+        Ok(fixture_dir)
+    }
+
+    #[cfg(test)]
+    pub async fn start_with_empty_fixture(
+        &self,
+        feature_id: i64,
+        ws_sender: WsSessionSender,
+    ) -> Result<NeovimStartResponse, AppError> {
+        let fixture_path = Self::empty_fixture_path()
+            .map_err(|e| AppError::Internal(format!("Failed to create empty fixture: {e}")))?;
+        self.start_with_env_override(feature_id, ws_sender, &[("XDG_CONFIG_HOME", fixture_path.path().to_str().unwrap())])
+            .await
+    }
+
+    #[cfg(test)]
+    pub async fn start_with_fixture_path(
+        &self,
+        feature_id: i64,
+        ws_sender: WsSessionSender,
+        fixture_path: &std::path::Path,
+    ) -> Result<NeovimStartResponse, AppError> {
+        self.start_with_env_override(feature_id, ws_sender, &[("XDG_CONFIG_HOME", fixture_path.to_str().unwrap())])
+            .await
     }
 
     pub async fn stop(&self, feature_id: i64) -> Result<(), AppError> {
@@ -385,7 +429,7 @@ fn extract_version(api_info: &[Value]) -> String {
 #[allow(dead_code)]
 fn build_nvim_command() -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new("nvim");
-    cmd.arg("--embed").arg("-u").arg("NONE").arg("--headless");
+    cmd.arg("--embed").arg("--headless");
     cmd
 }
 
@@ -413,7 +457,11 @@ pub(crate) mod tests {
             return;
         }
         let manager = NeovimManager::new();
-        let info = manager.start(1, test_ws_sender()).await.expect("start should succeed");
+        let _fixture = NeovimManager::empty_fixture_path().expect("create empty fixture");
+        let info = manager
+            .start_with_empty_fixture(1, test_ws_sender())
+            .await
+            .expect("start should succeed");
         eprintln!("API info version: {:?}", info.version);
         assert!(!info.version.is_empty());
     }
@@ -425,7 +473,12 @@ pub(crate) mod tests {
             return;
         }
         let manager = NeovimManager::new();
-        manager.start(7, test_ws_sender()).await.unwrap();
+        let _fixture = NeovimManager::empty_fixture_path().expect("create empty fixture");
+        let _ = &_fixture;
+        manager
+            .start_with_empty_fixture(7, test_ws_sender())
+            .await
+            .unwrap();
         manager.stop(7).await.unwrap();
         assert!(!manager.is_running(7).await);
         let result = manager.stop(7).await;
@@ -439,9 +492,17 @@ pub(crate) mod tests {
             return;
         }
         let manager = NeovimManager::new();
-        manager.start(9, test_ws_sender()).await.unwrap();
+        let _fixture = NeovimManager::empty_fixture_path().expect("create empty fixture");
+        let _ = &_fixture;
+        manager
+            .start_with_empty_fixture(9, test_ws_sender())
+            .await
+            .unwrap();
         manager.stop(9).await.unwrap();
-        let restarted = manager.start(9, test_ws_sender()).await.unwrap();
+        let restarted = manager
+            .start_with_empty_fixture(9, test_ws_sender())
+            .await
+            .unwrap();
         assert!(!restarted.version.is_empty());
         assert!(manager.is_running(9).await);
     }
@@ -453,7 +514,12 @@ pub(crate) mod tests {
             return;
         }
         let manager = NeovimManager::new();
-        manager.start(42, test_ws_sender()).await.unwrap();
+        let _fixture = NeovimManager::empty_fixture_path().expect("create empty fixture");
+        let _ = &_fixture;
+        manager
+            .start_with_empty_fixture(42, test_ws_sender())
+            .await
+            .unwrap();
         let result = manager.push_buffer(42, "src/scratch_42.txt", "hello\nworld").await;
         assert!(result.is_ok());
         manager.stop(42).await.unwrap();
@@ -473,7 +539,12 @@ pub(crate) mod tests {
             return;
         }
         let manager = NeovimManager::new();
-        manager.start(200, test_ws_sender()).await.unwrap();
+        let _fixture = NeovimManager::empty_fixture_path().expect("create empty fixture");
+        let _ = &_fixture;
+        manager
+            .start_with_empty_fixture(200, test_ws_sender())
+            .await
+            .unwrap();
         manager
             .push_buffer(200, "src/scratch_200.rs", "fn main() {}\n")
             .await
@@ -489,7 +560,12 @@ pub(crate) mod tests {
             return;
         }
         let manager = NeovimManager::new();
-        manager.start(201, test_ws_sender()).await.unwrap();
+        let _fixture = NeovimManager::empty_fixture_path().expect("create empty fixture");
+        let _ = &_fixture;
+        manager
+            .start_with_empty_fixture(201, test_ws_sender())
+            .await
+            .unwrap();
         let original = "// café 🦀\nlet x = 1;";
         manager
             .push_buffer(201, "src/scratch_201.rs", original)
@@ -506,7 +582,12 @@ pub(crate) mod tests {
             return;
         }
         let manager = NeovimManager::new();
-        manager.start(202, test_ws_sender()).await.unwrap();
+        let _fixture = NeovimManager::empty_fixture_path().expect("create empty fixture");
+        let _ = &_fixture;
+        manager
+            .start_with_empty_fixture(202, test_ws_sender())
+            .await
+            .unwrap();
         let result = manager.pull_buffer(202, "never/pushed.rs").await;
         assert!(matches!(
             result,
@@ -531,7 +612,12 @@ pub(crate) mod tests {
             return;
         }
         let manager = NeovimManager::new();
-        manager.start(204, test_ws_sender()).await.unwrap();
+        let _fixture = NeovimManager::empty_fixture_path().expect("create empty fixture");
+        let _ = &_fixture;
+        manager
+            .start_with_empty_fixture(204, test_ws_sender())
+            .await
+            .unwrap();
         manager.push_buffer(204, "src/scratch_202.rs", "v1").await.unwrap();
         manager.push_buffer(204, "src/scratch_202.rs", "v2").await.unwrap();
         let content = manager.pull_buffer(204, "src/scratch_202.rs").await.unwrap();
@@ -547,10 +633,12 @@ pub(crate) mod tests {
             return;
         }
         let manager = NeovimManager::new();
-        // start() succeeding at all proves the autocmd registration commands
-        // (issued right after the handshake) didn't error out; the autocmds
-        // actually firing end-to-end is covered by send_keys's tests below.
-        manager.start(400, test_ws_sender()).await.unwrap();
+        let _fixture = NeovimManager::empty_fixture_path().expect("create empty fixture");
+        let _ = &_fixture;
+        manager
+            .start_with_empty_fixture(400, test_ws_sender())
+            .await
+            .unwrap();
         assert!(manager.is_running(400).await);
     }
 
@@ -565,7 +653,12 @@ pub(crate) mod tests {
         registry.register(500, tx).await;
 
         let manager = NeovimManager::new();
-        manager.start(500, registry).await.unwrap();
+        let _fixture = NeovimManager::empty_fixture_path().expect("create empty fixture");
+        let _ = &_fixture;
+        manager
+            .start_with_empty_fixture(500, registry)
+            .await
+            .unwrap();
         manager
             .push_buffer(500, "src/main.rs", "line one\nline two\n")
             .await
@@ -603,7 +696,12 @@ pub(crate) mod tests {
         registry.register(600, tx).await;
 
         let manager = NeovimManager::new();
-        manager.start(600, registry).await.unwrap();
+        let _fixture = NeovimManager::empty_fixture_path().expect("create empty fixture");
+        let _ = &_fixture;
+        manager
+            .start_with_empty_fixture(600, registry)
+            .await
+            .unwrap();
         manager
             .push_buffer(600, "src/main.rs", "line one\nline two\nline three\n")
             .await
@@ -637,7 +735,12 @@ pub(crate) mod tests {
             return;
         }
         let manager = NeovimManager::new();
-        manager.start(601, test_ws_sender()).await.unwrap();
+        let _fixture = NeovimManager::empty_fixture_path().expect("create empty fixture");
+        let _ = &_fixture;
+        manager
+            .start_with_empty_fixture(601, test_ws_sender())
+            .await
+            .unwrap();
         manager
             .push_buffer(601, "src/main.rs", "line one\nline two\nline three\n")
             .await
@@ -658,7 +761,12 @@ pub(crate) mod tests {
         registry.register(602, tx).await;
 
         let manager = NeovimManager::new();
-        manager.start(602, registry).await.unwrap();
+        let _fixture = NeovimManager::empty_fixture_path().expect("create empty fixture");
+        let _ = &_fixture;
+        manager
+            .start_with_empty_fixture(602, registry)
+            .await
+            .unwrap();
         manager
             .push_buffer(602, "src/main.rs", "line one\n")
             .await
@@ -696,8 +804,72 @@ pub(crate) mod tests {
             return;
         }
         let manager = NeovimManager::new();
-        manager.start(604, test_ws_sender()).await.unwrap();
+        let _fixture = NeovimManager::empty_fixture_path().expect("create empty fixture");
+        let _ = &_fixture;
+        manager
+            .start_with_empty_fixture(604, test_ws_sender())
+            .await
+            .unwrap();
         let result = manager.send_keys(604, "never/pushed.rs", "j").await;
         assert!(matches!(result, Err(AppError::NeovimBufferNotFound { .. })));
+    }
+
+    #[tokio::test]
+    async fn start_loads_real_user_config_from_standard_location() {
+        if !nvim_available() {
+            eprintln!("SKIP: nvim binary not found in test environment");
+            return;
+        }
+        let manager = NeovimManager::new();
+        let info = manager
+            .start(10, test_ws_sender())
+            .await
+            .expect("start should succeed");
+        eprintln!("API info version: {:?}", info.version);
+        assert!(!info.version.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cursor_moved_autocmd_survives_user_config_autocmd_clear() {
+        if !nvim_available() {
+            eprintln!("SKIP: nvim binary not found");
+            return;
+        }
+
+        let fixture_dir = tempfile::tempdir().unwrap();
+        let nvim_config_dir = fixture_dir.path().join("nvim");
+        std::fs::create_dir_all(&nvim_config_dir).unwrap();
+        std::fs::write(
+            nvim_config_dir.join("init.lua"),
+            "vim.cmd('autocmd!')",
+        ).unwrap();
+
+        let registry = test_ws_sender();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<axum::extract::ws::Message>();
+        registry.register(801, tx).await;
+
+        let manager = NeovimManager::new();
+        manager
+            .start_with_fixture_path(801, registry, fixture_dir.path())
+            .await
+            .unwrap();
+        manager
+            .push_buffer(801, "src/main.rs", "line one\nline two\n")
+            .await
+            .unwrap();
+        manager.send_keys(801, "src/main.rs", "j").await.unwrap();
+
+        let mut saw_cursor_moved = false;
+        while let Ok(Some(axum::extract::ws::Message::Text(text))) =
+            tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv()).await
+        {
+            let envelope: crate::domain::ws_session::protocol::WsEnvelope =
+                serde_json::from_str(&text).unwrap();
+            if envelope.domain == "neovim" && envelope.action == "cursor_moved" {
+                saw_cursor_moved = true;
+                break;
+            }
+        }
+        assert!(saw_cursor_moved, "expected a cursor_moved WsEnvelope via rx, proving the CadencrInternal augroup's autocmd survived the fixture config's bare `autocmd!`");
     }
 }
