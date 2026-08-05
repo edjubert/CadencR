@@ -4,8 +4,10 @@
 //! renderer can draw, and encodes user input back into the bytes a terminal
 //! application expects. Rendering itself lives outside this crate.
 
+pub mod input;
 pub mod snapshot;
 pub mod terminal;
 
+pub use input::{encode_key, KeyInput};
 pub use snapshot::WORDS_PER_CELL;
 pub use terminal::{TerminalCore, TerminalSize};

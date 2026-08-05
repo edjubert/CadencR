@@ -3,7 +3,7 @@
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point};
-use alacritty_terminal::term::{Config, Term};
+use alacritty_terminal::term::{Config, Term, TermMode};
 use vte::ansi::Processor;
 
 use crate::snapshot::{encode_color, WORDS_PER_CELL};
@@ -93,6 +93,12 @@ impl TerminalCore {
     /// Cursor column, 0-indexed.
     pub fn cursor_column(&self) -> usize {
         self.term.grid().cursor.point.column.0
+    }
+
+    /// Whether DECCKM (application cursor keys) is enabled. The renderer reads
+    /// this to encode arrow keys correctly — Neovim turns it on.
+    pub fn application_cursor(&self) -> bool {
+        self.term.mode().contains(TermMode::APP_CURSOR)
     }
 
     /// One viewport row as text, trailing blanks trimmed. Reading aid for
@@ -225,5 +231,17 @@ mod tests {
         // CUP is 1-indexed; the cursor ends three columns past where it landed.
         assert_eq!(core.cursor_line(), 2);
         assert_eq!(core.cursor_column(), 9);
+    }
+
+    #[test]
+    fn application_cursor_mode_follows_the_decckm_escape_sequence() {
+        let mut core = TerminalCore::new(TerminalSize { columns: 20, screen_lines: 5 });
+        assert!(!core.application_cursor(), "DECCKM starts off");
+
+        core.feed(b"\x1b[?1h");
+        assert!(core.application_cursor(), "CSI ? 1 h enables DECCKM");
+
+        core.feed(b"\x1b[?1l");
+        assert!(!core.application_cursor(), "CSI ? 1 l disables DECCKM");
     }
 }
