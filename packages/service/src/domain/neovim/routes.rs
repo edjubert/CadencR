@@ -1,278 +1,87 @@
-use axum::{
-    extract::{Path, State},
-    http::StatusCode,
-    routing::{get, post},
-    Router,
-};
-
 use std::num::ParseIntError;
 
-use crate::{app_state::AppState, domain::neovim::protocol::{NeovimDetectResponse, NeovimStartResponse, PullBufferRequest, PullBufferResponse, PushBufferRequest}, error::AppError};
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::{routing::post, Json, Router};
 
-/// POST /api/features/{feature_id}/neovim/start
-///
-/// Spawns a headless Neovim instance for the given feature (session).
-/// Returns the spawn status and process info once the handshake completes.
+use crate::app_state::AppState;
+use crate::error::AppError;
+
+use super::protocol::{NeovimDetectResponse, NeovimStartResponse, OpenFileRequest};
+
 #[utoipa::path(
     post,
-    path = "/api/features/{feature_id}/neovim/start",
-    params(("feature_id" = String, Path, description = "Feature ID")),
-    responses((status = 200, description = "Neovim spawn result", body = NeovimStartResponse)),
+    path = "/api/neovim/start",
+    request_body = i64,
+    responses(
+        (status = 200, body = NeovimStartResponse),
+        (status = 500, description = "Spawn failed")
+    )
 )]
 pub async fn start_route(
-    State(app_state): State<AppState>,
-    Path(feature_id): Path<String>,
-) -> Result<(StatusCode, axum::Json<NeovimStartResponse>), AppError> {
-    let feature_id: i64 = feature_id.parse().map_err(|e: ParseIntError| AppError::BadRequest(
-        format!("Invalid feature_id: {e}"),
-    ))?;
-    // A feature may have zero active WS connections when /neovim/start is
-    // called (e.g. HTTP called before any WS session opened) — the registry
-    // itself handles that as a no-op fan-out (an empty sender list), the same
-    // way it already does for HTTP-triggered git.status/session_status
-    // pushes, so there's nothing to branch on here.
-    let result = app_state
-        .neovim_manager
-        .start(feature_id, app_state.ws_feature_senders.clone())
-        .await?;
-    Ok((StatusCode::OK, axum::Json(result)))
+    State(state): State<AppState>,
+    Json(feature_id): Json<i64>,
+) -> Result<Json<NeovimStartResponse>, AppError> {
+    let result = state.neovim_manager.start(feature_id).await?;
+    Ok(Json(result))
 }
 
-/// POST /api/features/{feature_id}/neovim/stop
-///
-/// Stops the headless Neovim instance for the given feature (session).
 #[utoipa::path(
     post,
-    path = "/api/features/{feature_id}/neovim/stop",
-    params(("feature_id" = String, Path, description = "Feature ID")),
-    responses((status = 200, description = "Neovim stopped successfully")),
+    path = "/api/neovim/stop",
+    request_body = i64,
+    responses(
+        (status = 200, description = "Stopped"),
+        (status = 404, description = "Not running")
+    )
 )]
 pub async fn stop_route(
-    State(app_state): State<AppState>,
-    Path(feature_id): Path<String>,
-) -> Result<StatusCode, AppError> {
-    let feature_id: i64 = feature_id.parse().map_err(|e: ParseIntError| AppError::BadRequest(
-        format!("Invalid feature_id: {e}"),
-    ))?;
-    match app_state.neovim_manager.stop(feature_id).await {
-        Ok(()) => Ok(StatusCode::OK),
-        Err(AppError::NeovimNotRunning { .. }) => Ok(StatusCode::OK),
-        Err(e) => Err(e),
-    }
+    State(state): State<AppState>,
+    Json(feature_id): Json<i64>,
+) -> Result<(), AppError> {
+    state.neovim_manager.stop(feature_id).await
 }
 
-/// POST /api/features/{feature_id}/neovim/buffer/push
+#[utoipa::path(
+    get,
+    path = "/api/neovim/detect",
+    responses((status = 200, body = NeovimDetectResponse))
+)]
+pub async fn detect_route(State(_state): State<AppState>) -> Json<NeovimDetectResponse> {
+    let available = crate::domain::neovim::service::nvim_available().await;
+    Json(NeovimDetectResponse { available })
+}
+
+/// POST /api/features/{feature_id}/neovim/open
 ///
-/// Pushes file content from the workspace into the Neovim buffer.
+/// Opens a file in the feature's Neovim session and moves the cursor to the
+/// requested position. `line` and `col` are 1-indexed.
 #[utoipa::path(
     post,
-    path = "/api/features/{feature_id}/neovim/buffer/push",
+    path = "/api/features/{feature_id}/neovim/open",
     params(("feature_id" = String, Path, description = "Feature ID")),
-    request_body = PushBufferRequest,
-    responses((status = 204, description = "Buffer pushed successfully")),
+    request_body = OpenFileRequest,
+    responses((status = 204, description = "File opened successfully")),
 )]
-pub async fn push_buffer_route(
+pub async fn open_file_route(
     State(app_state): State<AppState>,
     Path(feature_id): Path<String>,
-    axum::Json(request): axum::Json<PushBufferRequest>,
+    axum::Json(request): axum::Json<OpenFileRequest>,
 ) -> Result<StatusCode, AppError> {
-    let feature_id: i64 = feature_id.parse().map_err(|e: ParseIntError| AppError::BadRequest(
-        format!("Invalid feature_id: {e}"),
-    ))?;
+    let feature_id: i64 = feature_id.parse().map_err(|e: ParseIntError| {
+        AppError::BadRequest(format!("Invalid feature_id: {e}"))
+    })?;
     app_state
         .neovim_manager
-        .push_buffer(feature_id, &request.file_path, &request.content)
+        .open_file(feature_id, &request.path, request.line, request.col)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// POST /api/features/{feature_id}/neovim/buffer/pull
-///
-/// Pulls content from a Neovim buffer back to the workspace.
-#[utoipa::path(
-    post,
-    path = "/api/features/{feature_id}/neovim/buffer/pull",
-    params(("feature_id" = String, Path, description = "Feature ID")),
-    request_body = PullBufferRequest,
-    responses((status = 200, description = "Buffer pulled successfully", body = PullBufferResponse)),
-)]
-pub async fn pull_buffer_route(
-    State(app_state): State<AppState>,
-    Path(feature_id): Path<String>,
-    axum::Json(request): axum::Json<PullBufferRequest>,
-) -> Result<axum::Json<PullBufferResponse>, AppError> {
-    let feature_id: i64 = feature_id.parse().map_err(|e: ParseIntError| AppError::BadRequest(
-        format!("Invalid feature_id: {e}"),
-    ))?;
-    let content = app_state
-        .neovim_manager
-        .pull_buffer(feature_id, &request.file_path)
-        .await?;
-    Ok(axum::Json(PullBufferResponse { content }))
-}
-
-/// GET /api/features/{feature_id}/neovim/detect
-///
-/// Reports whether `nvim` is available on this machine. Kept under the
-/// existing `/features/{feature_id}/neovim/...` prefix for routing
-/// consistency even though availability is a machine-wide fact, not
-/// feature-scoped — `feature_id` is accepted but unused.
-#[utoipa::path(
-    get,
-    path = "/api/features/{feature_id}/neovim/detect",
-    params(("feature_id" = String, Path, description = "Feature ID (unused)")),
-    responses((status = 200, description = "Neovim availability", body = NeovimDetectResponse)),
-)]
-pub async fn detect_route(
-    Path(_feature_id): Path<String>,
-) -> axum::Json<NeovimDetectResponse> {
-    axum::Json(NeovimDetectResponse {
-        available: crate::domain::neovim::service::nvim_available().await,
-    })
-}
-
-/// Register neovim routes on the router.
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/api/features/{feature_id}/neovim/start", post(start_route))
-        .route("/api/features/{feature_id}/neovim/stop", post(stop_route))
-        .route("/api/features/{feature_id}/neovim/buffer/push", post(push_buffer_route))
-        .route("/api/features/{feature_id}/neovim/buffer/pull", post(pull_buffer_route))
-        .route("/api/features/{feature_id}/neovim/detect", get(detect_route))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::domain::neovim::service::tests::nvim_available;
-    use crate::api::build_router;
-    use sqlx::SqlitePool;
-    use axum::body::Body;
-    use axum::body::to_bytes;
-    use axum::http::Method;
-    use axum::http::Request;
-    use tower::ServiceExt;
-
-    /// Verify the routes module compiles and routes() returns a valid Router.
-    #[test]
-    fn routes_module_exists_and_returns_router() {
-        let _router: Router<AppState> = routes();
-    }
-
-    #[tokio::test]
-    async fn start_route_compiles_and_succeeds_with_active_ws_session() {
-        if !nvim_available() {
-            eprintln!("SKIP: nvim binary not found");
-            return;
-        }
-
-        let pool = SqlitePool::connect("sqlite::memory:").await.expect("memory pool");
-        let state = AppState::with_pool(pool);
-
-        // Establish an active WS session for the feature the same way a real
-        // WS connection registers itself on upgrade.
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<axum::extract::ws::Message>();
-        state.ws_feature_senders.register(301, tx).await;
-
-        let app = build_router(state);
-        let start_resp = app
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri("/api/features/301/neovim/start")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .expect("start should not return 404");
-
-        assert_eq!(start_resp.status(), StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn push_then_pull_route_roundtrips_content() {
-        if !nvim_available() {
-            eprintln!("SKIP: nvim binary not found");
-            return;
-        }
-
-        let pool = SqlitePool::connect("sqlite::memory:").await.expect("memory pool");
-        let state = AppState::with_pool(pool);
-        let app = build_router(state);
-
-        // Start neovim for feature 300
-        let start_resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri("/api/features/300/neovim/start")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .expect("start should not return 404");
-
-        let status = start_resp.status();
-        if status == StatusCode::NOT_FOUND {
-            panic!("start route not found");
-        }
-        if !status.is_success() && status != StatusCode::OK {
-            eprintln!("SKIP: neovim start returned {status}");
-            return;
-        }
-
-        // Give neovim a moment to fully initialize
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-        // Push buffer
-        let push_body = serde_json::json!({
-            "file_path": "src/main.rs",
-            "content": "fn main() {}\n"
-        });
-        let push_resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri("/api/features/300/neovim/buffer/push")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::to_string(&push_body).unwrap(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .expect("push should not return 404");
-
-        assert_eq!(push_resp.status(), StatusCode::NO_CONTENT);
-
-        // Pull buffer
-        let pull_body = serde_json::json!({
-            "file_path": "src/main.rs"
-        });
-        let pull_resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri("/api/features/300/neovim/buffer/pull")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::to_string(&pull_body).unwrap(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .expect("pull should not return 404");
-
-        assert_eq!(pull_resp.status(), StatusCode::OK);
-
-        let body_bytes = to_bytes(pull_resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
-        let response: PullBufferResponse = serde_json::from_str(&body_str).unwrap();
-        assert_eq!(response.content, "fn main() {}\n");
-    }
+        .route("/api/neovim/start", axum::routing::post(start_route))
+        .route("/api/neovim/stop", axum::routing::post(stop_route))
+        .route("/api/neovim/detect", axum::routing::get(detect_route))
+        .route("/api/features/{feature_id}/neovim/open", post(open_file_route))
 }

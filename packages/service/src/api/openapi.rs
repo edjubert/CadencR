@@ -22,8 +22,6 @@ use crate::domain::imports::routes as imports_routes;
 use crate::domain::lsp::routes as lsp_routes;
 use crate::domain::ports::models as ports_models;
 use crate::domain::ports::routes as ports_routes;
-use crate::domain::neovim::protocol as neovim_protocol;
-use crate::domain::neovim::routes as neovim_routes;
 use crate::domain::projects::icon as projects_icon;
 use crate::domain::projects::models as projects_models;
 use crate::domain::projects::routes as projects_routes;
@@ -42,6 +40,8 @@ use crate::domain::usage_stats::models as usage_stats_models;
 use crate::domain::usage_stats::routes as usage_stats_routes;
 use crate::domain::workspace::models as workspace_models;
 use crate::domain::workspace::routes as workspace_routes;
+use crate::domain::neovim::protocol as neovim_protocol;
+use crate::domain::neovim::routes as neovim_routes;
 use crate::domain::ws_session::protocol as ws_protocol;
 use crate::domain::ws_session::routes as ws_routes;
 
@@ -158,11 +158,6 @@ use crate::domain::ws_session::routes as ws_routes;
         sessions_routes::get_message_preview_handler,
         terminal_routes::list_terminal_sessions_handler,
         terminal_routes::kill_terminal_sessions_handler,
-        neovim_routes::start_route,
-        neovim_routes::stop_route,
-        neovim_routes::push_buffer_route,
-        neovim_routes::pull_buffer_route,
-        neovim_routes::detect_route,
         super::get_agent_catalog,
         discovery_routes::binary_discovery_handler,
         claude_code_routes::list_profiles_handler,
@@ -192,6 +187,10 @@ use crate::domain::ws_session::routes as ws_routes;
         push_routes::vapid_key_handler,
         push_routes::subscribe_handler,
         push_routes::unsubscribe_handler,
+        neovim_routes::start_route,
+        neovim_routes::stop_route,
+        neovim_routes::detect_route,
+        neovim_routes::open_file_route,
     ),
     components(schemas(
         HealthResponse,
@@ -333,11 +332,6 @@ use crate::domain::ws_session::routes as ws_routes;
         sessions_models::RefreshSessionResponse,
         terminal_routes::TerminalSessionInfo,
         terminal_routes::KillTerminalsResponse,
-        neovim_protocol::NeovimStartResponse,
-        neovim_protocol::PushBufferRequest,
-        neovim_protocol::PullBufferRequest,
-        neovim_protocol::PullBufferResponse,
-        neovim_protocol::NeovimDetectResponse,
         claude_code_routes::ProfileView,
         claude_code_routes::ProfilesResponse,
         claude_code_routes::UpsertProfileRequest,
@@ -377,6 +371,9 @@ use crate::domain::ws_session::routes as ws_routes;
         push_models::PushUnsubscribeRequest,
         push_models::PushSubscriptionKeys,
         push_models::PushSubscriptionResponse,
+        neovim_protocol::NeovimStartResponse,
+        neovim_protocol::NeovimDetectResponse,
+        neovim_protocol::OpenFileRequest,
         ws_protocol::WsSessionAction,
         ws_protocol::PermissionDecision,
         ws_protocol::SessionInitPayload,
