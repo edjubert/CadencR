@@ -7,6 +7,7 @@
 pub mod input;
 pub mod snapshot;
 pub mod terminal;
+pub mod wasm;
 
 pub use input::{encode_key, KeyInput};
 pub use snapshot::WORDS_PER_CELL;
