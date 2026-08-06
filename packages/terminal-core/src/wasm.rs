@@ -84,19 +84,39 @@ impl Terminal {
         self.core.application_cursor()
     }
 
-    /// The viewport packed as four `u32` per cell — character, foreground,
-    /// background, flags — in row-major order.
-    ///
-    /// Returned as a `Uint32Array` view rather than a `Vec`, which
-    /// `wasm_bindgen` would otherwise marshal into a JS `Array` of boxed
-    /// numbers and defeat the point of a packed format.
-    #[wasm_bindgen(js_name = packedSnapshot)]
-    pub fn packed_snapshot(&self) -> js_sys::Uint32Array {
-        let packed = self.core.packed_snapshot();
-        js_sys::Uint32Array::from(&packed[..])
+    /// Rewrite the packed grid buffer. Call once per frame, before reading the
+    /// snapshot pointer.
+    #[wasm_bindgen(js_name = refreshSnapshot)]
+    pub fn refresh_snapshot(&mut self) {
+        self.core.refresh_snapshot();
     }
 
-    /// One row as text. Debugging aid — renderers use `packedSnapshot`.
+    /// Offset of the packed grid inside the module's linear memory.
+    ///
+    /// **The view built from this pointer expires.** Any Rust allocation can
+    /// grow the module's memory, which replaces the underlying `ArrayBuffer`
+    /// and detaches every existing view. Rebuild the `Uint32Array` after each
+    /// `feed()` or `resize()` — never cache it across frames.
+    #[wasm_bindgen(js_name = snapshotPtr)]
+    pub fn snapshot_ptr(&self) -> *const u32 {
+        self.core.snapshot().as_ptr()
+    }
+
+    /// Length of the packed grid, in `u32` words.
+    #[wasm_bindgen(js_name = snapshotLen)]
+    pub fn snapshot_len(&self) -> usize {
+        self.core.snapshot().len()
+    }
+
+    /// Lines changed since the last call, as flat `(line, left, right)`
+    /// triplets with an inclusive right column. Taking the damage clears it.
+    #[wasm_bindgen(js_name = takeDamage)]
+    pub fn take_damage(&mut self) -> Vec<u32> {
+        self.core.take_damage().to_vec()
+    }
+
+    /// One row as text. Debugging aid — renderers use `snapshotPtr` and
+    /// `snapshotLen`.
     #[wasm_bindgen(js_name = rowText)]
     pub fn row_text(&self, line: usize) -> String {
         self.core.row_text(line)

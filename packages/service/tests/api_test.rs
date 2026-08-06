@@ -1,6 +1,5 @@
 mod common;
 
-use axum::http::StatusCode;
 use common::{apply_ws_upgrade_headers, start_test_server};
 
 #[tokio::test]
@@ -378,63 +377,5 @@ async fn test_terminal_ws_rejects_cross_origin() {
     assert_eq!(resp.status(), reqwest::StatusCode::FORBIDDEN);
 }
 
-#[tokio::test]
-async fn test_neovim_start_route_is_mounted() {
-    let server = start_test_server().await;
-    let resp = server
-        .client
-        .post(format!("{}/api/features/1/neovim/start", server.base_url))
-        .send()
-        .await
-        .unwrap();
-    assert_ne!(resp.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn test_neovim_stop_route_is_mounted() {
-    let server = start_test_server().await;
-    let resp = server
-        .client
-        .post(format!("{}/api/features/1/neovim/stop", server.base_url))
-        .send()
-        .await
-        .unwrap();
-    assert_ne!(resp.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn test_neovim_push_buffer_route_is_mounted() {
-    let server = start_test_server().await;
-    let resp = server
-        .client
-        .post(format!(
-            "{}/api/features/1/neovim/buffer/push",
-            server.base_url
-        ))
-        .json(&serde_json::json!({
-            "file_path": "test.txt",
-            "content": "hello"
-        }))
-        .send()
-        .await
-        .unwrap();
-    assert_ne!(resp.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn test_neovim_pull_buffer_route_is_mounted() {
-    let server = start_test_server().await;
-    let resp = server
-        .client
-        .post(format!(
-            "{}/api/features/1/neovim/buffer/pull",
-            server.base_url
-        ))
-        .json(&serde_json::json!({
-            "file_path": "test.txt"
-        }))
-        .send()
-        .await
-        .unwrap();
-    assert_ne!(resp.status(), StatusCode::NOT_FOUND);
-}
+// Neovim level-2 HTTP routes (start/stop/push/pull) were removed along with
+// the RPC-driven editor surface; PTY-based routes land in a follow-up plan.

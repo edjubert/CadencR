@@ -14,7 +14,39 @@ const NAMED_KEYS: Record<string, string> = {
   ArrowRight: "<Right>",
 };
 
-export function toNeovimKeyNotation(event: KeyboardEvent): string {
+/**
+ * Standalone modifier keydowns (holding Shift before the letter it modifies
+ * fires its own keydown first) and other non-character keys the browser can
+ * emit — dead keys from compose sequences, unrecognized keys — have no
+ * Neovim key-notation equivalent and must never be forwarded as literal
+ * text. Sending "Shift" as 5 characters to a normal-mode buffer previously
+ * garbled every capitalized keystroke (Shift-A, Shift-$, etc.).
+ */
+const IGNORED_KEYS = new Set([
+  "Shift",
+  "Control",
+  "Alt",
+  "AltGraph",
+  "Meta",
+  "CapsLock",
+  "Dead",
+  "Unidentified",
+  "ContextMenu",
+  "Fn",
+  "FnLock",
+  "Hyper",
+  "Super",
+  "NumLock",
+  "ScrollLock",
+  "ProcessKey",
+]);
+
+/** Returns `null` for keydowns with no Neovim key-notation equivalent (see `IGNORED_KEYS`) — callers must skip sending. */
+export function toNeovimKeyNotation(event: KeyboardEvent): string | null {
+  if (IGNORED_KEYS.has(event.key)) {
+    return null;
+  }
+
   if (event.ctrlKey && event.key.length === 1) {
     return `<C-${event.key.toLowerCase()}>`;
   }

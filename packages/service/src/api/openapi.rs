@@ -20,6 +20,8 @@ use crate::domain::features::routes as features_routes;
 use crate::domain::imports::models as imports_models;
 use crate::domain::imports::routes as imports_routes;
 use crate::domain::lsp::routes as lsp_routes;
+use crate::domain::neovim::protocol as neovim_protocol;
+use crate::domain::neovim::routes as neovim_routes;
 use crate::domain::ports::models as ports_models;
 use crate::domain::ports::routes as ports_routes;
 use crate::domain::projects::icon as projects_icon;
@@ -40,8 +42,6 @@ use crate::domain::usage_stats::models as usage_stats_models;
 use crate::domain::usage_stats::routes as usage_stats_routes;
 use crate::domain::workspace::models as workspace_models;
 use crate::domain::workspace::routes as workspace_routes;
-use crate::domain::neovim::protocol as neovim_protocol;
-use crate::domain::neovim::routes as neovim_routes;
 use crate::domain::ws_session::protocol as ws_protocol;
 use crate::domain::ws_session::routes as ws_routes;
 

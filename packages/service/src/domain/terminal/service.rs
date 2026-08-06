@@ -98,7 +98,13 @@ impl PtyManager {
         cols: u16,
         rows: u16,
     ) -> anyhow::Result<(String, Arc<PtyHandle>)> {
-        self.create_pty_with_command(feature_id, CommandBuilder::new_default_prog(), cwd, cols, rows)
+        self.create_pty_with_command(
+            feature_id,
+            CommandBuilder::new_default_prog(),
+            cwd,
+            cols,
+            rows,
+        )
     }
 
     /// Spawn a new PTY running `cmd`. The caller supplies the program and its
@@ -531,13 +537,17 @@ mod tests {
         assert_eq!(handle.feature_id, 11);
         let saw_output = wait_for_scrollback(&manager, &pty_id, "CADENCR_CUSTOM_CMD=ran").await;
         manager.kill_all();
-        assert!(saw_output, "the supplied command should have run in the PTY");
+        assert!(
+            saw_output,
+            "the supplied command should have run in the PTY"
+        );
     }
 
     #[tokio::test]
     async fn create_pty_with_command_still_scrubs_the_service_auth_token() {
         let _guard = crate::shared::test_env::async_env_lock().lock().await;
-        let _auth = crate::shared::test_env::EnvVarGuard::set("CADENCR_AUTH_TOKEN", "service-secret");
+        let _auth =
+            crate::shared::test_env::EnvVarGuard::set("CADENCR_AUTH_TOKEN", "service-secret");
 
         let manager = PtyManager::new();
         let cwd = temp_existing_dir();
