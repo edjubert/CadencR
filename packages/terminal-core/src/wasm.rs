@@ -3,7 +3,9 @@
 
 use wasm_bindgen::prelude::*;
 
-use crate::input::{encode_key, KeyInput};
+use crate::input::{
+    encode_key, encode_mouse, KeyInput, MouseButton, MouseEventKind, MouseInput, MouseReporting,
+};
 use crate::terminal::{TerminalCore, TerminalSize};
 
 /// Assemble a `KeyInput` from the flat arguments `wasm_bindgen` can pass.
@@ -84,6 +86,33 @@ impl Terminal {
         self.core.application_cursor()
     }
 
+    /// Mouse reporting mode as a small integer: 0 none, 1 click, 2 drag,
+    /// 3 motion. Feed it straight back into `encodeMouse`.
+    #[wasm_bindgen(getter, js_name = mouseReporting)]
+    pub fn mouse_reporting(&self) -> u8 {
+        match self.core.mouse_reporting() {
+            MouseReporting::None => 0,
+            MouseReporting::Click => 1,
+            MouseReporting::Drag => 2,
+            MouseReporting::Motion => 3,
+        }
+    }
+
+    #[wasm_bindgen(getter, js_name = sgrMouse)]
+    pub fn sgr_mouse(&self) -> bool {
+        self.core.sgr_mouse()
+    }
+
+    #[wasm_bindgen(getter, js_name = alternateScroll)]
+    pub fn alternate_scroll(&self) -> bool {
+        self.core.alternate_scroll()
+    }
+
+    #[wasm_bindgen(getter, js_name = altScreen)]
+    pub fn alt_screen(&self) -> bool {
+        self.core.alt_screen()
+    }
+
     /// Rewrite the packed grid buffer. Call once per frame, before reading the
     /// snapshot pointer.
     #[wasm_bindgen(js_name = refreshSnapshot)]
@@ -140,6 +169,67 @@ pub fn encode_key_js(
 ) -> Option<Vec<u8>> {
     let input = build_key_input(key, ctrl, alt, shift, meta, application_cursor);
     encode_key(&input)
+}
+
+/// Encode a mouse event as PTY bytes.
+///
+/// `kind`: 0 press, 1 release, 2 move, 3 scroll up, 4 scroll down.
+/// `button`: 0 none, 1 left, 2 middle, 3 right.
+/// `reporting`: 0 none, 1 click, 2 drag, 3 motion — take it from the
+/// terminal's `mouseReporting` getter.
+///
+/// Returns `undefined` when the event must not be reported.
+#[wasm_bindgen(js_name = encodeMouse)]
+#[allow(clippy::too_many_arguments)]
+pub fn encode_mouse_js(
+    kind: u8,
+    button: u8,
+    line: usize,
+    column: usize,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    sgr_enabled: bool,
+    reporting: u8,
+    alternate_scroll: bool,
+    alt_screen: bool,
+) -> Option<Vec<u8>> {
+    let kind = match kind {
+        0 => MouseEventKind::Press,
+        1 => MouseEventKind::Release,
+        2 => MouseEventKind::Move,
+        3 => MouseEventKind::ScrollUp,
+        4 => MouseEventKind::ScrollDown,
+        _ => return None,
+    };
+    let button = match button {
+        0 => MouseButton::None,
+        1 => MouseButton::Left,
+        2 => MouseButton::Middle,
+        3 => MouseButton::Right,
+        _ => return None,
+    };
+    let reporting = match reporting {
+        0 => MouseReporting::None,
+        1 => MouseReporting::Click,
+        2 => MouseReporting::Drag,
+        3 => MouseReporting::Motion,
+        _ => return None,
+    };
+
+    encode_mouse(&MouseInput {
+        kind,
+        button,
+        line,
+        column,
+        ctrl,
+        alt,
+        shift,
+        sgr_enabled,
+        reporting,
+        alternate_scroll,
+        alt_screen,
+    })
 }
 
 #[cfg(test)]

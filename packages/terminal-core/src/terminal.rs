@@ -112,6 +112,36 @@ impl TerminalCore {
         self.term.mode().contains(TermMode::APP_CURSOR)
     }
 
+    /// Which mouse reports the running application asked for.
+    pub fn mouse_reporting(&self) -> crate::input::MouseReporting {
+        let mode = self.term.mode();
+        if mode.contains(TermMode::MOUSE_MOTION) {
+            crate::input::MouseReporting::Motion
+        } else if mode.contains(TermMode::MOUSE_DRAG) {
+            crate::input::MouseReporting::Drag
+        } else if mode.contains(TermMode::MOUSE_REPORT_CLICK) {
+            crate::input::MouseReporting::Click
+        } else {
+            crate::input::MouseReporting::None
+        }
+    }
+
+    /// Whether SGR (1006) mouse encoding is enabled.
+    pub fn sgr_mouse(&self) -> bool {
+        self.term.mode().contains(TermMode::SGR_MOUSE)
+    }
+
+    /// Whether alternate scroll is enabled — the wheel then drives the
+    /// alternate screen's pager with arrow keys instead of mouse reports.
+    pub fn alternate_scroll(&self) -> bool {
+        self.term.mode().contains(TermMode::ALTERNATE_SCROLL)
+    }
+
+    /// Whether the alternate screen is active.
+    pub fn alt_screen(&self) -> bool {
+        self.term.mode().contains(TermMode::ALT_SCREEN)
+    }
+
     /// One viewport row as text, trailing blanks trimmed. Reading aid for
     /// tests and debugging — the renderer uses `refresh_snapshot` + `snapshot`.
     pub fn row_text(&self, line: usize) -> String {
@@ -390,5 +420,24 @@ mod tests {
         assert_eq!(damage[0], 0);
         assert_eq!(damage[1], 0);
         assert_eq!(damage[2], 29, "right column is inclusive");
+    }
+
+    #[test]
+    fn mouse_modes_follow_the_escape_sequences_that_set_them() {
+        use crate::input::MouseReporting;
+
+        let mut core = TerminalCore::new(TerminalSize { columns: 20, screen_lines: 5 });
+        assert_eq!(core.mouse_reporting(), MouseReporting::None);
+        assert!(!core.sgr_mouse());
+
+        core.feed(b"\x1b[?1000h\x1b[?1006h");
+        assert_eq!(core.mouse_reporting(), MouseReporting::Click);
+        assert!(core.sgr_mouse());
+
+        core.feed(b"\x1b[?1002h");
+        assert_eq!(core.mouse_reporting(), MouseReporting::Drag);
+
+        core.feed(b"\x1b[?1000l\x1b[?1002l");
+        assert_eq!(core.mouse_reporting(), MouseReporting::None);
     }
 }
