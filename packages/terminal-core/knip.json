@@ -1,0 +1,6 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": ["renderer/index.ts", "vitest.config.ts"],
+  "project": ["renderer/**/*.ts"],
+  "ignoreBinaries": ["wasm-pack"]
+}

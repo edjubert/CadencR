@@ -29,6 +29,23 @@ workspace (note the empty `[workspace]` table in its `Cargo.toml`). Run its
 commands from this directory — `pnpm rust -- …` targets the service workspace
 and does not apply here.
 
+## Renderer (TypeScript)
+
+The WebGPU renderer lives in `renderer/` and is written in TypeScript, not
+Rust. The GPU work is identical either way — same WGSL shaders, same buffers,
+same performance — and Rust's value here is the terminal emulation, which the
+wasm crate already provides. TypeScript gets direct access to `navigator.gpu`,
+Canvas2D, `devicePixelRatio` and `ResizeObserver` without crossing a binding
+layer.
+
+- `renderer/atlas-layout.ts` — pure geometry: which glyph occupies which slot,
+  texture coordinates, growth. Testable without a browser.
+- `renderer/atlas.ts` — Canvas2D rasterizer built on that layout. Glyphs are
+  stored as coverage only; color is applied per cell in the shader, so changing
+  theme never rebuilds the atlas — only changing font does.
+
+Run `pnpm test` for the TypeScript tests and `cargo test` for the Rust ones.
+
 ## Commands
 
 ```bash
