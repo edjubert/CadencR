@@ -199,10 +199,15 @@ export function createModelSet(sessionId: string, model: string, provider: strin
   });
 }
 
-export function createProviderSet(sessionId: string, provider: string): WsEnvelope {
+export function createProviderSet(
+  sessionId: string,
+  provider: string,
+  model?: string,
+): WsEnvelope {
   return createEnvelope("session", "provider.set", {
     session_id: sessionId,
     provider,
+    ...(model !== undefined ? { model } : {}),
   });
 }
 
