@@ -22,4 +22,10 @@ describe("loadTerminalEngine", () => {
     expect(first).toBeUndefined();
     expect(second).toBeUndefined();
   });
+
+  it("exposes the wasm linear memory globally after loading", async () => {
+    await loadTerminalEngine(wasmBytes);
+    expect(globalThis.__cadencrTerminalCoreMemory).toBeTypeOf("function");
+    expect(globalThis.__cadencrTerminalCoreMemory?.()).toBeInstanceOf(WebAssembly.Memory);
+  });
 });
