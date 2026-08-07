@@ -49,10 +49,23 @@ Run `pnpm test` for the TypeScript tests and `cargo test` for the Rust ones.
 ## Commands
 
 ```bash
-cargo test                                  # native tests — all logic is covered here
+cargo test                                  # Rust tests — the ANSI engine and input encoding
 cargo build --target wasm32-unknown-unknown # compile check for the browser target
-wasm-pack build --target web --out-dir pkg  # build the loadable module
-python3 -m http.server 8123                 # then open /harness/index.html
+pnpm test                                   # TypeScript tests — atlas layout, palette, instance data, metrics
+pnpm build                                  # build the wasm module into pkg/
+pnpm harness                                # build the wasm module, then serve the harness on :8123
 ```
 
-`pkg/` and `target/` are build artifacts and are gitignored.
+`pkg/`, `target/` and `node_modules/` are build artifacts and are gitignored.
+
+## Harness
+
+`harness/` is a standalone browser page that wires the engine, the atlas and
+the WebGPU renderer into an interactive terminal. Input loops back on itself —
+there is no PTY — which is enough to exercise keyboard → bytes → parser → grid
+→ GPU. It is the only way to verify the GPU path, since vitest has no WebGPU
+context.
+
+Switching theme in the harness recolors instantly without rebuilding the atlas;
+switching font rebuilds it. That difference is the visible proof that the atlas
+stores glyph coverage only, with color applied per cell in the shader.

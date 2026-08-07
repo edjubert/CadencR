@@ -8,5 +8,7 @@ export { buildInstanceData, FLOATS_PER_INSTANCE, WORDS_PER_CELL } from "./instan
 export type { GlyphSource } from "./instance-data";
 export { buildPaletteBuffer, decodeColor, PALETTE_ENTRIES } from "./palette";
 export type { DecodedColor } from "./palette";
+export { cellAtPixel, gridSizeFor, pixelSizeFor } from "./grid-metrics";
+export type { CssSize, GridSize, PixelSize } from "./grid-metrics";
 export { TerminalRenderer } from "./renderer";
 export type { AtlasTexture, RendererGrid } from "./renderer";
