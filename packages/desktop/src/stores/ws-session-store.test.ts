@@ -1374,6 +1374,27 @@ describe("ws-session-store", () => {
     });
   });
 
+  it("setProvider includes the target model in the WS payload when provided", async () => {
+    const store = useWsSessionStore.getState();
+    store.connect("s1");
+    await tick();
+    const ws = getWs();
+    ws.simulateMessage({
+      domain: "session",
+      action: "initialized",
+      payload: { session_id: "srv-1" },
+    });
+
+    store.setProvider("s1", "opencode", "openai/gpt-5.3-codex");
+
+    const request = JSON.parse(ws.sent.at(-1) ?? "{}");
+    expect(request.payload).toMatchObject({
+      session_id: "srv-1",
+      provider: "opencode",
+      model: "openai/gpt-5.3-codex",
+    });
+  });
+
   it("setModel sends catalog ownership and waits for model.set.ok", async () => {
     const store = useWsSessionStore.getState();
     store.connect("s1");
