@@ -382,19 +382,13 @@ function useAgentSendHandler(args: {
   );
 }
 
-export function handleModelChange(
+function handleModelChange(
   nextProviderId: string,
   modelId: string,
   controls: ReturnType<typeof useSessionControls>,
 ): void {
-  const current = controls.ws.currentSelection;
-  if (nextProviderId !== current?.providerId) {
-    // Provider+model are switched atomically in one request — sending a
-    // separate model.set here would race with provider.set's ack.
-    controls.ws.setProvider(nextProviderId, modelId);
-  } else if (modelId !== current?.modelId) {
+  if (modelId !== controls.ws.currentSelection?.modelId)
     controls.ws.setModel(modelId, nextProviderId);
-  }
   const nextModel = controls.agentCatalog.data?.providers
     .find((provider) => provider.id === nextProviderId)
     ?.models.find((model) => model.id === modelId);

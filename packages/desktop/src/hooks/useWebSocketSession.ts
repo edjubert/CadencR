@@ -93,7 +93,7 @@ export interface UseWebSocketSessionReturn {
   setThinkingEffort: (thinkingEffort?: string) => void;
   setFastMode: (enabled: boolean) => Promise<void>;
   setProfile: (profile: string) => void;
-  setProvider: (providerId: string, modelId?: string) => void;
+  setProvider: (providerId: string) => void;
   sendPrompt: (text: string, options?: PromptDispatchOptions) => void;
   respondToPermission: (
     requestId: string,
@@ -267,8 +267,7 @@ function useSessionActions(sessionId: string): SessionActions {
       clearSession: (): void => s.clearSession(sessionId),
       compactSession: (): void => s.compactSession(sessionId),
       initSession: (config: SessionConfig): void => s.initSession(sessionId, config),
-      setProvider: (providerId: string, modelId?: string): void =>
-        s.setProvider(sessionId, providerId, modelId),
+      setProvider: (providerId: string): void => s.setProvider(sessionId, providerId),
       setModel: (modelId: string, providerId: string): void =>
         s.setModel(sessionId, modelId, providerId),
       setThinkingEffort: (thinkingEffort?: string): void =>

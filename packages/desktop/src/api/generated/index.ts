@@ -157,16 +157,6 @@ export interface AgentMessageOrigin {
   sourceSessionId?: AgentMessageOriginSourceSessionId;
 }
 
-/**
- * Keyed by agent type (`session`, `auto_name`).
- */
-export type AgentSelectionResponseSelections = { [key: string]: ResolvedSelection };
-
-export interface AgentSelectionResponse {
-  /** Keyed by agent type (`session`, `auto_name`). */
-  selections: AgentSelectionResponseSelections;
-}
-
 export type AgentSessionRowCodexPermissionMode = string | null;
 
 export type AgentSessionRowContextWindow = number | null;
@@ -1864,8 +1854,6 @@ export interface ModelSetOkPayload {
   /** @minimum 0 */
   context_window?: ModelSetOkPayloadContextWindow;
   model: string;
-  /** The provider that owns `model`. Present so the frontend never has to
-pair a model id with a separately-tracked provider. */
   provider: string;
 }
 
@@ -2359,27 +2347,11 @@ export type ProviderSetOkPayloadCodexPermissionMode = string | null;
 export interface ProviderSetOkPayload {
   access_mode?: ProviderSetOkPayloadAccessMode;
   codex_permission_mode?: ProviderSetOkPayloadCodexPermissionMode;
-  /** Always sent alongside the provider: the frontend stores the pair
-atomically and cannot accept a half-update. */
-  model: string;
   provider: string;
   supports_prompt_receipts: boolean;
 }
 
-/**
- * Model to adopt under the new provider, when the caller wants a
-specific one instead of the provider's default. Validated against the
-new provider's catalog server-side; falls back to the default when
-absent or invalid. Optional for older clients.
- */
-export type ProviderSetPayloadModel = string | null;
-
 export interface ProviderSetPayload {
-  /** Model to adopt under the new provider, when the caller wants a
-specific one instead of the provider's default. Validated against the
-new provider's catalog server-side; falls back to the default when
-absent or invalid. Optional for older clients. */
-  model?: ProviderSetPayloadModel;
   provider: string;
   session_id: string;
 }
@@ -2667,13 +2639,6 @@ a dedicated terminal split when `run_in_terminal` is set.
 export interface ResolvedCommand {
   command: string;
   cwd: string;
-}
-
-export interface ResolvedSelection {
-  model_id: string;
-  model_origin: SelectionOrigin;
-  provider_id: string;
-  provider_origin: SelectionOrigin;
 }
 
 export interface RetryWorktreeBody {
@@ -3042,21 +3007,6 @@ export type Scope = (typeof Scope)[keyof typeof Scope];
 export const Scope = {
   global: "global",
   project: "project",
-} as const;
-
-/**
- * Where each half of the selection came from. `ProviderDefault` means no level
-set it and the provider's own default applies — the frontend renders that as
-an inherited default rather than an override.
- */
-export type SelectionOrigin = (typeof SelectionOrigin)[keyof typeof SelectionOrigin];
-
-// eslint-disable-next-line @typescript-eslint/no-redeclare
-export const SelectionOrigin = {
-  feature: "feature",
-  project: "project",
-  global: "global",
-  provider_default: "provider_default",
 } as const;
 
 /**
@@ -4182,25 +4132,6 @@ export type GetAgentCatalogParams = {
   profile?: string;
 };
 
-export type GetAgentSelectionParams = {
-  /**
-   * Resolve at project scope
-   */
-  project_id?: number;
-  /**
-   * Resolve at feature scope; requires project_id
-   */
-  feature_id?: number;
-  /**
-   * Workspace path used to scope the model catalog lookup
-   */
-  cwd?: string;
-  /**
-   * Claude Code profile to scope the model lookup to
-   */
-  profile?: string;
-};
-
 export type GetUnifiedAgentsParams = {
   mode?: null | UnifiedAgentsMode;
   fresh_minutes?: number | null;
@@ -4790,65 +4721,6 @@ export function useGetAgentSelection<
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
     queryKey: DataTag<QueryKey, TData, TError>;
   };
-
-  query.queryKey = queryOptions.queryKey;
-
-  return query;
-}
-
-export const getAgentSelection = (params?: GetAgentSelectionParams, signal?: AbortSignal) => {
-  return customInstance<AgentSelectionResponse>({
-    url: `/api/agent-runtime/selection`,
-    method: "GET",
-    params,
-    signal,
-  });
-};
-
-export const getGetAgentSelectionQueryKey = (params?: GetAgentSelectionParams) => {
-  return [`/api/agent-runtime/selection`, ...(params ? [params] : [])] as const;
-};
-
-export const getGetAgentSelectionQueryOptions = <
-  TData = Awaited<ReturnType<typeof getAgentSelection>>,
-  TError = ErrorType<void>,
->(
-  params?: GetAgentSelectionParams,
-  options?: {
-    query?: UseQueryOptions<Awaited<ReturnType<typeof getAgentSelection>>, TError, TData>;
-  },
-) => {
-  const { query: queryOptions } = options ?? {};
-
-  const queryKey = queryOptions?.queryKey ?? getGetAgentSelectionQueryKey(params);
-
-  const queryFn: QueryFunction<Awaited<ReturnType<typeof getAgentSelection>>> = ({ signal }) =>
-    getAgentSelection(params, signal);
-
-  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
-    Awaited<ReturnType<typeof getAgentSelection>>,
-    TError,
-    TData
-  > & { queryKey: QueryKey };
-};
-
-export type GetAgentSelectionQueryResult = NonNullable<
-  Awaited<ReturnType<typeof getAgentSelection>>
->;
-export type GetAgentSelectionQueryError = ErrorType<void>;
-
-export function useGetAgentSelection<
-  TData = Awaited<ReturnType<typeof getAgentSelection>>,
-  TError = ErrorType<void>,
->(
-  params?: GetAgentSelectionParams,
-  options?: {
-    query?: UseQueryOptions<Awaited<ReturnType<typeof getAgentSelection>>, TError, TData>;
-  },
-): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
-  const queryOptions = getGetAgentSelectionQueryOptions(params, options);
-
-  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & { queryKey: QueryKey };
 
   query.queryKey = queryOptions.queryKey;
 

@@ -150,9 +150,9 @@ function createConfigurationActions(deps: SimpleSessionActionDeps) {
   const { ctx, sendRaw } = deps;
   const { get, set, getSession } = ctx;
   return {
-    setProvider(sessionId: string, providerId: string, modelId?: string) {
+    setProvider(sessionId: string, providerId: string) {
       const session = getSession(sessionId);
-      sendRaw(sessionId, createProviderSet(session.serverSessionId, providerId, modelId));
+      sendRaw(sessionId, createProviderSet(session.serverSessionId, providerId));
     },
 
     setModel(sessionId: string, modelId: string, providerId: string) {
