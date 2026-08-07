@@ -23,6 +23,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@webgpu/types": "^0.1.71",
     "knip": "^6.22.0",
     "oxfmt": "^0.56.0",
     "oxlint": "^1.71.0",

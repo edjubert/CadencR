@@ -10,7 +10,7 @@
     "noFallthroughCasesInSwitch": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "types": ["@types/node"]
+    "types": ["@types/node", "@webgpu/types"]
   },
   "include": ["renderer/**/*.ts"]
 }
