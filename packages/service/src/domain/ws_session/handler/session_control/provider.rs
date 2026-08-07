@@ -40,6 +40,33 @@ async fn persist_provider_selection(
     Ok(())
 }
 
+/// Resolves the model to adopt when switching to `new_provider`. Prefers
+/// `requested_model` when it belongs to `new_provider`'s catalog; falls back
+/// to the provider's default (e.g. when the requested model is absent,
+/// belongs to a different provider's catalog, or was never set).
+async fn resolve_switch_model(
+    read_pool: &sqlx::SqlitePool,
+    cwd: Option<&std::path::Path>,
+    new_provider: &str,
+    requested_model: Option<&str>,
+    profile: Option<&str>,
+) -> Option<String> {
+    if let Some(model) = requested_model {
+        if provider_model_catalog_entry(read_pool, cwd, new_provider, Some(model), profile)
+            .await
+            .is_some()
+        {
+            return Some(model.to_string());
+        }
+        tracing::info!(
+            requested_model = %model,
+            new_provider = %new_provider,
+            "requested model does not belong to the new provider; falling back to provider default"
+        );
+    }
+    provider_default_model(read_pool, new_provider).await
+}
+
 fn send_provider_set_ok(
     sender: &WsSender,
     envelope_id: &str,
@@ -237,38 +264,28 @@ pub(crate) async fn handle_provider_set(
         handle.config.fast_mode = false;
         options.fast_mode = false;
 
-        // Validate that the current desired_model belongs to the new provider's
-        // catalog. If it doesn't (e.g. the user switched from claude_code to
-        // opencode and the model was an opencode-specific model), fall back to
-        // the new provider's default and update the handle so the frontend gets
-        // the corrected model in the response.
-        if let Some(ref model) = old_desired_model {
+        // The caller's explicit `model` (from an atomic provider+model
+        // switch) takes priority over the model carried over from the
+        // previous provider. Either way, the result must belong to the new
+        // provider's catalog, or we fall back to its default.
+        let requested_model = payload.model.clone().or_else(|| old_desired_model.clone());
+        if requested_model.is_some() {
             let cwd = Some(handle.config.cwd.as_path());
             let profile = handle
                 .desired_claude_profile
                 .as_deref()
                 .or(handle.spawned_claude_profile.as_deref());
-            if provider_model_catalog_entry(
+            if let Some(resolved) = resolve_switch_model(
                 &app_state.read_pool,
                 cwd,
                 &new_provider,
-                Some(model),
+                requested_model.as_deref(),
                 profile,
             )
             .await
-            .is_none()
             {
-                tracing::info!(
-                    old_model = %model,
-                    new_provider = %new_provider,
-                    "desired_model does not belong to the new provider; falling back to provider default"
-                );
-                if let Some(default_model) =
-                    provider_default_model(&app_state.read_pool, &new_provider).await
-                {
-                    handle.desired_model = Some(default_model.clone());
-                    options.model = Some(default_model);
-                }
+                handle.desired_model = Some(resolved.clone());
+                options.model = Some(resolved);
             }
         }
 

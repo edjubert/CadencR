@@ -387,8 +387,7 @@ function handleModelChange(
   modelId: string,
   controls: ReturnType<typeof useSessionControls>,
 ): void {
-  if (modelId !== controls.ws.currentSelection?.modelId)
-    controls.ws.setModel(modelId, nextProviderId);
+  controls.ws.setProvider(nextProviderId, modelId);
   const nextModel = controls.agentCatalog.data?.providers
     .find((provider) => provider.id === nextProviderId)
     ?.models.find((model) => model.id === modelId);

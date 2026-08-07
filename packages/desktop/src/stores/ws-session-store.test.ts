@@ -1374,6 +1374,26 @@ describe("ws-session-store", () => {
     });
   });
 
+  it("setProvider with modelId sends the model in the payload", async () => {
+    const store = useWsSessionStore.getState();
+    store.connect("s1");
+    await tick();
+    const ws = getWs();
+    ws.simulateMessage({
+      domain: "session",
+      action: "initialized",
+      payload: { session_id: "srv-1" },
+    });
+
+    store.setProvider("s1", "claude_code", "sonnet");
+    const sent = JSON.parse(ws.sent.at(-1) ?? "{}");
+    expect(sent).toMatchObject({
+      domain: "session",
+      action: "provider.set",
+      payload: { provider: "claude_code", model: "sonnet" },
+    });
+  });
+
   it("setModel sends catalog ownership and waits for model.set.ok", async () => {
     const store = useWsSessionStore.getState();
     store.connect("s1");
