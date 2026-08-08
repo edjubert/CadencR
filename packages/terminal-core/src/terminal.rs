@@ -3,6 +3,7 @@
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point};
+use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermDamage, TermMode};
 use vte::ansi::Processor;
 
@@ -162,6 +163,10 @@ impl TerminalCore {
         let columns = self.term.columns();
         let lines = self.term.screen_lines();
         let grid = self.term.grid();
+        // The cursor is not a grid cell: alacritty keeps it in `grid().cursor`
+        // and leaves drawing it to the renderer. Captured here, applied below.
+        let cursor = grid.cursor.point;
+        let show_cursor = self.term.mode().contains(TermMode::SHOW_CURSOR);
 
         let mut index = 0;
         for line in 0..lines {
@@ -172,6 +177,18 @@ impl TerminalCore {
                 self.packed[index + 2] = encode_color(cell.bg);
                 self.packed[index + 3] = u32::from(cell.flags.bits());
                 index += WORDS_PER_CELL;
+            }
+        }
+
+        // Marking the cursor cell INVERSE paints a block cursor with the shader
+        // path that already swaps foreground and background — no extra draw
+        // call, no second pipeline.
+        if show_cursor {
+            let line = usize::try_from(cursor.line.0).unwrap_or(0);
+            let column = cursor.column.0;
+            if line < lines && column < columns {
+                let flags = (line * columns + column) * WORDS_PER_CELL + 3;
+                self.packed[flags] |= u32::from(Flags::INVERSE.bits());
             }
         }
     }
@@ -269,6 +286,32 @@ mod tests {
 
         assert_eq!(split.row_text(0), whole.row_text(0));
         assert_eq!(split.row_text(0), "    X");
+    }
+
+    #[test]
+    fn the_cursor_cell_is_marked_inverse_so_the_shader_paints_a_block() {
+        let mut core = TerminalCore::new(TerminalSize { columns: 4, screen_lines: 1 });
+        core.feed(b"ab");
+        core.refresh_snapshot();
+
+        let inverse = u32::from(Flags::INVERSE.bits());
+        let flags_of = |cell: usize| core.snapshot()[cell * WORDS_PER_CELL + 3];
+        // Cursor sits on column 2, just past the typed text.
+        assert_eq!(flags_of(2) & inverse, inverse, "cursor cell must be inverse");
+        assert_eq!(flags_of(0) & inverse, 0, "other cells must be untouched");
+    }
+
+    #[test]
+    fn a_hidden_cursor_leaves_every_cell_untouched() {
+        let mut core = TerminalCore::new(TerminalSize { columns: 4, screen_lines: 1 });
+        // DECTCEM off — Neovim hides the cursor while repainting.
+        core.feed(b"ab\x1b[?25l");
+        core.refresh_snapshot();
+
+        let inverse = u32::from(Flags::INVERSE.bits());
+        for cell in 0..4 {
+            assert_eq!(core.snapshot()[cell * WORDS_PER_CELL + 3] & inverse, 0);
+        }
     }
 
     #[test]

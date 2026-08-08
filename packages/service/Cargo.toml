@@ -37,7 +37,7 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 rmcp = { version = "1", features = ["server", "transport-streamable-http-server", "transport-io", "elicitation"] }
 dashmap = "6"
 libc = "0.2"
-portable-pty = "0.9"
+portable-pty = { path = "vendor/portable-pty" }
 percent-encoding = "2"
 ignore = "0.4"
 nucleo-matcher = "0.3"

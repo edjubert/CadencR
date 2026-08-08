@@ -5,6 +5,7 @@
  * caller decides when to draw, so a hidden panel can simply stop calling it.
  */
 
+import type { CellMetrics } from "./atlas-layout";
 import { buildInstanceData, FLOATS_PER_INSTANCE, type GlyphSource } from "./instance-data";
 import { buildPaletteBuffer, PALETTE_ENTRIES } from "./palette";
 import { TERMINAL_SHADER } from "./terminal-shader.wgsl";
@@ -19,6 +20,8 @@ export interface RendererGrid {
 export interface AtlasTexture extends GlyphSource {
   readonly source: OffscreenCanvas;
   readonly isDirty: boolean;
+  /** Physical-pixel size of one cell — the renderer draws at exactly this size. */
+  readonly cell: CellMetrics;
   markUploaded(): void;
 }
 
@@ -148,10 +151,22 @@ export class TerminalRenderer {
     }
     this.#device.queue.writeBuffer(instanceBuffer, 0, instances.buffer as ArrayBuffer);
 
+    // Cells are sized from the atlas, not from `1 / columns`. Deriving the size
+    // from the column count stretches the grid to fill the canvas, resampling
+    // every glyph off its rasterized size — the whole screen reads as blurry.
+    // Drawing at the exact cell size keeps texels 1:1 with pixels and leaves
+    // the sub-cell remainder as padding.
+    const canvas = this.#context.canvas;
+    const cell = this.#atlas.cell;
     this.#device.queue.writeBuffer(
       this.#uniformBuffer,
       0,
-      new Float32Array([grid.columns, grid.lines, 1 / grid.columns, 1 / grid.lines]),
+      new Float32Array([
+        grid.columns,
+        grid.lines,
+        cell.width / canvas.width,
+        cell.height / canvas.height,
+      ]),
     );
 
     const texture = this.#texture;

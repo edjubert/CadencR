@@ -1,21 +1,27 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("./useNeovimEngine", () => ({
+const encodePointerMock = vi.fn<(...args: unknown[]) => Uint8Array | undefined>(() => undefined);
+vi.mock("./useNeovimEngine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./useNeovimEngine")>()),
   useNeovimEngine: vi.fn(() => ({
     status: "ready",
     errorMessage: null,
     feed: vi.fn(),
     applicationCursor: () => false,
+    currentGrid: () => ({ columns: 80, lines: 24 }),
+    encodePointer: encodePointerMock,
   })),
 }));
 
 const connectMock = vi.fn();
+const resizeMock = vi.fn();
+const writeMock = vi.fn();
 vi.mock("./useNeovimWebSocket", () => ({
   useNeovimWebSocket: vi.fn(() => ({
     connect: connectMock,
-    write: vi.fn(),
-    resize: vi.fn(),
+    write: writeMock,
+    resize: resizeMock,
     detach: vi.fn(),
     isConnected: true,
   })),
@@ -65,6 +71,31 @@ describe("NeovimPane", () => {
     render(<NeovimPane featureId={1} />);
     expect(screen.getByRole("application")).toBeInTheDocument();
   });
+
+  // Regression: the engine's own resize fires while the socket is still
+  // connecting, so it gets dropped and Neovim keeps drawing for the PTY's
+  // 120x40 spawn size against a differently sized grid — garbled output.
+  it("re-sends the measured grid once the socket is connected", () => {
+    resizeMock.mockClear();
+    render(<NeovimPane featureId={1} />);
+    expect(resizeMock).toHaveBeenCalledWith(80, 24);
+  });
+
+  it("forwards an encoded click to the pty", () => {
+    writeMock.mockClear();
+    encodePointerMock.mockReturnValueOnce(new Uint8Array([27, 91, 77]));
+    render(<NeovimPane featureId={1} />);
+    fireEvent.mouseDown(screen.getByRole("application"), { button: 0 });
+    expect(writeMock).toHaveBeenCalledWith(new Uint8Array([27, 91, 77]));
+  });
+
+  it("leaves the event alone when Neovim asked for no mouse reporting", () => {
+    writeMock.mockClear();
+    encodePointerMock.mockReturnValueOnce(undefined);
+    render(<NeovimPane featureId={1} />);
+    fireEvent.mouseDown(screen.getByRole("application"), { button: 0 });
+    expect(writeMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("NeovimPane error state", () => {
@@ -75,6 +106,8 @@ describe("NeovimPane error state", () => {
       errorMessage: "WebGPU is unavailable",
       feed: vi.fn(),
       applicationCursor: () => false,
+      currentGrid: () => ({ columns: 80, lines: 24 }),
+      encodePointer: encodePointerMock,
     });
     render(<NeovimPane featureId={1} />);
     expect(screen.getByText(/WebGPU is unavailable/)).toBeInTheDocument();

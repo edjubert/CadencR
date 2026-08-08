@@ -3,6 +3,7 @@ import { Loader2Icon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTheme } from "@/hooks/useTheme";
 import { useNeovimEngine, encodeKey } from "./useNeovimEngine";
+import { useNeovimPointer } from "./useNeovimPointer";
 import { useNeovimWebSocket } from "./useNeovimWebSocket";
 
 interface NeovimPaneProps {
@@ -51,6 +52,18 @@ function NeovimPane({ featureId }: NeovimPaneProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [featureId]);
 
+  // The PTY is spawned at a fixed 120x40. The engine's own resize fires while
+  // the socket is still connecting, so that first `resize` is dropped and
+  // Neovim would keep drawing for the spawn size — garbled output against a
+  // differently sized grid. Re-send the measured grid once actually connected.
+  const isReady = engine.status === "ready" && socket.isConnected;
+  useEffect(() => {
+    if (!isReady) return;
+    const grid = engine.currentGrid();
+    socket.resize(grid.columns, grid.lines);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isReady]);
+
   const handleKeyDown = useCallback(
     (event: React.KeyboardEvent) => {
       const bytes = encodeKey(
@@ -68,6 +81,12 @@ function NeovimPane({ featureId }: NeovimPaneProps) {
     [engine, socket],
   );
 
+  const pointer = useNeovimPointer({
+    encodePointer: engine.encodePointer,
+    write: socket.write,
+    surfaceRef,
+  });
+
   if (engine.status === "error") {
     return (
       <div className="h-full flex flex-col items-center justify-center gap-3 bg-background text-sm text-center px-6">
@@ -76,37 +95,47 @@ function NeovimPane({ featureId }: NeovimPaneProps) {
     );
   }
 
-  if (engine.status !== "ready" || !socket.isConnected) {
+  if (socket.lastError && engine.status === "loading") {
     return (
-      <div className="h-full flex flex-col items-center justify-center gap-3 bg-background">
-        <Loader2Icon className="size-6 animate-spin text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">Connecting to Neovim…</p>
-        <RestartAction featureId={featureId} onRestart={socket.connect} />
+      <div className="h-full flex flex-col items-center justify-center gap-3 bg-background text-sm text-center px-6">
+        <p className="text-destructive">Neovim could not start: {socket.lastError}</p>
       </div>
     );
   }
 
+  // The surface and its canvas stay mounted in every non-fatal state: the
+  // engine's WebGPU setup reads `canvasRef.current`, so gating the canvas
+  // behind `status === "ready"` would deadlock — no canvas, no engine, no
+  // ready. The loading state is an overlay on top of the live canvas.
+  const isPending = !isReady;
   return (
-    <div
-      ref={surfaceRef}
-      role="application"
-      aria-label="Neovim editor"
-      tabIndex={0}
-      onKeyDown={handleKeyDown}
-      className="h-full w-full outline-none"
-    >
-      <canvas ref={canvasRef} className="block h-full w-full" />
+    <div className="relative h-full w-full">
+      <div
+        ref={surfaceRef}
+        role="application"
+        aria-label="Neovim editor"
+        tabIndex={0}
+        onKeyDown={handleKeyDown}
+        onMouseDown={pointer.onMouseDown}
+        onMouseUp={pointer.onMouseUp}
+        onMouseMove={pointer.onMouseMove}
+        onWheel={pointer.onWheel}
+        className="h-full w-full outline-none"
+      >
+        <canvas ref={canvasRef} className="block h-full w-full" />
+      </div>
+      {isPending && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-background">
+          <Loader2Icon className="size-6 animate-spin text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">Connecting to Neovim…</p>
+          <RestartAction featureId={featureId} onRestart={socket.connect} />
+        </div>
+      )}
     </div>
   );
 }
 
-function RestartAction({
-  featureId,
-  onRestart,
-}: {
-  featureId: number;
-  onRestart: () => void;
-}) {
+function RestartAction({ featureId, onRestart }: { featureId: number; onRestart: () => void }) {
   void featureId;
   return (
     <Button variant="outline" size="sm" onClick={onRestart}>
