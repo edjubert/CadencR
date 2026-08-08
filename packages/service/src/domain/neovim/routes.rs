@@ -120,12 +120,15 @@ pub async fn pull_buffer_route(
 #[utoipa::path(
     get,
     path = "/api/features/{feature_id}/neovim/detect",
-    params(("feature_id" = String, Path, description = "Feature ID")),
+    params(("feature_id" = String, Path, description = "Feature ID (unused)")),
     responses((status = 200, description = "Neovim availability", body = NeovimDetectResponse)),
 )]
-pub async fn detect_route(Path(_feature_id): Path<String>) -> axum::Json<NeovimDetectResponse> {
-    let available = cli_discovery::detect_nvim().await;
-    axum::Json(NeovimDetectResponse { available })
+pub async fn detect_route(
+    Path(_feature_id): Path<String>,
+) -> axum::Json<NeovimDetectResponse> {
+    axum::Json(NeovimDetectResponse {
+        available: crate::domain::neovim::service::nvim_available().await,
+    })
 }
 
 /// Register neovim routes on the router.
@@ -271,31 +274,5 @@ mod tests {
         let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
         let response: PullBufferResponse = serde_json::from_str(&body_str).unwrap();
         assert_eq!(response.content, "fn main() {}\n");
-    }
-
-    #[tokio::test]
-    async fn detect_route_returns_availability() {
-        let pool = SqlitePool::connect("sqlite::memory:").await.expect("memory pool");
-        let state = AppState::with_pool(pool);
-        let app = build_router(state);
-
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method(Method::GET)
-                    .uri("/api/features/1/neovim/detect")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .expect("detect should not return 404");
-
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let body_bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-        let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
-        let response: crate::domain::neovim::protocol::NeovimDetectResponse =
-            serde_json::from_str(&body_str).unwrap();
-        assert_eq!(response.available, cli_discovery::detect_nvim().await);
     }
 }

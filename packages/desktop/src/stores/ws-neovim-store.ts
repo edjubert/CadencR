@@ -24,22 +24,27 @@ interface NeovimListener {
   handlers: NeovimEventHandlers;
 }
 
-const listenersByFeature = new Map<string, Set<NeovimListener>>();
+const listenersBySession = new Map<string, Set<NeovimListener>>();
 
-/** Subscribe to neovim WS events for one (featureId, filePath) pair. */
+/**
+ * Subscribe to neovim WS events for one (sessionId, filePath) pair.
+ * `sessionId` must be the WS session id (`ws-feature-<featureId>`, see
+ * `lib/ws-session-id.ts`) — envelopes are dispatched keyed by that id
+ * (`handleEnvelope`'s `sessionId` param), not the raw feature id.
+ */
 export function subscribeToNeovimEvents(
-  featureId: string,
+  sessionId: string,
   filePath: string,
   handlers: NeovimEventHandlers,
 ): () => void {
   const listener: NeovimListener = { filePath, handlers };
-  const listeners = listenersByFeature.get(featureId) ?? new Set<NeovimListener>();
+  const listeners = listenersBySession.get(sessionId) ?? new Set<NeovimListener>();
   listeners.add(listener);
-  listenersByFeature.set(featureId, listeners);
+  listenersBySession.set(sessionId, listeners);
 
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0) listenersByFeature.delete(featureId);
+    if (listeners.size === 0) listenersBySession.delete(sessionId);
   };
 }
 
@@ -49,10 +54,10 @@ export function subscribeToNeovimEvents(
  * `payload.file_path` — other open files/tabs stay unaffected.
  */
 export function dispatchNeovimEnvelope(
-  featureId: string,
+  sessionId: string,
   envelope: { action: string; payload: unknown },
 ): void {
-  const listeners = listenersByFeature.get(featureId);
+  const listeners = listenersBySession.get(sessionId);
   if (!listeners || listeners.size === 0) return;
   if (!isRecord(envelope.payload)) return;
 

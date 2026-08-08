@@ -2,6 +2,7 @@ import { useEffect, type RefObject } from "react";
 import { Compartment } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { subscribeToNeovimEvents } from "@/stores/ws-neovim-store";
+import { wsSessionIdFromFeature } from "@/lib/ws-session-id";
 import { toNeovimKeyNotation } from "./neovim-key-notation";
 import { sendNeovimKeyInput } from "./neovim-ws-send";
 
@@ -88,7 +89,8 @@ function useNeovimEventSubscription(
   useEffect(() => {
     if (!isNeovimIntegrated || !featureId || !filePath) return;
 
-    return subscribeToNeovimEvents(featureId, filePath, {
+    const sessionId = wsSessionIdFromFeature(Number(featureId));
+    return subscribeToNeovimEvents(sessionId, filePath, {
       onCursorMoved: (line, col) => {
         const view = viewRef.current;
         if (view) applyCursorMoved(view, line, col);
