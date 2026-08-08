@@ -75,6 +75,9 @@ importers:
       '@cadencr/brand':
         specifier: workspace:*
         version: link:../brand
+      '@cadencr/terminal-core':
+        specifier: workspace:*
+        version: link:../terminal-core
       '@codemirror/autocomplete':
         specifier: ^6.20.3
         version: 6.20.3

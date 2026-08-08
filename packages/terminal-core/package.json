@@ -9,7 +9,8 @@
     ".": {
       "types": "./renderer/index.ts",
       "default": "./renderer/index.ts"
-    }
+    },
+    "./pkg/*": "./pkg/*"
   },
   "scripts": {
     "build": "wasm-pack build --target web --out-dir pkg",

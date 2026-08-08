@@ -36,24 +36,6 @@ export interface CodeMirrorEditorProps {
 
 const AUTO_SAVE_DELAY_MS = 1500;
 
-/**
- * The level-2 RPC-driven spawn (headless nvim + buffer push) was removed
- * with the backend surface it depended on; the PTY-backed replacement lands
- * in a follow-up backend plan. Kept as a no-op so callers and their tests
- * don't need to change shape across that migration.
- */
-export function useNeovimSpawnTrigger(
-  featureId: number,
-  filePath: string,
-  content: string | undefined,
-  isNeovimIntegrated: boolean,
-) {
-  void featureId;
-  void filePath;
-  void content;
-  void isNeovimIntegrated;
-}
-
 function useEditorFileData(props: CodeMirrorEditorProps) {
   const language = useEditorLanguage(props.projectId, props.filePath);
   const { value: vimModeLevelSetting } = useDebouncedSetting("editor_vim_mode_level");
@@ -115,13 +97,6 @@ function useEditorFileData(props: CodeMirrorEditorProps) {
     enabled: !largeFile.largeMode,
   });
   const vimModeLevel = vimModeLevelSetting ?? "0";
-  const isNeovimIntegrated = vimModeLevel === "2";
-  useNeovimSpawnTrigger(
-    props.featureId,
-    props.filePath,
-    fileQuery.data?.content,
-    isNeovimIntegrated,
-  );
   return {
     blame,
     fileQuery,
@@ -130,7 +105,6 @@ function useEditorFileData(props: CodeMirrorEditorProps) {
     isBlameEnabled,
     // Level 1 keeps using @replit/codemirror-vim, unchanged from before this setting split.
     isVimEnabled: vimModeLevel === "1",
-    isNeovimIntegrated,
     language,
     largeFile,
     lsp,
