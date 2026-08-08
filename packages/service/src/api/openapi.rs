@@ -34,6 +34,8 @@ use crate::domain::schedules::recurrence as schedules_recurrence;
 use crate::domain::schedules::routes as schedules_routes;
 use crate::domain::sessions::models as sessions_models;
 use crate::domain::sessions::routes as sessions_routes;
+use crate::domain::neovim::protocol as neovim_protocol;
+use crate::domain::neovim::routes as neovim_routes;
 use crate::domain::terminal::routes as terminal_routes;
 use crate::domain::usage_stats::health as usage_stats_health;
 use crate::domain::usage_stats::models as usage_stats_models;
@@ -156,6 +158,8 @@ use crate::domain::ws_session::routes as ws_routes;
         sessions_routes::get_message_preview_handler,
         terminal_routes::list_terminal_sessions_handler,
         terminal_routes::kill_terminal_sessions_handler,
+        neovim_routes::start_route,
+        neovim_routes::stop_route,
         super::get_agent_catalog,
         discovery_routes::binary_discovery_handler,
         claude_code_routes::list_profiles_handler,
@@ -326,6 +330,7 @@ use crate::domain::ws_session::routes as ws_routes;
         sessions_models::RefreshSessionResponse,
         terminal_routes::TerminalSessionInfo,
         terminal_routes::KillTerminalsResponse,
+        neovim_protocol::NeovimStartResponse,
         claude_code_routes::ProfileView,
         claude_code_routes::ProfilesResponse,
         claude_code_routes::UpsertProfileRequest,

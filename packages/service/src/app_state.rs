@@ -24,6 +24,7 @@ use crate::domain::ports::cache::PortScanCache;
 use crate::domain::push::PushNotifier;
 use crate::domain::schedules::models::ScheduleRanEvent;
 use crate::domain::session_status::SessionStatusBroadcaster;
+use crate::domain::neovim::NeovimManager;
 use crate::domain::terminal::service::PtyManager;
 use crate::domain::ws_session::handler::{new_sdk_sessions, ActiveTurnRegistry};
 use crate::domain::ws_session::sender_registry::WsFeatureSenderRegistry;
@@ -107,6 +108,8 @@ pub struct AppState {
     pub schedule_events_tx: broadcast::Sender<ScheduleRanEvent>,
     /// PTY lifecycle manager for terminal sessions.
     pub pty_manager: PtyManager,
+    /// Neovim process manager for headless editor sessions.
+    pub neovim_manager: NeovimManager,
     /// Broadcast channel for file-system change events.
     pub file_change_tx: broadcast::Sender<FileChangeEvent>,
     /// Broadcast when a settings JSON file changes on disk (our own writes or an
@@ -265,6 +268,7 @@ impl AppState {
             feature_events_tx: FeatureEventBroadcaster::new(feature_events_tx),
             schedule_events_tx,
             pty_manager: PtyManager::new(),
+            neovim_manager: NeovimManager::new(),
             file_change_tx,
             settings_events_tx,
             remote_events_tx,
@@ -329,6 +333,7 @@ impl AppState {
             feature_events_tx: FeatureEventBroadcaster::new(feature_events_tx),
             schedule_events_tx,
             pty_manager: PtyManager::new(),
+            neovim_manager: NeovimManager::new(),
             file_change_tx,
             settings_events_tx,
             remote_events_tx,
