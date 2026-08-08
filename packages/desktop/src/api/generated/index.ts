@@ -2165,10 +2165,23 @@ export const ProviderStatus = {
   coming_soon: "coming_soon",
 } as const;
 
+export interface PullBufferRequest {
+  file_path: string;
+}
+
+export interface PullBufferResponse {
+  content: string;
+}
+
 export interface PushBody {
   feature_id: number;
   /** Optional force mode; omitted or `"none"` performs a plain push. */
   force?: PushForceMode;
+}
+
+export interface PushBufferRequest {
+  content: string;
+  file_path: string;
 }
 
 /**
@@ -7521,6 +7534,166 @@ export function useGetMessagePreview<
 
   return query;
 }
+
+/**
+ * Pulls content from a Neovim buffer back to the workspace.
+ * @summary POST /api/features/{feature_id}/neovim/buffer/pull
+ */
+export const pullBufferRoute = (
+  featureId: string,
+  pullBufferRequest: PullBufferRequest,
+  signal?: AbortSignal,
+) => {
+  return customInstance<PullBufferResponse>({
+    url: `/api/features/${featureId}/neovim/buffer/pull`,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    data: pullBufferRequest,
+    signal,
+  });
+};
+
+export const getPullBufferRouteMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof pullBufferRoute>>,
+    TError,
+    { featureId: string; data: PullBufferRequest },
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof pullBufferRoute>>,
+  TError,
+  { featureId: string; data: PullBufferRequest },
+  TContext
+> => {
+  const mutationKey = ["pullBufferRoute"];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof pullBufferRoute>>,
+    { featureId: string; data: PullBufferRequest }
+  > = (props) => {
+    const { featureId, data } = props ?? {};
+
+    return pullBufferRoute(featureId, data);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type PullBufferRouteMutationResult = NonNullable<
+  Awaited<ReturnType<typeof pullBufferRoute>>
+>;
+export type PullBufferRouteMutationBody = PullBufferRequest;
+export type PullBufferRouteMutationError = ErrorType<unknown>;
+
+/**
+ * @summary POST /api/features/{feature_id}/neovim/buffer/pull
+ */
+export const usePullBufferRoute = <TError = ErrorType<unknown>, TContext = unknown>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof pullBufferRoute>>,
+    TError,
+    { featureId: string; data: PullBufferRequest },
+    TContext
+  >;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof pullBufferRoute>>,
+  TError,
+  { featureId: string; data: PullBufferRequest },
+  TContext
+> => {
+  const mutationOptions = getPullBufferRouteMutationOptions(options);
+
+  return useMutation(mutationOptions);
+};
+
+/**
+ * Pushes file content from the workspace into the Neovim buffer.
+ * @summary POST /api/features/{feature_id}/neovim/buffer/push
+ */
+export const pushBufferRoute = (
+  featureId: string,
+  pushBufferRequest: PushBufferRequest,
+  signal?: AbortSignal,
+) => {
+  return customInstance<void>({
+    url: `/api/features/${featureId}/neovim/buffer/push`,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    data: pushBufferRequest,
+    signal,
+  });
+};
+
+export const getPushBufferRouteMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof pushBufferRoute>>,
+    TError,
+    { featureId: string; data: PushBufferRequest },
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof pushBufferRoute>>,
+  TError,
+  { featureId: string; data: PushBufferRequest },
+  TContext
+> => {
+  const mutationKey = ["pushBufferRoute"];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof pushBufferRoute>>,
+    { featureId: string; data: PushBufferRequest }
+  > = (props) => {
+    const { featureId, data } = props ?? {};
+
+    return pushBufferRoute(featureId, data);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type PushBufferRouteMutationResult = NonNullable<
+  Awaited<ReturnType<typeof pushBufferRoute>>
+>;
+export type PushBufferRouteMutationBody = PushBufferRequest;
+export type PushBufferRouteMutationError = ErrorType<unknown>;
+
+/**
+ * @summary POST /api/features/{feature_id}/neovim/buffer/push
+ */
+export const usePushBufferRoute = <TError = ErrorType<unknown>, TContext = unknown>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof pushBufferRoute>>,
+    TError,
+    { featureId: string; data: PushBufferRequest },
+    TContext
+  >;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof pushBufferRoute>>,
+  TError,
+  { featureId: string; data: PushBufferRequest },
+  TContext
+> => {
+  const mutationOptions = getPushBufferRouteMutationOptions(options);
+
+  return useMutation(mutationOptions);
+};
 
 /**
  * Spawns a headless Neovim instance for the given feature (session).

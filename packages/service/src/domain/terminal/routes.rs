@@ -111,7 +111,7 @@ pub async fn kill_terminal_sessions_handler(
     let killed = state.pty_manager.kill_feature_ptys(query.feature_id);
     let _ = state
         .neovim_manager
-        .stop(&query.feature_id.to_string())
+        .stop(query.feature_id)
         .await;
     Json(KillTerminalsResponse {
         killed: killed as u32,
@@ -448,13 +448,13 @@ mod tests {
         // Start a neovim process for the same feature_id before closing
         state
             .neovim_manager
-            .start(&feature_id.to_string())
+            .start(feature_id)
             .await
             .unwrap();
         assert!(
             state
                 .neovim_manager
-                .is_running(&feature_id.to_string())
+                .is_running(feature_id)
                 .await,
             "neovim should be running before close"
         );
@@ -472,7 +472,7 @@ mod tests {
         assert!(
             !state
                 .neovim_manager
-                .is_running(&feature_id.to_string())
+                .is_running(feature_id)
                 .await,
             "neovim should be stopped after feature close"
         );
