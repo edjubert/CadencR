@@ -1,13 +1,13 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::post,
+    routing::{get, post},
     Router,
 };
 
 use std::num::ParseIntError;
 
-use crate::{app_state::AppState, domain::neovim::protocol::{NeovimStartResponse, PullBufferRequest, PullBufferResponse, PushBufferRequest}, error::AppError};
+use crate::{app_state::AppState, domain::neovim::protocol::{NeovimDetectResponse, NeovimStartResponse, PullBufferRequest, PullBufferResponse, PushBufferRequest}, error::AppError};
 
 /// POST /api/features/{feature_id}/neovim/start
 ///
@@ -111,6 +111,23 @@ pub async fn pull_buffer_route(
     Ok(axum::Json(PullBufferResponse { content }))
 }
 
+/// GET /api/features/{feature_id}/neovim/detect
+///
+/// Reports whether `nvim` is available on this machine. Kept under the
+/// existing `/features/{feature_id}/neovim/...` prefix for routing
+/// consistency even though availability is a machine-wide fact, not
+/// feature-scoped — `feature_id` is accepted but unused.
+#[utoipa::path(
+    get,
+    path = "/api/features/{feature_id}/neovim/detect",
+    params(("feature_id" = String, Path, description = "Feature ID")),
+    responses((status = 200, description = "Neovim availability", body = NeovimDetectResponse)),
+)]
+pub async fn detect_route(Path(_feature_id): Path<String>) -> axum::Json<NeovimDetectResponse> {
+    let available = cli_discovery::detect_nvim().await;
+    axum::Json(NeovimDetectResponse { available })
+}
+
 /// Register neovim routes on the router.
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -118,6 +135,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/features/{feature_id}/neovim/stop", post(stop_route))
         .route("/api/features/{feature_id}/neovim/buffer/push", post(push_buffer_route))
         .route("/api/features/{feature_id}/neovim/buffer/pull", post(pull_buffer_route))
+        .route("/api/features/{feature_id}/neovim/detect", get(detect_route))
 }
 
 #[cfg(test)]
@@ -253,5 +271,31 @@ mod tests {
         let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
         let response: PullBufferResponse = serde_json::from_str(&body_str).unwrap();
         assert_eq!(response.content, "fn main() {}\n");
+    }
+
+    #[tokio::test]
+    async fn detect_route_returns_availability() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.expect("memory pool");
+        let state = AppState::with_pool(pool);
+        let app = build_router(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/api/features/1/neovim/detect")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("detect should not return 404");
+
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body_bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+        let response: crate::domain::neovim::protocol::NeovimDetectResponse =
+            serde_json::from_str(&body_str).unwrap();
+        assert_eq!(response.available, cli_discovery::detect_nvim().await);
     }
 }
