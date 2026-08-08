@@ -13,6 +13,7 @@ import { bracketMatching, indentOnInput } from "@codemirror/language";
 import { vim } from "@replit/codemirror-vim";
 import { cadencrEditorTheme } from "./editor-theme";
 import { ergonomicsExtensions } from "@/lib/editor/ergonomics-extensions";
+import { neovimKeydownExtension, useNeovimCompartment } from "./useNeovimCompartment";
 
 interface BaseCodeMirrorEditorProps {
   /** Initial document content (only used on mount) */
@@ -23,6 +24,14 @@ interface BaseCodeMirrorEditorProps {
   readOnly?: boolean;
   /** Toggle vim mode (hot-swappable) */
   vimMode?: boolean;
+  /** Toggle integrated Neovim (vim mode level 2, hot-swappable) */
+  isNeovimIntegrated?: boolean;
+  /** Feature owning the WS connection neovim key input/events travel over */
+  neovimFeatureId?: string;
+  /** File this editor instance is showing, for neovim event filtering */
+  neovimFilePath?: string;
+  /** Fires on incoming neovim `mode_changed` events, for a mode indicator */
+  onNeovimModeChanged?: (mode: string) => void;
   /**
    * Mount the editing-ergonomics extensions (code folding, auto-close brackets,
    * rectangular selection, selection-match highlight, fold/active-line gutter).
@@ -94,6 +103,10 @@ function buildEditorExtensions({
   vimCompartment,
   readOnlyCompartment,
   languageCompartment,
+  neovimCompartment,
+  isNeovimIntegrated,
+  neovimFeatureId,
+  neovimFilePath,
 }: {
   ergonomics: boolean;
   vimMode: boolean;
@@ -105,6 +118,10 @@ function buildEditorExtensions({
   vimCompartment: RefObject<Compartment>;
   readOnlyCompartment: RefObject<Compartment>;
   languageCompartment: RefObject<Compartment>;
+  neovimCompartment: RefObject<Compartment>;
+  isNeovimIntegrated: boolean;
+  neovimFeatureId?: string;
+  neovimFilePath?: string;
 }): Extension[] {
   const updateListener = EditorView.updateListener.of((update) => {
     if (update.docChanged) onChangeRef.current?.(update.state.doc.toString());
@@ -134,6 +151,11 @@ function buildEditorExtensions({
     vimCompartment.current.of(vimMode ? vim() : []),
     readOnlyCompartment.current.of(EditorState.readOnly.of(readOnly)),
     languageCompartment.current.of(language ?? []),
+    neovimCompartment.current.of(
+      isNeovimIntegrated && neovimFeatureId && neovimFilePath
+        ? neovimKeydownExtension(neovimFeatureId, neovimFilePath)
+        : [],
+    ),
     ...cadencrEditorTheme,
     ...(extraExtensions ?? []),
   ];
@@ -144,6 +166,10 @@ export default function BaseCodeMirrorEditor({
   language,
   readOnly = false,
   vimMode = false,
+  isNeovimIntegrated = false,
+  neovimFeatureId,
+  neovimFilePath,
+  onNeovimModeChanged,
   ergonomics = true,
   onChange,
   onSave,
@@ -157,6 +183,16 @@ export default function BaseCodeMirrorEditor({
   const vimCompartment = useRef(new Compartment());
   const readOnlyCompartment = useRef(new Compartment());
   const languageCompartment = useRef(new Compartment());
+  const neovimCompartment = useRef(new Compartment());
+
+  useNeovimCompartment({
+    viewRef,
+    neovimCompartment,
+    isNeovimIntegrated,
+    featureId: neovimFeatureId,
+    filePath: neovimFilePath,
+    onModeChanged: onNeovimModeChanged,
+  });
 
   // Store callbacks in refs to avoid stale closures
   const onChangeRef = useRef(onChange);
@@ -189,6 +225,10 @@ export default function BaseCodeMirrorEditor({
       vimCompartment,
       readOnlyCompartment,
       languageCompartment,
+      neovimCompartment,
+      isNeovimIntegrated,
+      neovimFeatureId,
+      neovimFilePath,
     });
 
     const state = EditorState.create({ doc: initialContent, extensions });
