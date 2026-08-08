@@ -60,7 +60,7 @@ impl NeovimManager {
             });
         }
 
-        let mut cmd = build_nvim_command();
+        let mut cmd = build_nvim_command().await;
         let buffers: SharedBuffers = Arc::new(Mutex::new(HashMap::new()));
         let handler = NeovimEventHandler::new(feature_id, buffers.clone(), ws_sender);
 
@@ -383,10 +383,28 @@ fn extract_version(api_info: &[Value]) -> String {
 }
 
 #[allow(dead_code)]
-fn build_nvim_command() -> tokio::process::Command {
+async fn build_nvim_command() -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new("nvim");
     cmd.arg("--embed").arg("-u").arg("NONE").arg("--headless");
+    // GUI-launched service processes (Electron sidecar) don't inherit the
+    // user's login-shell PATH, so Homebrew-installed `nvim` resolves fine in
+    // a terminal but 404s here. Widen PATH with the login shell's resolved
+    // value when available; fall back to the inherited PATH otherwise.
+    if let Some(login_path) = cli_discovery::login_shell_path().await {
+        cmd.env("PATH", login_path);
+    }
     cmd
+}
+
+/// Whether `nvim` is spawnable, resolving PATH the same way `build_nvim_command`
+/// does so this agrees with what `NeovimManager::start` will actually find.
+pub async fn nvim_available() -> bool {
+    let mut cmd = tokio::process::Command::new("nvim");
+    cmd.arg("--version");
+    if let Some(login_path) = cli_discovery::login_shell_path().await {
+        cmd.env("PATH", login_path);
+    }
+    cmd.output().await.is_ok()
 }
 
 #[cfg(test)]
