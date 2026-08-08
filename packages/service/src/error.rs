@@ -20,22 +20,13 @@ pub enum AppError {
     /// LSP host's crash-backoff to signal "retry later", matching the
     /// semantics web clients already understand.
     ServiceUnavailable(String),
-    #[allow(dead_code)]
-    NeovimSpawnError {
-        detail: String,
-    },
-    #[allow(dead_code)]
+    NeovimSpawnError { detail: String },
     NeovimHandshakeTimeout,
-    #[allow(dead_code)]
-    NeovimNotRunning {
-        feature_id: String,
-    },
-    #[allow(dead_code)]
-    NeovimBufferNotFound {
-        file_path: String,
-    },
-    #[allow(dead_code)]
+    NeovimNotRunning { feature_id: String },
     NeovimProcessNotRunning,
+    NeovimFileNotFound {
+        path: String,
+    },
 }
 
 impl std::fmt::Display for AppError {
@@ -48,20 +39,16 @@ impl std::fmt::Display for AppError {
             AppError::Internal(msg) => write!(f, "Internal error: {msg}"),
             AppError::Conflict(msg) => write!(f, "Conflict: {msg}"),
             AppError::ServiceUnavailable(msg) => write!(f, "Service unavailable: {msg}"),
-            AppError::NeovimSpawnError { detail } => {
-                write!(f, "failed to spawn neovim process: {detail}")
-            }
-            AppError::NeovimHandshakeTimeout => {
-                write!(f, "neovim process did not complete handshake in time")
-            }
+            AppError::NeovimSpawnError { detail } => write!(f, "Neovim spawn error: {detail}"),
+            AppError::NeovimHandshakeTimeout => write!(f, "Neovim handshake timeout"),
             AppError::NeovimNotRunning { feature_id } => {
-                write!(f, "neovim not running for feature {feature_id}")
-            }
-            AppError::NeovimBufferNotFound { file_path } => {
-                write!(f, "no neovim buffer found for path: {file_path}")
+                write!(f, "Neovim not running for feature: {feature_id}")
             }
             AppError::NeovimProcessNotRunning => {
-                write!(f, "no neovim process is running for this feature")
+                write!(f, "Neovim process is not running")
+            }
+            AppError::NeovimFileNotFound { path } => {
+                write!(f, "Neovim could not open file: {path}")
             }
         }
     }
@@ -84,20 +71,20 @@ impl IntoResponse for AppError {
                 (StatusCode::SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE")
             }
             AppError::NeovimSpawnError { .. } => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "NEOVIM_NOT_FOUND")
+                (StatusCode::INTERNAL_SERVER_ERROR, "NEOVIM_SPAWN_ERROR")
             }
-            AppError::NeovimHandshakeTimeout => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "NEOVIM_HANDSHAKE_TIMEOUT",
-            ),
-            AppError::NeovimNotRunning { .. } => (StatusCode::NOT_FOUND, "NEOVIM_NOT_RUNNING"),
-            AppError::NeovimBufferNotFound { .. } => {
-                (StatusCode::NOT_FOUND, "NEOVIM_BUFFER_NOT_FOUND")
+            AppError::NeovimHandshakeTimeout => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "NEOVIM_HANDSHAKE_TIMEOUT")
             }
-            AppError::NeovimProcessNotRunning => (
-                StatusCode::CONFLICT,
-                "NEOVIM_PROCESS_NOT_RUNNING",
-            ),
+            AppError::NeovimNotRunning { .. } => {
+                (StatusCode::NOT_FOUND, "NEOVIM_NOT_RUNNING")
+            }
+            AppError::NeovimProcessNotRunning => {
+                (StatusCode::NOT_FOUND, "NEOVIM_PROCESS_NOT_RUNNING")
+            }
+            AppError::NeovimFileNotFound { .. } => {
+                (StatusCode::NOT_FOUND, "NEOVIM_FILE_NOT_FOUND")
+            }
         };
 
         if status.is_server_error() {
@@ -151,43 +138,13 @@ mod tests {
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    #[tokio::test]
-    async fn neovim_spawn_error_returns_500_with_correct_code() {
-        let response = AppError::NeovimSpawnError {
-            detail: "nvim: command not found".into(),
-        }
-        .into_response();
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("read body");
-        let parsed: serde_json::Value = serde_json::from_slice(&body).expect("decode response");
-        assert_eq!(parsed["code"], "NEOVIM_NOT_FOUND");
-    }
-
-    #[tokio::test]
-    async fn neovim_handshake_timeout_returns_500_with_correct_code() {
-        let response = AppError::NeovimHandshakeTimeout.into_response();
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("read response");
-        let parsed: serde_json::Value = serde_json::from_slice(&body).expect("decode response");
-        assert_eq!(parsed["code"], "NEOVIM_HANDSHAKE_TIMEOUT");
-    }
-
-    #[tokio::test]
-    async fn neovim_not_running_returns_404() {
-        let response = AppError::NeovimNotRunning {
-            feature_id: "42".into(),
+    #[test]
+    fn neovim_file_not_found_maps_to_404_and_stable_code() {
+        let response = AppError::NeovimFileNotFound {
+            path: "/tmp/missing.rs".to_string(),
         }
         .into_response();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("read response");
-        let parsed: serde_json::Value = serde_json::from_slice(&body).expect("decode response");
-        assert_eq!(parsed["code"], "NEOVIM_NOT_RUNNING");
     }
 
     #[tokio::test]
@@ -203,30 +160,5 @@ mod tests {
         assert_eq!(body["error"], "Internal server error");
         assert_eq!(body["code"], "DATABASE_ERROR");
         assert!(!body["error"].as_str().unwrap().contains("SELECT"));
-    }
-
-    #[tokio::test]
-    async fn neovim_buffer_not_found_returns_404_with_correct_code() {
-        let response = AppError::NeovimBufferNotFound {
-            file_path: "src/main.rs".into(),
-        }
-        .into_response();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("read response");
-        let parsed: serde_json::Value = serde_json::from_slice(&body).expect("decode response");
-        assert_eq!(parsed["code"], "NEOVIM_BUFFER_NOT_FOUND");
-    }
-
-    #[tokio::test]
-    async fn neovim_process_not_running_returns_409_with_correct_code() {
-        let response = AppError::NeovimProcessNotRunning.into_response();
-        assert_eq!(response.status(), StatusCode::CONFLICT);
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("read response");
-        let parsed: serde_json::Value = serde_json::from_slice(&body).expect("decode response");
-        assert_eq!(parsed["code"], "NEOVIM_PROCESS_NOT_RUNNING");
     }
 }

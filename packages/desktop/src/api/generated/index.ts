@@ -1716,6 +1716,28 @@ export interface NewProjectBranchPayload {
 }
 
 /**
+ * @minimum 0
+ */
+export type OpenFileRequestCol = number | null;
+
+/**
+ * @minimum 0
+ */
+export type OpenFileRequestLine = number | null;
+
+/**
+ * Request to open a file in a feature's Neovim. `line` and `col` are
+1-indexed, matching how a `file.rs:240:2` reference reads.
+ */
+export interface OpenFileRequest {
+  /** @minimum 0 */
+  col?: OpenFileRequestCol;
+  /** @minimum 0 */
+  line?: OpenFileRequestLine;
+  path: string;
+}
+
+/**
  * Optional concrete server id (e.g. `"tsgo"`, `"biome"`). When present the
 service resolves that specific catalog entry instead of the language's
 default — this is how a project runs multiple servers per file. When
@@ -2169,23 +2191,10 @@ export const ProviderStatus = {
   coming_soon: "coming_soon",
 } as const;
 
-export interface PullBufferRequest {
-  file_path: string;
-}
-
-export interface PullBufferResponse {
-  content: string;
-}
-
 export interface PushBody {
   feature_id: number;
   /** Optional force mode; omitted or `"none"` performs a plain push. */
   force?: PushForceMode;
-}
-
-export interface PushBufferRequest {
-  content: string;
-  file_path: string;
 }
 
 /**
@@ -7540,120 +7549,41 @@ export function useGetMessagePreview<
 }
 
 /**
- * Pulls content from a Neovim buffer back to the workspace.
- * @summary POST /api/features/{feature_id}/neovim/buffer/pull
+ * Opens a file in the feature's Neovim session and moves the cursor to the
+requested position. `line` and `col` are 1-indexed.
+ * @summary POST /api/features/{feature_id}/neovim/open
  */
-export const pullBufferRoute = (
+export const openFileRoute = (
   featureId: string,
-  pullBufferRequest: PullBufferRequest,
-  signal?: AbortSignal,
-) => {
-  return customInstance<PullBufferResponse>({
-    url: `/api/features/${featureId}/neovim/buffer/pull`,
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    data: pullBufferRequest,
-    signal,
-  });
-};
-
-export const getPullBufferRouteMutationOptions = <
-  TError = ErrorType<unknown>,
-  TContext = unknown,
->(options?: {
-  mutation?: UseMutationOptions<
-    Awaited<ReturnType<typeof pullBufferRoute>>,
-    TError,
-    { featureId: string; data: PullBufferRequest },
-    TContext
-  >;
-}): UseMutationOptions<
-  Awaited<ReturnType<typeof pullBufferRoute>>,
-  TError,
-  { featureId: string; data: PullBufferRequest },
-  TContext
-> => {
-  const mutationKey = ["pullBufferRoute"];
-  const { mutation: mutationOptions } = options
-    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
-      ? options
-      : { ...options, mutation: { ...options.mutation, mutationKey } }
-    : { mutation: { mutationKey } };
-
-  const mutationFn: MutationFunction<
-    Awaited<ReturnType<typeof pullBufferRoute>>,
-    { featureId: string; data: PullBufferRequest }
-  > = (props) => {
-    const { featureId, data } = props ?? {};
-
-    return pullBufferRoute(featureId, data);
-  };
-
-  return { mutationFn, ...mutationOptions };
-};
-
-export type PullBufferRouteMutationResult = NonNullable<
-  Awaited<ReturnType<typeof pullBufferRoute>>
->;
-export type PullBufferRouteMutationBody = PullBufferRequest;
-export type PullBufferRouteMutationError = ErrorType<unknown>;
-
-/**
- * @summary POST /api/features/{feature_id}/neovim/buffer/pull
- */
-export const usePullBufferRoute = <TError = ErrorType<unknown>, TContext = unknown>(options?: {
-  mutation?: UseMutationOptions<
-    Awaited<ReturnType<typeof pullBufferRoute>>,
-    TError,
-    { featureId: string; data: PullBufferRequest },
-    TContext
-  >;
-}): UseMutationResult<
-  Awaited<ReturnType<typeof pullBufferRoute>>,
-  TError,
-  { featureId: string; data: PullBufferRequest },
-  TContext
-> => {
-  const mutationOptions = getPullBufferRouteMutationOptions(options);
-
-  return useMutation(mutationOptions);
-};
-
-/**
- * Pushes file content from the workspace into the Neovim buffer.
- * @summary POST /api/features/{feature_id}/neovim/buffer/push
- */
-export const pushBufferRoute = (
-  featureId: string,
-  pushBufferRequest: PushBufferRequest,
+  openFileRequest: OpenFileRequest,
   signal?: AbortSignal,
 ) => {
   return customInstance<void>({
-    url: `/api/features/${featureId}/neovim/buffer/push`,
+    url: `/api/features/${featureId}/neovim/open`,
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    data: pushBufferRequest,
+    data: openFileRequest,
     signal,
   });
 };
 
-export const getPushBufferRouteMutationOptions = <
+export const getOpenFileRouteMutationOptions = <
   TError = ErrorType<unknown>,
   TContext = unknown,
 >(options?: {
   mutation?: UseMutationOptions<
-    Awaited<ReturnType<typeof pushBufferRoute>>,
+    Awaited<ReturnType<typeof openFileRoute>>,
     TError,
-    { featureId: string; data: PushBufferRequest },
+    { featureId: string; data: OpenFileRequest },
     TContext
   >;
 }): UseMutationOptions<
-  Awaited<ReturnType<typeof pushBufferRoute>>,
+  Awaited<ReturnType<typeof openFileRoute>>,
   TError,
-  { featureId: string; data: PushBufferRequest },
+  { featureId: string; data: OpenFileRequest },
   TContext
 > => {
-  const mutationKey = ["pushBufferRoute"];
+  const mutationKey = ["openFileRoute"];
   const { mutation: mutationOptions } = options
     ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
       ? options
@@ -7661,248 +7591,38 @@ export const getPushBufferRouteMutationOptions = <
     : { mutation: { mutationKey } };
 
   const mutationFn: MutationFunction<
-    Awaited<ReturnType<typeof pushBufferRoute>>,
-    { featureId: string; data: PushBufferRequest }
+    Awaited<ReturnType<typeof openFileRoute>>,
+    { featureId: string; data: OpenFileRequest }
   > = (props) => {
     const { featureId, data } = props ?? {};
 
-    return pushBufferRoute(featureId, data);
+    return openFileRoute(featureId, data);
   };
 
   return { mutationFn, ...mutationOptions };
 };
 
-export type PushBufferRouteMutationResult = NonNullable<
-  Awaited<ReturnType<typeof pushBufferRoute>>
->;
-export type PushBufferRouteMutationBody = PushBufferRequest;
-export type PushBufferRouteMutationError = ErrorType<unknown>;
+export type OpenFileRouteMutationResult = NonNullable<Awaited<ReturnType<typeof openFileRoute>>>;
+export type OpenFileRouteMutationBody = OpenFileRequest;
+export type OpenFileRouteMutationError = ErrorType<unknown>;
 
 /**
- * @summary POST /api/features/{feature_id}/neovim/buffer/push
+ * @summary POST /api/features/{feature_id}/neovim/open
  */
-export const usePushBufferRoute = <TError = ErrorType<unknown>, TContext = unknown>(options?: {
+export const useOpenFileRoute = <TError = ErrorType<unknown>, TContext = unknown>(options?: {
   mutation?: UseMutationOptions<
-    Awaited<ReturnType<typeof pushBufferRoute>>,
+    Awaited<ReturnType<typeof openFileRoute>>,
     TError,
-    { featureId: string; data: PushBufferRequest },
+    { featureId: string; data: OpenFileRequest },
     TContext
   >;
 }): UseMutationResult<
-  Awaited<ReturnType<typeof pushBufferRoute>>,
+  Awaited<ReturnType<typeof openFileRoute>>,
   TError,
-  { featureId: string; data: PushBufferRequest },
+  { featureId: string; data: OpenFileRequest },
   TContext
 > => {
-  const mutationOptions = getPushBufferRouteMutationOptions(options);
-
-  return useMutation(mutationOptions);
-};
-
-/**
- * Reports whether `nvim` is available on this machine. Kept under the
-existing `/features/{feature_id}/neovim/...` prefix for routing
-consistency even though availability is a machine-wide fact, not
-feature-scoped — `feature_id` is accepted but unused.
- * @summary GET /api/features/{feature_id}/neovim/detect
- */
-export const detectRoute = (featureId: string, signal?: AbortSignal) => {
-  return customInstance<NeovimDetectResponse>({
-    url: `/api/features/${featureId}/neovim/detect`,
-    method: "GET",
-    signal,
-  });
-};
-
-export const getDetectRouteQueryKey = (featureId?: string) => {
-  return [`/api/features/${featureId}/neovim/detect`] as const;
-};
-
-export const getDetectRouteQueryOptions = <
-  TData = Awaited<ReturnType<typeof detectRoute>>,
-  TError = ErrorType<unknown>,
->(
-  featureId: string,
-  options?: { query?: UseQueryOptions<Awaited<ReturnType<typeof detectRoute>>, TError, TData> },
-) => {
-  const { query: queryOptions } = options ?? {};
-
-  const queryKey = queryOptions?.queryKey ?? getDetectRouteQueryKey(featureId);
-
-  const queryFn: QueryFunction<Awaited<ReturnType<typeof detectRoute>>> = ({ signal }) =>
-    detectRoute(featureId, signal);
-
-  return { queryKey, queryFn, enabled: !!featureId, ...queryOptions } as UseQueryOptions<
-    Awaited<ReturnType<typeof detectRoute>>,
-    TError,
-    TData
-  > & { queryKey: QueryKey };
-};
-
-export type DetectRouteQueryResult = NonNullable<Awaited<ReturnType<typeof detectRoute>>>;
-export type DetectRouteQueryError = ErrorType<unknown>;
-
-/**
- * @summary GET /api/features/{feature_id}/neovim/detect
- */
-
-export function useDetectRoute<
-  TData = Awaited<ReturnType<typeof detectRoute>>,
-  TError = ErrorType<unknown>,
->(
-  featureId: string,
-  options?: { query?: UseQueryOptions<Awaited<ReturnType<typeof detectRoute>>, TError, TData> },
-): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
-  const queryOptions = getDetectRouteQueryOptions(featureId, options);
-
-  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & { queryKey: QueryKey };
-
-  query.queryKey = queryOptions.queryKey;
-
-  return query;
-}
-
-/**
- * Spawns a headless Neovim instance for the given feature (session).
-Returns the spawn status and process info once the handshake completes.
- * @summary POST /api/features/{feature_id}/neovim/start
- */
-export const startRoute = (featureId: string, signal?: AbortSignal) => {
-  return customInstance<NeovimStartResponse>({
-    url: `/api/features/${featureId}/neovim/start`,
-    method: "POST",
-    signal,
-  });
-};
-
-export const getStartRouteMutationOptions = <
-  TError = ErrorType<unknown>,
-  TContext = unknown,
->(options?: {
-  mutation?: UseMutationOptions<
-    Awaited<ReturnType<typeof startRoute>>,
-    TError,
-    { featureId: string },
-    TContext
-  >;
-}): UseMutationOptions<
-  Awaited<ReturnType<typeof startRoute>>,
-  TError,
-  { featureId: string },
-  TContext
-> => {
-  const mutationKey = ["startRoute"];
-  const { mutation: mutationOptions } = options
-    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
-      ? options
-      : { ...options, mutation: { ...options.mutation, mutationKey } }
-    : { mutation: { mutationKey } };
-
-  const mutationFn: MutationFunction<
-    Awaited<ReturnType<typeof startRoute>>,
-    { featureId: string }
-  > = (props) => {
-    const { featureId } = props ?? {};
-
-    return startRoute(featureId);
-  };
-
-  return { mutationFn, ...mutationOptions };
-};
-
-export type StartRouteMutationResult = NonNullable<Awaited<ReturnType<typeof startRoute>>>;
-
-export type StartRouteMutationError = ErrorType<unknown>;
-
-/**
- * @summary POST /api/features/{feature_id}/neovim/start
- */
-export const useStartRoute = <TError = ErrorType<unknown>, TContext = unknown>(options?: {
-  mutation?: UseMutationOptions<
-    Awaited<ReturnType<typeof startRoute>>,
-    TError,
-    { featureId: string },
-    TContext
-  >;
-}): UseMutationResult<
-  Awaited<ReturnType<typeof startRoute>>,
-  TError,
-  { featureId: string },
-  TContext
-> => {
-  const mutationOptions = getStartRouteMutationOptions(options);
-
-  return useMutation(mutationOptions);
-};
-
-/**
- * Stops the headless Neovim instance for the given feature (session).
- * @summary POST /api/features/{feature_id}/neovim/stop
- */
-export const stopRoute = (featureId: string, signal?: AbortSignal) => {
-  return customInstance<void>({
-    url: `/api/features/${featureId}/neovim/stop`,
-    method: "POST",
-    signal,
-  });
-};
-
-export const getStopRouteMutationOptions = <
-  TError = ErrorType<unknown>,
-  TContext = unknown,
->(options?: {
-  mutation?: UseMutationOptions<
-    Awaited<ReturnType<typeof stopRoute>>,
-    TError,
-    { featureId: string },
-    TContext
-  >;
-}): UseMutationOptions<
-  Awaited<ReturnType<typeof stopRoute>>,
-  TError,
-  { featureId: string },
-  TContext
-> => {
-  const mutationKey = ["stopRoute"];
-  const { mutation: mutationOptions } = options
-    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
-      ? options
-      : { ...options, mutation: { ...options.mutation, mutationKey } }
-    : { mutation: { mutationKey } };
-
-  const mutationFn: MutationFunction<
-    Awaited<ReturnType<typeof stopRoute>>,
-    { featureId: string }
-  > = (props) => {
-    const { featureId } = props ?? {};
-
-    return stopRoute(featureId);
-  };
-
-  return { mutationFn, ...mutationOptions };
-};
-
-export type StopRouteMutationResult = NonNullable<Awaited<ReturnType<typeof stopRoute>>>;
-
-export type StopRouteMutationError = ErrorType<unknown>;
-
-/**
- * @summary POST /api/features/{feature_id}/neovim/stop
- */
-export const useStopRoute = <TError = ErrorType<unknown>, TContext = unknown>(options?: {
-  mutation?: UseMutationOptions<
-    Awaited<ReturnType<typeof stopRoute>>,
-    TError,
-    { featureId: string },
-    TContext
-  >;
-}): UseMutationResult<
-  Awaited<ReturnType<typeof stopRoute>>,
-  TError,
-  { featureId: string },
-  TContext
-> => {
-  const mutationOptions = getStopRouteMutationOptions(options);
+  const mutationOptions = getOpenFileRouteMutationOptions(options);
 
   return useMutation(mutationOptions);
 };
@@ -12542,6 +12262,184 @@ export const useOpenSession = <TError = ErrorType<void>, TContext = unknown>(opt
   TContext
 > => {
   const mutationOptions = getOpenSessionMutationOptions(options);
+
+  return useMutation(mutationOptions);
+};
+
+export const detectRoute = (signal?: AbortSignal) => {
+  return customInstance<NeovimDetectResponse>({ url: `/api/neovim/detect`, method: "GET", signal });
+};
+
+export const getDetectRouteQueryKey = () => {
+  return [`/api/neovim/detect`] as const;
+};
+
+export const getDetectRouteQueryOptions = <
+  TData = Awaited<ReturnType<typeof detectRoute>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<Awaited<ReturnType<typeof detectRoute>>, TError, TData>;
+}) => {
+  const { query: queryOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getDetectRouteQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof detectRoute>>> = ({ signal }) =>
+    detectRoute(signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof detectRoute>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type DetectRouteQueryResult = NonNullable<Awaited<ReturnType<typeof detectRoute>>>;
+export type DetectRouteQueryError = ErrorType<unknown>;
+
+export function useDetectRoute<
+  TData = Awaited<ReturnType<typeof detectRoute>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<Awaited<ReturnType<typeof detectRoute>>, TError, TData>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getDetectRouteQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  query.queryKey = queryOptions.queryKey;
+
+  return query;
+}
+
+export const startRoute = (startRouteBody: number, signal?: AbortSignal) => {
+  return customInstance<NeovimStartResponse>({
+    url: `/api/neovim/start`,
+    method: "POST",
+    headers: { "Content-Type": "text/plain" },
+    data: startRouteBody,
+    signal,
+  });
+};
+
+export const getStartRouteMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof startRoute>>,
+    TError,
+    { data: number },
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof startRoute>>,
+  TError,
+  { data: number },
+  TContext
+> => {
+  const mutationKey = ["startRoute"];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<Awaited<ReturnType<typeof startRoute>>, { data: number }> = (
+    props,
+  ) => {
+    const { data } = props ?? {};
+
+    return startRoute(data);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type StartRouteMutationResult = NonNullable<Awaited<ReturnType<typeof startRoute>>>;
+export type StartRouteMutationBody = number;
+export type StartRouteMutationError = ErrorType<void>;
+
+export const useStartRoute = <TError = ErrorType<void>, TContext = unknown>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof startRoute>>,
+    TError,
+    { data: number },
+    TContext
+  >;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof startRoute>>,
+  TError,
+  { data: number },
+  TContext
+> => {
+  const mutationOptions = getStartRouteMutationOptions(options);
+
+  return useMutation(mutationOptions);
+};
+
+export const stopRoute = (stopRouteBody: number, signal?: AbortSignal) => {
+  return customInstance<void>({
+    url: `/api/neovim/stop`,
+    method: "POST",
+    headers: { "Content-Type": "text/plain" },
+    data: stopRouteBody,
+    signal,
+  });
+};
+
+export const getStopRouteMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof stopRoute>>,
+    TError,
+    { data: number },
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof stopRoute>>,
+  TError,
+  { data: number },
+  TContext
+> => {
+  const mutationKey = ["stopRoute"];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<Awaited<ReturnType<typeof stopRoute>>, { data: number }> = (
+    props,
+  ) => {
+    const { data } = props ?? {};
+
+    return stopRoute(data);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type StopRouteMutationResult = NonNullable<Awaited<ReturnType<typeof stopRoute>>>;
+export type StopRouteMutationBody = number;
+export type StopRouteMutationError = ErrorType<void>;
+
+export const useStopRoute = <TError = ErrorType<void>, TContext = unknown>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof stopRoute>>,
+    TError,
+    { data: number },
+    TContext
+  >;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof stopRoute>>,
+  TError,
+  { data: number },
+  TContext
+> => {
+  const mutationOptions = getStopRouteMutationOptions(options);
 
   return useMutation(mutationOptions);
 };

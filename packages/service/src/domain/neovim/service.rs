@@ -1,212 +1,194 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use nvim_rs::Value;
-use tokio::process::Child;
+use portable_pty::CommandBuilder;
 use tokio::sync::Mutex;
 
-use crate::domain::ws_session::sender_registry::WsFeatureSenderRegistry;
+use crate::domain::terminal::service::PtyManager;
 use crate::error::AppError;
 
-use super::handler::{NeovimEventHandler, SharedBuffers};
+use nvim_rs::rpc::handler::Dummy;
+
 use super::protocol::NeovimStartResponse;
 
-/// Feature-scoped WS push mechanism handed to `start()` so the spawned
-/// process's `NeovimEventHandler` can forward RPC-derived events (cursor,
-/// mode, buffer line changes) to every client currently watching the
-/// feature. Backed by the same registry HTTP handlers use to push WS
-/// envelopes without holding a direct socket reference.
-pub type WsSessionSender = WsFeatureSenderRegistry;
+/// How long a first-time spawn may take before it is treated as failed. Kept
+/// wide because a fresh user config's plugin manager installs everything on
+/// its first launch, which routinely takes tens of seconds.
+const SPAWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
-#[allow(dead_code)]
-pub struct NeovimApiInfo {
-    pub version: String,
-}
-
-#[allow(dead_code)]
+/// A running Neovim process for one feature: its PTY (display) and its
+/// control socket (programmatic file-open / cursor jumps).
 struct NeovimHandle {
-    feature_id: i64,
-    api_info: NeovimApiInfo,
-    child: Arc<Mutex<Child>>,
-    nvim: nvim_rs::Neovim<tokio_util::compat::Compat<tokio::process::ChildStdin>>,
-    // Shared with `NeovimEventHandler` so `nvim_buf_lines_event` notifications
-    // (delivered on the RPC io loop, not through `NeovimManager`) can resolve
-    // which file a raw bufnr belongs to.
-    buffers: SharedBuffers,
+    pty_id: String,
+    #[allow(dead_code)]
+    control_socket: PathBuf,
+    /// Owned so the socket's temp directory outlives the process.
+    _socket_dir: tempfile::TempDir,
 }
 
+/// Supervises one real Neovim process per feature. All PTY plumbing (reader
+/// task, output broadcast, scrollback, resize, kill) is delegated to
+/// `PtyManager`; this type only owns the feature → process mapping and the
+/// control socket path.
 pub struct NeovimManager {
     processes: Arc<Mutex<HashMap<i64, NeovimHandle>>>,
+    /// Serializes the spawn sequence across features so Cadencr never triggers
+    /// two simultaneous first-time plugin installs into the same shared
+    /// plugin directory.
+    spawn_lock: Arc<Mutex<()>>,
+    pty_manager: PtyManager,
 }
 
-#[allow(dead_code)]
 impl NeovimManager {
-    pub fn new() -> Self {
+    pub fn new(pty_manager: PtyManager) -> Self {
         Self {
             processes: Arc::new(Mutex::new(HashMap::new())),
+            spawn_lock: Arc::new(Mutex::new(())),
+            pty_manager,
         }
     }
 
-    pub async fn start(
-        &self,
-        feature_id: i64,
-        ws_sender: WsSessionSender,
-    ) -> Result<NeovimStartResponse, AppError> {
-        let mut processes = self.processes.lock().await;
-        if let Some(existing) = processes.get(&feature_id) {
+    /// Start (or return the already-running) Neovim process for `feature_id`.
+    pub async fn start(&self, feature_id: i64) -> Result<NeovimStartResponse, AppError> {
+        if self.is_running(feature_id).await {
             return Ok(NeovimStartResponse {
-                version: existing.api_info.version.clone(),
+                version: nvim_version().await,
             });
         }
 
-        let mut cmd = build_nvim_command().await;
-        let buffers: SharedBuffers = Arc::new(Mutex::new(HashMap::new()));
-        let handler = NeovimEventHandler::new(feature_id, buffers.clone(), ws_sender);
+        let _spawn_guard = self.spawn_lock.lock().await;
 
-        let (nvim, _io_handle, child) = nvim_rs::create::tokio::new_child_cmd(&mut cmd, handler)
-            .await
-            .map_err(|e| AppError::NeovimSpawnError {
-                detail: e.to_string(),
-            })?;
+        // Re-check under the lock: another task may have spawned this feature
+        // while we waited.
+        if self.is_running(feature_id).await {
+            return Ok(NeovimStartResponse {
+                version: nvim_version().await,
+            });
+        }
 
-        let api_info_result =
-            tokio::time::timeout(std::time::Duration::from_secs(5), nvim.get_api_info())
-                .await
-                .map_err(|_| AppError::NeovimHandshakeTimeout)?
-                .map_err(|e| AppError::NeovimSpawnError {
-                    detail: e.to_string(),
-                })?;
-
-        let version = extract_version(&api_info_result);
-        let child = Arc::new(Mutex::new(child));
-
-        // Once-per-process autocmds forwarding cursor/mode changes as RPC
-        // notifications the handler above already knows how to translate.
-        nvim.command(
-            "autocmd CursorMoved,CursorMovedI * call rpcnotify(0, 'cadencr_cursor_moved', line('.'), col('.'))",
-        )
-        .await
-        .map_err(|e| AppError::NeovimSpawnError {
-            detail: e.to_string(),
+        let socket_dir = tempfile::tempdir().map_err(|e| AppError::NeovimSpawnError {
+            detail: format!("failed to create control socket directory: {e}"),
         })?;
-        nvim.command("autocmd ModeChanged * call rpcnotify(0, 'cadencr_mode_changed', mode())")
-            .await
+        let control_socket = socket_dir.path().join(format!("nvim-{feature_id}.sock"));
+
+        let mut cmd = CommandBuilder::new("nvim");
+        cmd.arg("--listen");
+        cmd.arg(&control_socket);
+        // GUI-launched service processes (the Electron sidecar) don't inherit
+        // the user's login-shell PATH, so a Homebrew-installed `nvim` resolves
+        // in a terminal but not here. Widen PATH when the login shell gives us
+        // one; otherwise keep the inherited value.
+        if let Some(login_path) = cli_discovery::login_shell_path().await {
+            cmd.env("PATH", login_path);
+        }
+
+        let cwd = std::env::temp_dir().to_string_lossy().into_owned();
+        let (pty_id, _handle) = self
+            .pty_manager
+            .create_pty_with_command(feature_id, cmd, &cwd, 120, 40)
             .map_err(|e| AppError::NeovimSpawnError {
                 detail: e.to_string(),
             })?;
 
-        let handle = NeovimHandle {
+        wait_for_socket(&control_socket).await?;
+
+        self.processes.lock().await.insert(
             feature_id,
-            api_info: NeovimApiInfo {
-                version: version.clone(),
+            NeovimHandle {
+                pty_id,
+                control_socket,
+                _socket_dir: socket_dir,
             },
-            child: child.clone(),
-            nvim,
-            buffers,
-        };
-        processes.insert(feature_id, handle);
-        drop(processes);
+        );
 
-        let processes_for_waiter = self.processes.clone();
-        let child_for_waiter = child.clone();
-        let feature_id_for_waiter = feature_id;
-        tokio::spawn(async move {
-            let _ = child_for_waiter.lock().await.wait().await;
-            let mut processes = processes_for_waiter.lock().await;
-            if processes
-                .get(&feature_id_for_waiter)
-                .is_some_and(|handle| Arc::ptr_eq(&handle.child, &child_for_waiter))
-            {
-                processes.remove(&feature_id_for_waiter);
-            }
-        });
-
-        Ok(NeovimStartResponse { version })
+        Ok(NeovimStartResponse {
+            version: nvim_version().await,
+        })
     }
 
+    /// Kill the feature's Neovim process and forget it.
     pub async fn stop(&self, feature_id: i64) -> Result<(), AppError> {
-        let mut processes = self.processes.lock().await;
-        match processes.remove(&feature_id) {
-            Some(handle) => {
-                drop(processes);
-                let _ = handle.child.lock().await.kill().await;
-                Ok(())
-            }
-            None => Err(AppError::NeovimNotRunning {
+        let handle = self.processes.lock().await.remove(&feature_id).ok_or(
+            AppError::NeovimNotRunning {
                 feature_id: feature_id.to_string(),
-            }),
-        }
+            },
+        )?;
+        self.pty_manager
+            .kill_pty(&handle.pty_id)
+            .map_err(|e| AppError::NeovimSpawnError {
+                detail: format!("failed to kill neovim pty: {e}"),
+            })?;
+        Ok(())
     }
 
     pub(crate) async fn is_running(&self, feature_id: i64) -> bool {
         self.processes.lock().await.contains_key(&feature_id)
     }
 
+    /// PTY id backing this feature's Neovim, so the WS layer can attach to the
+    /// existing broadcast channel rather than opening a second stream.
     #[allow(dead_code)]
-    pub async fn push_buffer(
+    pub(crate) async fn pty_id(&self, feature_id: i64) -> Option<String> {
+        self.processes
+            .lock()
+            .await
+            .get(&feature_id)
+            .map(|handle| handle.pty_id.clone())
+    }
+
+    /// Path of this feature's `--listen` control socket.
+    #[allow(dead_code)]
+    pub(crate) async fn control_socket_path(&self, feature_id: i64) -> Option<PathBuf> {
+        self.processes
+            .lock()
+            .await
+            .get(&feature_id)
+            .map(|handle| handle.control_socket.clone())
+    }
+
+    /// Open `path` in this feature's Neovim and move the cursor there.
+    ///
+    /// `line` and `col` are 1-indexed, matching how humans write a reference
+    /// (`main.rs:240:2` = line 240, 2nd character). Neovim's
+    /// `nvim_win_set_cursor` wants a 1-indexed line but a 0-indexed column, so
+    /// the column is decremented on the way in.
+    pub async fn open_file(
         &self,
         feature_id: i64,
-        file_path: &str,
-        content: &str,
+        path: &str,
+        line: Option<u32>,
+        col: Option<u32>,
     ) -> Result<(), AppError> {
-        let _absolute_path = Self::build_contained_worktree_path_for_file(
-            &Self::resolve_worktree_root(feature_id)?,
-            file_path,
-        )?;
+        let socket = self
+            .control_socket_path(feature_id)
+            .await
+            .ok_or(AppError::NeovimProcessNotRunning)?;
 
-        let processes = self.processes.lock().await;
-        let handle = processes.get(&feature_id).ok_or(AppError::NeovimProcessNotRunning)?;
+        let (nvim, _io) = nvim_rs::create::tokio::new_path(
+            &socket,
+            Dummy::new(),
+        )
+        .await
+        .map_err(|e| AppError::NeovimSpawnError {
+            detail: format!("control socket unavailable: {e}"),
+        })?;
 
-        let already_tracked = handle.buffers.lock().await.get(file_path).copied();
-        let bufnr = match already_tracked {
-            Some(bufnr) => bufnr,
-            None => {
-                handle
-                    .nvim
-                    .command("new")
-                    .await
-                    .map_err(|e| AppError::NeovimSpawnError {
-                        detail: e.to_string(),
-                    })?;
+        nvim.command(&format!("edit {}", escape_for_ex(path)))
+            .await
+            .map_err(|_| AppError::NeovimFileNotFound {
+                path: path.to_string(),
+            })?;
 
-                handle
-                    .nvim
-                    .command("setlocal noswapfile")
-                    .await
-                    .map_err(|e| AppError::NeovimSpawnError {
-                        detail: e.to_string(),
-                    })?;
-
-                let bufnr = handle
-                    .nvim
-                    .eval("bufnr('%')")
-                    .await
-                    .map_err(|e| AppError::NeovimSpawnError {
-                        detail: e.to_string(),
-                    })?;
-                let bufnr: i64 = bufnr.as_i64().ok_or_else(|| AppError::NeovimSpawnError {
-                    detail: "unexpected response from bufnr('%')".to_string(),
-                })?;
-
-                let buffer =
-                    nvim_rs::Buffer::new(nvim_rs::Value::Integer(bufnr.into()), handle.nvim.clone());
-                buffer
-                    .attach(true, vec![])
-                    .await
-                    .map_err(|e| AppError::NeovimSpawnError {
-                        detail: e.to_string(),
-                    })?;
-
-                handle.buffers.lock().await.insert(file_path.to_string(), bufnr);
-                bufnr
+        let target_line = line.unwrap_or(1).max(1) as i64;
+        let target_col = col.unwrap_or(1).max(1) as i64 - 1;
+        let window = nvim.get_current_win().await.map_err(|e| {
+            AppError::NeovimSpawnError {
+                detail: e.to_string(),
             }
-        };
-
-        let lines: Vec<String> = content.split('\n').map(String::from).collect();
-        let buffer = nvim_rs::Buffer::new(nvim_rs::Value::Integer(bufnr.into()), handle.nvim.clone());
-        buffer
-            .set_lines(0, -1, false, lines)
+        })?;
+        window
+            .set_cursor((target_line, target_col))
             .await
             .map_err(|e| AppError::NeovimSpawnError {
                 detail: e.to_string(),
@@ -215,135 +197,30 @@ impl NeovimManager {
         Ok(())
     }
 
-    pub async fn pull_buffer(
-        &self,
-        feature_id: i64,
-        file_path: &str,
-    ) -> Result<String, AppError> {
-        let processes = self.processes.lock().await;
-        let handle = processes.get(&feature_id).ok_or(AppError::NeovimProcessNotRunning)?;
-
-        let bufnr = handle
-            .buffers
-            .lock()
+    /// Current cursor position as Neovim reports it: (1-indexed line,
+    /// 0-indexed column). Used by tests to assert `open_file` landed correctly.
+    #[cfg(test)]
+    pub(crate) async fn cursor_position(&self, feature_id: i64) -> Result<(i64, i64), AppError> {
+        let socket = self
+            .control_socket_path(feature_id)
             .await
-            .get(file_path)
-            .copied()
-            .ok_or_else(|| AppError::NeovimBufferNotFound {
-                file_path: file_path.to_string(),
-            })?;
-
-        let buffer =
-            nvim_rs::Buffer::new(nvim_rs::Value::Integer(bufnr.into()), handle.nvim.clone());
-        let lines: Vec<String> = buffer
-            .get_lines(0, -1, false)
-            .await
-            .map_err(|e| AppError::NeovimSpawnError {
+            .ok_or(AppError::NeovimProcessNotRunning)?;
+        let (nvim, _io) = nvim_rs::create::tokio::new_path(
+            &socket,
+            Dummy::new(),
+        )
+        .await
+        .map_err(|e| AppError::NeovimSpawnError {
+            detail: e.to_string(),
+        })?;
+        let window = nvim.get_current_win().await.map_err(|e| {
+            AppError::NeovimSpawnError {
                 detail: e.to_string(),
-            })?;
-
-        Ok(lines.join("\n"))
-    }
-
-    /// Forward `keys` (Neovim key-notation, e.g. `"dd"`, `"<Esc>"`) to the
-    /// process's current buffer via `nvim_input`. Switches the running
-    /// process's current buffer to `file_path`'s bufnr first, so keystrokes
-    /// always land on the buffer the client believes is focused rather than
-    /// whichever buffer happened to be last active in the headless instance.
-    pub async fn send_keys(
-        &self,
-        feature_id: i64,
-        file_path: &str,
-        keys: &str,
-    ) -> Result<(), AppError> {
-        let processes = self.processes.lock().await;
-        let handle = processes.get(&feature_id).ok_or(AppError::NeovimProcessNotRunning)?;
-
-        let bufnr = handle
-            .buffers
-            .lock()
-            .await
-            .get(file_path)
-            .copied()
-            .ok_or_else(|| AppError::NeovimBufferNotFound {
-                file_path: file_path.to_string(),
-            })?;
-
-        let buffer =
-            nvim_rs::Buffer::new(nvim_rs::Value::Integer(bufnr.into()), handle.nvim.clone());
-        handle
-            .nvim
-            .set_current_buf(&buffer)
-            .await
-            .map_err(|e| AppError::NeovimSpawnError {
-                detail: e.to_string(),
-            })?;
-
-        handle
-            .nvim
-            .input(keys)
-            .await
-            .map_err(|e| AppError::NeovimSpawnError {
-                detail: e.to_string(),
-            })?;
-
-        Ok(())
-    }
-
-    fn resolve_worktree_root(_feature_id: i64) -> Result<PathBuf, AppError> {
-        let home = dirs::home_dir().ok_or(AppError::Internal(
-            "Could not determine home directory".to_string(),
-        ))?;
-        Ok(home.join(".cadencr").join("worktrees"))
-    }
-
-    fn build_contained_worktree_path_for_file(
-        root: &Path,
-        file_path: &str,
-    ) -> Result<PathBuf, AppError> {
-        let file_path = Path::new(file_path);
-        let absolute = if file_path.is_absolute() {
-            file_path.to_path_buf()
-        } else {
-            root.join(file_path)
-        };
-
-        let canon = match absolute.canonicalize() {
-            Ok(p) => p,
-            Err(_) => {
-                let parent = absolute.parent().map(Path::to_path_buf);
-                match parent {
-                    Some(p) => match p.canonicalize() {
-                        Ok(canon_parent) => {
-                            let file_name = absolute.file_name().map(|n| n.to_os_string());
-                            match file_name {
-                                Some(name) => canon_parent.join(name),
-                                None => {
-                                    return Err(AppError::Internal(
-                                        "File path has no valid name component".to_string(),
-                                    ))
-                                }
-                            }
-                        }
-                        Err(_) => absolute,
-                    },
-                    None => absolute,
-                }
             }
-        };
-
-        let canon_root = root.canonicalize().map_err(|e| AppError::Internal(
-            format!("Failed to canonicalize worktree root: {e}"),
-        ))?;
-
-        if !canon.starts_with(&canon_root) {
-            return Err(AppError::BadRequest(format!(
-                "File path escapes worktree root: {}",
-                canon.display()
-            )));
-        }
-
-        Ok(canon)
+        })?;
+        window.get_cursor().await.map_err(|e| AppError::NeovimSpawnError {
+            detail: e.to_string(),
+        })
     }
 }
 
@@ -351,371 +228,284 @@ impl Clone for NeovimManager {
     fn clone(&self) -> Self {
         Self {
             processes: self.processes.clone(),
+            spawn_lock: self.spawn_lock.clone(),
+            pty_manager: self.pty_manager.clone(),
         }
     }
 }
 
-#[allow(dead_code)]
-fn extract_version(api_info: &[Value]) -> String {
-    // get_api_info returns [channel_id, metadata]; metadata.version has
-    // major/minor/patch integer fields (no combined "number" field).
-    let Some(Value::Map(pairs)) = api_info.get(1) else {
-        return String::new();
-    };
-    let Some((_, Value::Map(version_map))) = pairs
-        .iter()
-        .find(|(k, _)| k.as_str().is_some_and(|s| s == "version"))
-    else {
-        return String::new();
-    };
-
-    let field = |name: &str| -> Option<i64> {
-        version_map
-            .iter()
-            .find(|(k, _)| k.as_str().is_some_and(|s| s == name))
-            .and_then(|(_, v)| v.as_i64())
-    };
-
-    match (field("major"), field("minor"), field("patch")) {
-        (Some(major), Some(minor), Some(patch)) => format!("{major}.{minor}.{patch}"),
-        _ => String::new(),
+/// Poll until `nvim --listen` has created its socket, or the spawn ceiling
+/// elapses. Neovim creates the socket only once startup (including any
+/// first-time plugin installation) has progressed far enough to serve RPC.
+async fn wait_for_socket(path: &std::path::Path) -> Result<(), AppError> {
+    let deadline = tokio::time::Instant::now() + SPAWN_TIMEOUT;
+    while tokio::time::Instant::now() < deadline {
+        if path.exists() {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
+    Err(AppError::NeovimHandshakeTimeout)
 }
 
-#[allow(dead_code)]
-async fn build_nvim_command() -> tokio::process::Command {
-    let mut cmd = tokio::process::Command::new("nvim");
-    cmd.arg("--embed").arg("-u").arg("NONE").arg("--headless");
-    // GUI-launched service processes (Electron sidecar) don't inherit the
-    // user's login-shell PATH, so Homebrew-installed `nvim` resolves fine in
-    // a terminal but 404s here. Widen PATH with the login shell's resolved
-    // value when available; fall back to the inherited PATH otherwise.
-    if let Some(login_path) = cli_discovery::login_shell_path().await {
-        cmd.env("PATH", login_path);
-    }
-    cmd
-}
-
-/// Whether `nvim` is spawnable, resolving PATH the same way `build_nvim_command`
-/// does so this agrees with what `NeovimManager::start` will actually find.
-pub async fn nvim_available() -> bool {
+/// Version string from `nvim --version`'s first line (e.g. "NVIM v0.10.2"),
+/// resolving PATH the same way the spawn path does so both agree on which
+/// binary is in play. Empty when nvim is unavailable.
+async fn nvim_version() -> String {
     let mut cmd = tokio::process::Command::new("nvim");
     cmd.arg("--version");
     if let Some(login_path) = cli_discovery::login_shell_path().await {
         cmd.env("PATH", login_path);
     }
-    cmd.output().await.is_ok()
+    let Ok(output) = cmd.output().await else {
+        return String::new();
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+/// Whether `nvim` is spawnable, resolving PATH the same way `start` does.
+pub async fn nvim_available() -> bool {
+    !nvim_version().await.is_empty()
+}
+
+/// Escape a path for use as an argument to an ex-command. Neovim treats
+/// spaces as argument separators and `%`/`#` as buffer shorthands, so a real
+/// path containing them would otherwise open the wrong file.
+fn escape_for_ex(path: &str) -> String {
+    path.replace('\\', "\\\\")
+        .replace(' ', "\\ ")
+        .replace('%', "\\%")
+        .replace('#', "\\#")
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
     use super::*;
 
-    pub(crate) fn nvim_available() -> bool {
+    pub(crate) async fn nvim_available_test() -> bool {
+        let Some(login_path) = cli_discovery::login_shell_path().await else {
+            return false;
+        };
         std::process::Command::new("nvim")
             .arg("--version")
+            .env("PATH", &login_path)
             .output()
             .is_ok()
     }
 
-    /// Empty registry — a valid `WsSessionSender` test double for tests that
-    /// only need `start()` to succeed and don't assert on forwarded events.
-    pub(crate) fn test_ws_sender() -> WsSessionSender {
-        WsSessionSender::new()
+    fn test_manager() -> NeovimManager {
+        NeovimManager::new(PtyManager::new())
     }
 
     #[tokio::test]
-    async fn start_returns_api_info_when_nvim_available() {
-        if !nvim_available() {
+    async fn start_spawns_a_pty_and_reports_a_version() {
+        if !nvim_available_test().await {
             eprintln!("SKIP: nvim binary not found in test environment");
             return;
         }
-        let manager = NeovimManager::new();
-        let info = manager.start(1, test_ws_sender()).await.expect("start should succeed");
-        eprintln!("API info version: {:?}", info.version);
-        assert!(!info.version.is_empty());
+        let manager = test_manager();
+        let info = manager.start(1).await.expect("start should succeed");
+        assert!(!info.version.is_empty(), "version should be reported");
+        assert!(manager.is_running(1).await);
+        manager.stop(1).await.unwrap();
     }
 
     #[tokio::test]
-    async fn stop_removes_process_and_is_idempotent() {
-        if !nvim_available() {
-            eprintln!("SKIP: nvim binary not found in test environment");
-            return;
-        }
-        let manager = NeovimManager::new();
-        manager.start(7, test_ws_sender()).await.unwrap();
-        manager.stop(7).await.unwrap();
-        assert!(!manager.is_running(7).await);
-        let result = manager.stop(7).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn crashed_process_is_removed_from_map() {
-        if !nvim_available() {
-            eprintln!("SKIP: nvim binary not found in test environment");
-            return;
-        }
-        let manager = NeovimManager::new();
-        manager.start(9, test_ws_sender()).await.unwrap();
-        manager.stop(9).await.unwrap();
-        let restarted = manager.start(9, test_ws_sender()).await.unwrap();
-        assert!(!restarted.version.is_empty());
-        assert!(manager.is_running(9).await);
-    }
-
-    #[tokio::test]
-    async fn push_buffer_succeeds_for_running_process() {
-        if !nvim_available() {
-            eprintln!("SKIP: nvim binary not found in test environment");
-            return;
-        }
-        let manager = NeovimManager::new();
-        manager.start(42, test_ws_sender()).await.unwrap();
-        let result = manager.push_buffer(42, "src/scratch_42.txt", "hello\nworld").await;
-        assert!(result.is_ok());
-        manager.stop(42).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn push_buffer_fails_for_not_running_process() {
-        let manager = NeovimManager::new();
-        let result = manager.push_buffer(99, "/tmp/test.txt", "content").await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn push_then_pull_roundtrips_exact_content() {
-        if !nvim_available() {
+    async fn start_is_idempotent_for_the_same_feature() {
+        if !nvim_available_test().await {
             eprintln!("SKIP: nvim binary not found");
             return;
         }
-        let manager = NeovimManager::new();
-        manager.start(200, test_ws_sender()).await.unwrap();
-        manager
-            .push_buffer(200, "src/scratch_200.rs", "fn main() {}\n")
-            .await
-            .unwrap();
-        let content = manager.pull_buffer(200, "src/scratch_200.rs").await.unwrap();
-        assert_eq!(content, "fn main() {}\n");
+        let manager = test_manager();
+        manager.start(2).await.unwrap();
+        let pty_id_first = manager.pty_id(2).await.expect("pty id after first start");
+        manager.start(2).await.unwrap();
+        let pty_id_second = manager.pty_id(2).await.expect("pty id after second start");
+        assert_eq!(
+            pty_id_first, pty_id_second,
+            "a second start must reuse the running process, not spawn another"
+        );
+        manager.stop(2).await.unwrap();
     }
 
     #[tokio::test]
-    async fn push_then_pull_roundtrips_unicode_and_no_trailing_newline() {
-        if !nvim_available() {
+    async fn stop_removes_the_feature_and_is_reported_as_not_running() {
+        if !nvim_available_test().await {
             eprintln!("SKIP: nvim binary not found");
             return;
         }
-        let manager = NeovimManager::new();
-        manager.start(201, test_ws_sender()).await.unwrap();
-        let original = "// café 🦀\nlet x = 1;";
-        manager
-            .push_buffer(201, "src/scratch_201.rs", original)
-            .await
-            .unwrap();
-        let content = manager.pull_buffer(201, "src/scratch_201.rs").await.unwrap();
-        assert_eq!(content, original);
-    }
-
-    #[tokio::test]
-    async fn pull_without_prior_push_fails_with_buffer_not_found() {
-        if !nvim_available() {
-            eprintln!("SKIP: nvim binary not found");
-            return;
-        }
-        let manager = NeovimManager::new();
-        manager.start(202, test_ws_sender()).await.unwrap();
-        let result = manager.pull_buffer(202, "never/pushed.rs").await;
+        let manager = test_manager();
+        manager.start(3).await.unwrap();
+        manager.stop(3).await.unwrap();
+        assert!(!manager.is_running(3).await);
         assert!(matches!(
-            result,
-            Err(AppError::NeovimBufferNotFound { .. })
+            manager.stop(3).await,
+            Err(AppError::NeovimNotRunning { .. })
         ));
     }
 
     #[tokio::test]
-    async fn pull_without_running_process_fails() {
-        let manager = NeovimManager::new();
-        let result = manager.pull_buffer(203, "src/main.rs").await;
+    async fn start_creates_a_listening_control_socket() {
+        if !nvim_available_test().await {
+            eprintln!("SKIP: nvim binary not found");
+            return;
+        }
+        let manager = test_manager();
+        manager.start(4).await.unwrap();
+        let socket = manager
+            .control_socket_path(4)
+            .await
+            .expect("socket path should be recorded");
+        assert!(
+            socket.exists(),
+            "nvim --listen should have created the socket at {}",
+            socket.display()
+        );
+        manager.stop(4).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stopping_an_unknown_feature_errors() {
+        let manager = test_manager();
         assert!(matches!(
-            result,
-            Err(AppError::NeovimProcessNotRunning)
+            manager.stop(999).await,
+            Err(AppError::NeovimNotRunning { .. })
         ));
     }
 
     #[tokio::test]
-    async fn second_push_to_same_path_reuses_cached_bufnr() {
-        if !nvim_available() {
+    async fn concurrent_first_time_spawns_do_not_overlap() {
+        if !nvim_available_test().await {
             eprintln!("SKIP: nvim binary not found");
             return;
         }
-        let manager = NeovimManager::new();
-        manager.start(204, test_ws_sender()).await.unwrap();
-        manager.push_buffer(204, "src/scratch_202.rs", "v1").await.unwrap();
-        manager.push_buffer(204, "src/scratch_202.rs", "v2").await.unwrap();
-        let content = manager.pull_buffer(204, "src/scratch_202.rs").await.unwrap();
-        assert_eq!(content, "v2");
-        let processes = manager.processes.lock().await;
-        assert_eq!(processes.get(&204).unwrap().buffers.lock().await.len(), 1);
-    }
+        let events: Arc<Mutex<Vec<(i64, &'static str, std::time::Instant)>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let manager = test_manager();
 
-    #[tokio::test]
-    async fn start_registers_cursor_and_mode_autocmds() {
-        if !nvim_available() {
-            eprintln!("SKIP: nvim binary not found");
-            return;
-        }
-        let manager = NeovimManager::new();
-        // start() succeeding at all proves the autocmd registration commands
-        // (issued right after the handshake) didn't error out; the autocmds
-        // actually firing end-to-end is covered by send_keys's tests below.
-        manager.start(400, test_ws_sender()).await.unwrap();
-        assert!(manager.is_running(400).await);
-    }
+        let events_a = events.clone();
+        let manager_a = manager.clone();
+        let handle_a = tokio::spawn(async move {
+            events_a.lock().await.push((901, "start", std::time::Instant::now()));
+            manager_a.start(901).await.unwrap();
+            events_a.lock().await.push((901, "end", std::time::Instant::now()));
+        });
 
-    #[tokio::test]
-    async fn push_buffer_attaches_for_line_events() {
-        if !nvim_available() {
-            eprintln!("SKIP: nvim binary not found");
-            return;
-        }
-        let registry = test_ws_sender();
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<axum::extract::ws::Message>();
-        registry.register(500, tx).await;
+        let events_b = events.clone();
+        let manager_b = manager.clone();
+        let handle_b = tokio::spawn(async move {
+            events_b.lock().await.push((902, "start", std::time::Instant::now()));
+            manager_b.start(902).await.unwrap();
+            events_b.lock().await.push((902, "end", std::time::Instant::now()));
+        });
 
-        let manager = NeovimManager::new();
-        manager.start(500, registry).await.unwrap();
-        manager
-            .push_buffer(500, "src/main.rs", "line one\nline two\n")
-            .await
-            .unwrap();
-        manager.send_keys(500, "src/main.rs", "dd").await.unwrap();
+        let _ = tokio::join!(handle_a, handle_b);
 
-        let mut saw_buffer_lines_changed = false;
-        while let Ok(message) = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-            .await
-        {
-            let Some(axum::extract::ws::Message::Text(text)) = message else {
-                continue;
-            };
-            let envelope: crate::domain::ws_session::protocol::WsEnvelope =
-                serde_json::from_str(&text).unwrap();
-            if envelope.domain == "neovim" && envelope.action == "buffer_lines_changed" {
-                saw_buffer_lines_changed = true;
-                break;
-            }
-        }
+        let log = events.lock().await;
+        let at = |id: i64, kind: &str| {
+            log.iter()
+                .find(|(i, k, _)| *i == id && *k == kind)
+                .unwrap()
+                .2
+        };
+        let (first_end, second_start) = if at(901, "start") <= at(902, "start") {
+            (at(901, "end"), at(902, "start"))
+        } else {
+            (at(902, "end"), at(901, "start"))
+        };
         assert!(
-            saw_buffer_lines_changed,
-            "expected a buffer_lines_changed event after send_keys mutated the buffer"
+            second_start >= first_end - std::time::Duration::from_millis(50),
+            "spawns overlapped despite the spawn lock"
         );
+        drop(log);
+
+        manager.stop(901).await.unwrap();
+        manager.stop(902).await.unwrap();
     }
 
     #[tokio::test]
-    async fn send_keys_navigation_moves_cursor_without_content_change() {
-        if !nvim_available() {
+    async fn open_file_places_the_cursor_at_the_requested_line_and_column() {
+        if !nvim_available_test().await {
             eprintln!("SKIP: nvim binary not found");
             return;
         }
-        let registry = test_ws_sender();
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<axum::extract::ws::Message>();
-        registry.register(600, tx).await;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("sample.txt");
+        std::fs::write(&file, "alpha\nbravo\ncharlie\ndelta\n").unwrap();
 
-        let manager = NeovimManager::new();
-        manager.start(600, registry).await.unwrap();
+        let manager = test_manager();
+        manager.start(10).await.unwrap();
         manager
-            .push_buffer(600, "src/main.rs", "line one\nline two\nline three\n")
+            .open_file(10, file.to_str().unwrap(), Some(3), Some(2))
             .await
-            .unwrap();
-        manager.send_keys(600, "src/main.rs", "j").await.unwrap();
+            .expect("open_file should succeed");
 
-        let mut saw_cursor_moved = false;
-        let mut saw_buffer_lines_changed = false;
-        while let Ok(Some(axum::extract::ws::Message::Text(text))) =
-            tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv()).await
-        {
-            let envelope: crate::domain::ws_session::protocol::WsEnvelope =
-                serde_json::from_str(&text).unwrap();
-            match (envelope.domain.as_str(), envelope.action.as_str()) {
-                ("neovim", "cursor_moved") => saw_cursor_moved = true,
-                ("neovim", "buffer_lines_changed") => saw_buffer_lines_changed = true,
-                _ => {}
-            }
-        }
-        assert!(saw_cursor_moved, "expected a cursor_moved event from 'j'");
-        assert!(
-            !saw_buffer_lines_changed,
-            "navigation alone must not mutate buffer content"
+        let position = manager.cursor_position(10).await.expect("read cursor back");
+        assert_eq!(
+            position,
+            (3, 1),
+            "line stays 1-indexed, human column 2 becomes 0-indexed 1"
         );
+        manager.stop(10).await.unwrap();
     }
 
     #[tokio::test]
-    async fn send_keys_mutation_changes_buffer_content() {
-        if !nvim_available() {
+    async fn open_file_without_line_defaults_to_the_top_of_the_file() {
+        if !nvim_available_test().await {
             eprintln!("SKIP: nvim binary not found");
             return;
         }
-        let manager = NeovimManager::new();
-        manager.start(601, test_ws_sender()).await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("sample.txt");
+        std::fs::write(&file, "alpha\nbravo\n").unwrap();
+
+        let manager = test_manager();
+        manager.start(11).await.unwrap();
         manager
-            .push_buffer(601, "src/main.rs", "line one\nline two\nline three\n")
+            .open_file(11, file.to_str().unwrap(), None, None)
             .await
-            .unwrap();
-        manager.send_keys(601, "src/main.rs", "dd").await.unwrap();
-        let content = manager.pull_buffer(601, "src/main.rs").await.unwrap();
-        assert_eq!(content, "line two\nline three\n");
+            .expect("open_file should succeed");
+
+        let position = manager.cursor_position(11).await.expect("read cursor back");
+        assert_eq!(position, (1, 0));
+        manager.stop(11).await.unwrap();
     }
 
     #[tokio::test]
-    async fn send_keys_mode_transitions_forward_mode_changed() {
-        if !nvim_available() {
+    async fn open_file_on_a_missing_file_reports_file_not_found() {
+        if !nvim_available_test().await {
             eprintln!("SKIP: nvim binary not found");
             return;
         }
-        let registry = test_ws_sender();
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<axum::extract::ws::Message>();
-        registry.register(602, tx).await;
-
-        let manager = NeovimManager::new();
-        manager.start(602, registry).await.unwrap();
-        manager
-            .push_buffer(602, "src/main.rs", "line one\n")
-            .await
-            .unwrap();
-        manager.send_keys(602, "src/main.rs", "i").await.unwrap();
-        manager.send_keys(602, "src/main.rs", "<Esc>").await.unwrap();
-
-        let mut modes_seen = Vec::new();
-        while let Ok(Some(axum::extract::ws::Message::Text(text))) =
-            tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv()).await
-        {
-            let envelope: crate::domain::ws_session::protocol::WsEnvelope =
-                serde_json::from_str(&text).unwrap();
-            if envelope.domain == "neovim" && envelope.action == "mode_changed" {
-                let payload: crate::domain::ws_session::protocol::NeovimModeChangedPayload =
-                    serde_json::from_value(envelope.payload).unwrap();
-                modes_seen.push(payload.mode);
-            }
-        }
-        assert!(modes_seen.contains(&"i".to_string()), "expected an insert mode_changed event, saw: {modes_seen:?}");
-        assert!(modes_seen.contains(&"n".to_string()), "expected a normal mode_changed event after <Esc>, saw: {modes_seen:?}");
+        let manager = test_manager();
+        manager.start(12).await.unwrap();
+        let result = manager
+            .open_file(12, "/definitely/does/not/exist.txt", Some(1), None)
+            .await;
+        manager.stop(12).await.unwrap();
+        assert!(matches!(result, Err(AppError::NeovimFileNotFound { .. })));
     }
 
     #[tokio::test]
-    async fn send_keys_fails_without_running_process() {
-        let manager = NeovimManager::new();
-        let result = manager.send_keys(603, "src/main.rs", "j").await;
+    async fn open_file_without_a_running_process_errors() {
+        let manager = test_manager();
+        let result = manager.open_file(13, "/tmp/whatever.txt", None, None).await;
         assert!(matches!(result, Err(AppError::NeovimProcessNotRunning)));
     }
 
-    #[tokio::test]
-    async fn send_keys_fails_for_unpushed_buffer() {
-        if !nvim_available() {
-            eprintln!("SKIP: nvim binary not found");
-            return;
-        }
-        let manager = NeovimManager::new();
-        manager.start(604, test_ws_sender()).await.unwrap();
-        let result = manager.send_keys(604, "never/pushed.rs", "j").await;
-        assert!(matches!(result, Err(AppError::NeovimBufferNotFound { .. })));
+    #[test]
+    fn escape_for_ex_escapes_spaces_and_buffer_shorthands() {
+        assert_eq!(escape_for_ex("/tmp/a b.rs"), "/tmp/a\\ b.rs");
+        assert_eq!(escape_for_ex("/tmp/100%.rs"), "/tmp/100\\%.rs");
+        assert_eq!(escape_for_ex("/tmp/i#1.rs"), "/tmp/i\\#1.rs");
+        assert_eq!(escape_for_ex("/tmp/plain.rs"), "/tmp/plain.rs");
     }
 }
