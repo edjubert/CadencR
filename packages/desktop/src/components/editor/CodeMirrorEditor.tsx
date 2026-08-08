@@ -58,9 +58,6 @@ function CodeMirrorEditorContent({
         language={controller.languageExtension}
         readOnly={data.largeFile.largeMode}
         vimMode={data.isVimEnabled}
-        isNeovimIntegrated={data.isNeovimIntegrated}
-        neovimFeatureId={String(props.featureId)}
-        neovimFilePath={props.filePath}
         ergonomics={!data.largeFile.largeMode}
         onChange={buffer.handleChange}
         onSave={buffer.handleSave}
