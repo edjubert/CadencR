@@ -6,15 +6,18 @@
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
-use axum::response::Response;
+use axum::http::HeaderMap;
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::Router;
+use axum::{Extension, Router};
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 
+use crate::api::middleware::authenticate_ws;
 use crate::app_state::AppState;
+use crate::remote::RemoteContext;
 
 /// Client → server messages over the Neovim PTY socket.
 #[derive(Debug, Deserialize)]
@@ -63,19 +66,51 @@ pub struct NeovimWsQuery {
 }
 
 /// GET /api/neovim/ws?feature_id=<id> — upgrade to a Neovim PTY stream.
+///
+/// Authenticated exactly like `/api/terminal/ws`: browsers cannot set headers
+/// on a WebSocket, so the token travels as the `cadencr-token.<token>`
+/// subprotocol. The matched subprotocol MUST be echoed via
+/// `WebSocketUpgrade::protocols` — a 101 without it makes the browser fail the
+/// handshake ("Server did not respond with sent protocols") and reconnect
+/// forever.
 pub async fn neovim_ws_handler(
     ws: WebSocketUpgrade,
     State(app_state): State<AppState>,
     Query(query): Query<NeovimWsQuery>,
+    headers: HeaderMap,
+    // Present only on the remote listener; its absence means loopback.
+    remote: Option<Extension<RemoteContext>>,
 ) -> Response {
-    ws.on_upgrade(move |socket| handle_socket(socket, app_state, query.feature_id))
+    let (selected_proto, _device_id) =
+        match authenticate_ws(&headers, &app_state, remote.as_ref().map(|e| &e.0)).await {
+            Ok(resolved) => resolved,
+            Err(response) => return response,
+        };
+    ws.protocols([selected_proto])
+        .on_upgrade(move |socket| handle_socket(socket, app_state, query.feature_id))
+        .into_response()
 }
 
 async fn handle_socket(socket: WebSocket, app_state: AppState, feature_id: i64) {
     let (mut sink, mut stream) = socket.split();
 
-    // The process is started explicitly over HTTP; attaching never spawns one,
-    // so a spawn failure surfaces in a real HTTP response instead of here.
+    // Auto-start the Neovim process for this feature if it isn't running yet.
+    // The HTTP `/api/neovim/start` route is still available for explicit
+    // management; attaching via WebSocket now lazily creates the process so
+    // the editor panel doesn't get stuck in a reconnect loop.
+    if app_state.neovim_manager.start(feature_id).await.is_err() {
+        let _ = sink
+            .send(Message::Text(
+                ServerMessage::Error {
+                    message: format!("failed to start neovim for feature {feature_id}"),
+                }
+                .to_json()
+                .into(),
+            ))
+            .await;
+        return;
+    }
+
     let Some(pty_id) = app_state.neovim_manager.pty_id(feature_id).await else {
         let _ = sink
             .send(Message::Text(

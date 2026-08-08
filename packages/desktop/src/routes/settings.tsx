@@ -253,17 +253,9 @@ function useVimModeLevelOptions(): RadioCardOption<VimModeLevel>[] {
     },
     {
       value: "2",
-      label: "Integrated Neovim",
-      // The RPC-driven backend surface (and its /neovim/detect route) was
-      // removed pending a PTY-backed replacement — disable until it lands.
-      description: "Not available yet — backend migration in progress.",
-      disabled: true,
-    },
-    {
-      value: "3",
-      label: "Full UI integration",
-      description: "Statusline, which-key, netrw — not available yet.",
-      disabled: true,
+      label: "Full Neovim",
+      description:
+        "A real Neovim instance with your own config, plugins and UI, rendered in the editor panel.",
     },
   ];
 }
