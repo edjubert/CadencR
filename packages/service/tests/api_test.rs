@@ -1,7 +1,7 @@
 mod common;
 
-use common::{apply_ws_upgrade_headers, start_test_server};
 use axum::http::StatusCode;
+use common::{apply_ws_upgrade_headers, start_test_server};
 
 #[tokio::test]
 async fn test_health_check() {
@@ -383,10 +383,7 @@ async fn test_neovim_start_route_is_mounted() {
     let server = start_test_server().await;
     let resp = server
         .client
-        .post(format!(
-            "{}/api/features/1/neovim/start",
-            server.base_url
-        ))
+        .post(format!("{}/api/features/1/neovim/start", server.base_url))
         .send()
         .await
         .unwrap();
@@ -398,10 +395,7 @@ async fn test_neovim_stop_route_is_mounted() {
     let server = start_test_server().await;
     let resp = server
         .client
-        .post(format!(
-            "{}/api/features/1/neovim/stop",
-            server.base_url
-        ))
+        .post(format!("{}/api/features/1/neovim/stop", server.base_url))
         .send()
         .await
         .unwrap();
