@@ -7,10 +7,12 @@ use crate::{resolve_binary, SdkError};
 
 const MODELS_TIMEOUT: Duration = Duration::from_secs(15);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, bon::Builder)]
+#[builder(on(String, into))]
 pub struct CursorModel {
     pub id: String,
     pub label: String,
+    #[builder(default)]
     pub is_current: bool,
 }
 
@@ -68,11 +70,13 @@ fn parse_model_line(line: &str) -> Option<CursorModel> {
     if label.is_empty() {
         return None;
     }
-    Some(CursorModel {
-        id: id.to_string(),
-        label,
-        is_current,
-    })
+    Some(
+        CursorModel::builder()
+            .id(id)
+            .label(label)
+            .is_current(is_current)
+            .build(),
+    )
 }
 
 fn strip_ansi(value: &str) -> String {
@@ -107,21 +111,19 @@ mod tests {
         assert_eq!(
             models,
             vec![
-                CursorModel {
-                    id: "auto".to_string(),
-                    label: "Auto".to_string(),
-                    is_current: true,
-                },
-                CursorModel {
-                    id: "composer-2-fast".to_string(),
-                    label: "Composer 2 Fast".to_string(),
-                    is_current: false,
-                },
-                CursorModel {
-                    id: "gpt-5.3-codex-high".to_string(),
-                    label: "GPT-5.3 Codex High".to_string(),
-                    is_current: false,
-                },
+                CursorModel::builder()
+                    .id("auto")
+                    .label("Auto")
+                    .is_current(true)
+                    .build(),
+                CursorModel::builder()
+                    .id("composer-2-fast")
+                    .label("Composer 2 Fast")
+                    .build(),
+                CursorModel::builder()
+                    .id("gpt-5.3-codex-high")
+                    .label("GPT-5.3 Codex High")
+                    .build(),
             ]
         );
     }

@@ -10,8 +10,9 @@ use crate::shared::git_cli::{
     guard_positionals, run_git_safe_background, run_git_safe_refs_background,
 };
 
+use super::stash::commit_diff;
 use super::untracked::{count_untracked_lines, synthesize_untracked_new_file_diff};
-use super::util::run_git_quiet;
+use super::util::{run_git_quiet, FIRST_PARENT_MERGES};
 
 /// Parse git diff --stat summary line.
 pub(super) fn parse_stat_line(output: &str) -> GitStats {
@@ -156,9 +157,29 @@ pub async fn get_file_diff(
         // tree for a root commit) in one call, so it handles both cases without
         // a `sha^..sha` probe whose errors we'd have to swallow to reach the
         // root-commit fallback. `-M` matches the rename detection the commit
-        // changed-files listing uses, so file list and file diff agree.
+        // changed-files listing uses, so file list and file diff agree, and
+        // `FIRST_PARENT_MERGES` keeps merge commits (every stash is one) from
+        // diffing to nothing.
+        let diff = run_git_safe_background(
+            &["diff-tree", "--root", "-M", FIRST_PARENT_MERGES, "-p", sha],
+            &[],
+            &paths,
+            worktree_path,
+        )
+        .await?;
+        if !diff.is_empty() {
+            return Ok(diff);
+        }
+        // Empty means this path isn't in the first-parent diff at all. For a
+        // stash pushed with `--include-untracked` that is exactly what its new
+        // files look like — they live in a third parent — so read them from
+        // there before reporting "no hunks". Every other commit falls straight
+        // through with the empty diff it really has.
+        let Some(parent) = commit_diff::untracked_parent(worktree_path, sha).await? else {
+            return Ok(diff);
+        };
         return run_git_safe_background(
-            &["diff-tree", "--root", "-M", "-p", sha],
+            &["diff-tree", "--no-commit-id", "--root", "-p", &parent],
             &[],
             &paths,
             worktree_path,
@@ -213,16 +234,38 @@ pub async fn get_file_diff(
 }
 
 /// Get the diff for a specific commit.
+///
+/// One `diff-tree --root` call covers every commit shape the viewer can open:
+/// a root commit (no `sha^` to resolve), an ordinary commit, and a merge —
+/// which, via `FIRST_PARENT_MERGES`, includes stashes. A stash's untracked
+/// files are appended from its third parent, the only place they exist.
 pub async fn get_commit_diff(worktree_path: &Path, commit_sha: &str) -> Result<String, AppError> {
-    crate::shared::git_cli::guard_positionals(&[commit_sha])?;
-    let diff_arg = format!("{commit_sha}^..{commit_sha}");
-    match run_git_safe_refs_background(&["diff"], &[], &[&diff_arg], worktree_path).await {
-        Ok(stdout) => Ok(stdout),
-        Err(_) => {
-            // Fallback for root commits
-            Ok(run_git_quiet(&["diff-tree", "--root", "-p", commit_sha], worktree_path).await)
-        }
+    guard_positionals(&[commit_sha])?;
+    let args = [
+        "diff-tree",
+        "--no-commit-id",
+        "--root",
+        "-M",
+        FIRST_PARENT_MERGES,
+        "-p",
+    ];
+    let refs = [commit_sha];
+    let (mut diff, untracked_parent) = tokio::try_join!(
+        run_git_safe_refs_background(&args, &[], &refs, worktree_path),
+        commit_diff::untracked_parent(worktree_path, commit_sha),
+    )?;
+
+    if let Some(parent) = untracked_parent {
+        let untracked = run_git_safe_refs_background(
+            &["diff-tree", "--no-commit-id", "--root", "-p"],
+            &[],
+            &[&parent],
+            worktree_path,
+        )
+        .await?;
+        diff.push_str(&untracked);
     }
+    Ok(diff)
 }
 
 #[cfg(test)]
@@ -243,6 +286,14 @@ mod tests {
         git(&["init", "-q", "-b", "main"], root);
         git(&["config", "user.email", "test@example.com"], root);
         git(&["config", "user.name", "Test"], root);
+    }
+
+    async fn rev_parse(root: &Path, rev: &str) -> String {
+        crate::shared::git_cli::run_git(&["rev-parse", rev], root)
+            .await
+            .unwrap()
+            .trim()
+            .to_string()
     }
 
     /// The per-file diff must scope to the requested path and fold staged +
@@ -369,17 +420,7 @@ mod tests {
         git(&["add", "."], root);
         git(&["commit", "-q", "-m", "rename"], root);
 
-        let sha = String::from_utf8(
-            Command::new("git")
-                .args(["rev-parse", "HEAD"])
-                .current_dir(root)
-                .output()
-                .expect("git available")
-                .stdout,
-        )
-        .unwrap()
-        .trim()
-        .to_string();
+        let sha = rev_parse(root, "HEAD").await;
 
         let diff = get_file_diff(root, "commit", None, Some(&sha), "new.txt", Some("old.txt"))
             .await
@@ -394,6 +435,90 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    /// Set up a repo with one stash holding a tracked edit and an untracked
+    /// new file, and return `(repo, stash sha)`.
+    async fn repo_with_mixed_stash() -> (tempfile::TempDir, String) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        init_repo(root);
+        git(&["config", "commit.gpgsign", "false"], root);
+        std::fs::write(root.join("tracked.txt"), "one\n").unwrap();
+        git(&["add", "."], root);
+        git(&["commit", "-q", "-m", "init"], root);
+
+        std::fs::write(root.join("tracked.txt"), "one\ntwo\n").unwrap();
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/fresh.txt"), "hello\nworld\n").unwrap();
+        git(&["stash", "push", "-u", "-q", "-m", "mixed"], root);
+
+        let sha = rev_parse(root, "refs/stash").await;
+        (tmp, sha)
+    }
+
+    /// A stash is a merge commit, so a plain `diff-tree` reports it as changing
+    /// nothing; and its untracked files live in a third parent the first-parent
+    /// diff can't see. Both halves must reach the per-file diff.
+    #[tokio::test]
+    async fn get_file_diff_covers_both_halves_of_a_stash() {
+        let (tmp, sha) = repo_with_mixed_stash().await;
+        let root = tmp.path();
+
+        let tracked = get_file_diff(root, "commit", None, Some(&sha), "tracked.txt", None)
+            .await
+            .unwrap();
+        assert!(tracked.contains("diff --git a/tracked.txt"), "{tracked}");
+        assert!(tracked.contains("+two"), "{tracked}");
+
+        let untracked = get_file_diff(root, "commit", None, Some(&sha), "sub/fresh.txt", None)
+            .await
+            .unwrap();
+        // A pure patch, like every other per-file diff: the untracked parent's
+        // own sha must not leak in as a leading commit-id line.
+        assert!(untracked.starts_with("diff --git"), "{untracked}");
+        assert!(untracked.contains("new file mode"), "{untracked}");
+        assert!(untracked.contains("+hello"), "{untracked}");
+        assert!(untracked.contains("+world"), "{untracked}");
+        // Scoped to the requested path only.
+        assert!(!untracked.contains("tracked.txt"), "{untracked}");
+    }
+
+    /// The aggregate commit diff must carry the same two halves, and stay a
+    /// pure patch (no leading commit-id line) for the parser downstream.
+    #[tokio::test]
+    async fn get_commit_diff_includes_stashed_untracked_files() {
+        let (tmp, sha) = repo_with_mixed_stash().await;
+        let root = tmp.path();
+
+        let diff = get_commit_diff(root, &sha).await.unwrap();
+        assert!(diff.starts_with("diff --git"), "{diff}");
+        assert!(diff.contains("diff --git a/tracked.txt"), "{diff}");
+        assert!(diff.contains("+two"), "{diff}");
+        assert!(diff.contains("diff --git a/sub/fresh.txt"), "{diff}");
+        assert!(diff.contains("+hello"), "{diff}");
+    }
+
+    /// Ordinary commits keep their old behaviour: a root commit still diffs
+    /// against the empty tree, and a bad ref still errors instead of silently
+    /// returning an empty patch.
+    #[tokio::test]
+    async fn get_commit_diff_handles_root_commit_and_bad_ref() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        init_repo(root);
+        git(&["config", "commit.gpgsign", "false"], root);
+        std::fs::write(root.join("first.txt"), "hello\n").unwrap();
+        git(&["add", "."], root);
+        git(&["commit", "-q", "-m", "root"], root);
+
+        let sha = rev_parse(root, "HEAD").await;
+
+        let diff = get_commit_diff(root, &sha).await.unwrap();
+        assert!(diff.contains("diff --git a/first.txt"), "{diff}");
+        assert!(diff.contains("+hello"), "{diff}");
+
+        assert!(get_commit_diff(root, "deadbeef").await.is_err());
     }
 
     #[test]

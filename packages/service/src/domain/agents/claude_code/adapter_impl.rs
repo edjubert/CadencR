@@ -305,27 +305,26 @@ impl AgentRuntimeAdapter for ClaudeCodeAdapter {
             }
             None => config.env,
         };
-        let options = claude_agent_sdk_rs::Options {
-            cwd: config.cwd,
-            permission_mode: config.permission_mode.map(map_permission_mode),
-            model,
-            effort: config.thinking_effort,
-            system_prompt: config.system_prompt,
-            resume: config.resume_session_id,
-            allow_dangerously_skip_permissions: config.allow_bypass_permissions,
-            mcp_servers: config.mcp_servers.map(|servers| {
+        let options = claude_agent_sdk_rs::Options::builder()
+            .cwd(config.cwd)
+            .maybe_permission_mode(config.permission_mode.map(map_permission_mode))
+            .maybe_model(model)
+            .maybe_effort(config.thinking_effort)
+            .maybe_system_prompt(config.system_prompt)
+            .maybe_resume(config.resume_session_id)
+            .allow_dangerously_skip_permissions(config.allow_bypass_permissions)
+            .maybe_mcp_servers(config.mcp_servers.map(|servers| {
                 servers
                     .into_iter()
                     .map(|(name, cfg)| (name, map_mcp_server_config(cfg)))
                     .collect()
-            }),
-            can_use_tool: config.permission_handler.map(|handler| {
+            }))
+            .maybe_can_use_tool(config.permission_handler.map(|handler| {
                 std::sync::Arc::new(ClaudeCanUseToolAdapter { inner: handler })
                     as std::sync::Arc<dyn claude_agent_sdk_rs::CanUseTool>
-            }),
-            env,
-            ..claude_agent_sdk_rs::Options::default()
-        };
+            }))
+            .maybe_env(env)
+            .build();
 
         let query = claude_agent_sdk_rs::query(content, options)
             .await

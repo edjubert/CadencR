@@ -10,6 +10,7 @@ import {
   parseFeatureRenamePayload,
   parseFeatureUpdatedPayload,
   parseEffortPayload,
+  parseFastModePayload,
   parseLifecyclePayload,
   parseModePayload,
   parseModelPayload,
@@ -46,7 +47,6 @@ import {
 } from "./ws-envelope-turn-handlers";
 import { SESSION_ACTION, type SessionActionName } from "./ws-session-action-names";
 import { discardStreamDeltas } from "./ws-delta-coalescer";
-
 export type { StoreAccessors } from "./ws-envelope-types";
 
 // Main envelope handler
@@ -157,6 +157,7 @@ const SESSION_ACTION_HANDLERS: Record<SessionActionName, SessionActionHandler> =
   [SESSION_ACTION.providerSetOk]: handleProviderSetOk,
   [SESSION_ACTION.modelSetOk]: handleModelSetOk,
   [SESSION_ACTION.effortSetOk]: handleEffortSetOk,
+  [SESSION_ACTION.fastModeSetOk]: handleFastModeSetOk,
   [SESSION_ACTION.profileChanged]: handleProfileChanged,
   [SESSION_ACTION.compactStarted]: handleCompactStarted,
   [SESSION_ACTION.compactOk]: handleCompactOk,
@@ -253,6 +254,7 @@ function handleProviderSetOk(ctx: StoreAccessors, sessionId: string, payload: un
       currentProviderId: p.provider,
       runtimeProvider: p.provider,
       ...(providerChanged ? { currentModelId: "" } : {}),
+      ...(providerChanged ? { fastMode: false } : {}),
       mcpServers: null,
       supportsPromptReceipts: p.supports_prompt_receipts ?? false,
       ...(accessMode
@@ -293,6 +295,12 @@ function handleEffortSetOk(ctx: StoreAccessors, sessionId: string, payload: unkn
   if (p?.thinking_effort !== previous) {
     void queryClient.invalidateQueries({ queryKey: getWorkspaceSettingsQueryKey() });
   }
+}
+
+function handleFastModeSetOk(ctx: StoreAccessors, sessionId: string, payload: unknown): void {
+  const parsed = parseFastModePayload(payload);
+  if (!parsed) return;
+  ctx.set(updateSession(ctx.get(), sessionId, { fastMode: parsed.enabled }));
 }
 
 function handleProfileChanged(ctx: StoreAccessors, sessionId: string, payload: unknown): void {

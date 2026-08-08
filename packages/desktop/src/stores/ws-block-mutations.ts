@@ -189,7 +189,9 @@ export function applyMutations(
     const idx = rootResultIndexById(result, streamState, mut.block.id);
     if (idx !== -1) {
       const existing = { ...result[idx] };
-      existing.content = mergeToolContent(existing, mut.block.content, mut.action);
+      const merged = mergeToolContent(existing, mut.block.content, mut.action);
+      existing.content = merged.text;
+      if (merged.truncated) existing.truncatedContent = true;
       syncToolUseMap(streamState, existing);
       result[idx] = existing;
       recordRootRefChange(streamState, existing.id, existing);
@@ -357,7 +359,9 @@ function applyChildUpdate(streamState: StreamingState, mut: BlockMutation): void
     const childIdx = parentBlock.childBlocks.findIndex((b) => b.id === mut.block.id);
     if (childIdx === -1) continue;
     const child = { ...parentBlock.childBlocks[childIdx] };
-    child.content = mergeToolContent(child, mut.block.content, mut.action);
+    const merged = mergeToolContent(child, mut.block.content, mut.action);
+    child.content = merged.text;
+    if (merged.truncated) child.truncatedContent = true;
     syncToolUseMap(streamState, child);
     parentBlock.childBlocks[childIdx] = child;
     // The child lives in a root block's subtree; its content changed in place

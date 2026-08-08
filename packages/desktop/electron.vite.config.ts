@@ -84,9 +84,9 @@ function cspMetaPlugin(
 
 /**
  * Git branch this bundle is built from, consumed by the sidebar environment
- * badge (see `src/lib/app-environment.ts`): `next` shows NEXT, anything else
- * shows BETA. Packaged release builds check out a tag, so HEAD is detached and
- * they land on BETA like any other non-`next` build.
+ * badge (see `src/lib/app-environment.ts`): a `vX.Y.Z` integration branch shows
+ * its version, anything else shows BETA. Packaged release builds check out a
+ * tag, so HEAD is detached and they land on BETA.
  */
 function resolveBuildBranch(): string {
   try {

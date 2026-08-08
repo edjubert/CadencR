@@ -96,6 +96,7 @@ use super::{models, routes};
         models::CheckoutValidateBody,
         models::CommitBody,
         models::PushBody,
+        models::PushForceMode,
         models::PushInputBody,
         models::FileMutationBody,
         models::StashPushBody,

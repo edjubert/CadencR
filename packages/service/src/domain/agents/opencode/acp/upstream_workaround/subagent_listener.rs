@@ -24,7 +24,66 @@ use crate::domain::agents::adapter::{
 };
 use crate::domain::agents::opencode::stream_synthesizer::StreamSynthesizer;
 
-pub type PendingSubagentTasks = Arc<StdMutex<VecDeque<String>>>;
+/// Tracks open Task/Agent tool calls waiting to be paired with a child
+/// session. Prefer an explicit `sessionId`/`task_id` binding when OpenCode
+/// surfaces one; fall back to FIFO for the race where the child appears
+/// before the tool update carrying that id.
+#[derive(Debug, Default)]
+pub struct PendingSubagentState {
+    unbound: VecDeque<String>,
+    by_child_session: HashMap<String, String>,
+}
+
+impl PendingSubagentState {
+    pub fn push_tool_call(&mut self, tool_call_id: String) {
+        if self.unbound.iter().any(|id| id == &tool_call_id)
+            || self.by_child_session.values().any(|id| id == &tool_call_id)
+        {
+            return;
+        }
+        self.unbound.push_back(tool_call_id);
+    }
+
+    /// Remember that `tool_call_id` owns `child_session_id` so absorb can
+    /// pair without relying on FIFO order. No-ops when the mapping is
+    /// unchanged or the tool call was already consumed by FIFO pairing
+    /// (avoids orphan bindings that keep the listener permanently active).
+    pub fn bind_child_session(&mut self, child_session_id: &str, tool_call_id: &str) {
+        if child_session_id.is_empty() || tool_call_id.is_empty() {
+            return;
+        }
+        if self
+            .by_child_session
+            .get(child_session_id)
+            .map(String::as_str)
+            == Some(tool_call_id)
+        {
+            return;
+        }
+        let still_pending = self.unbound.iter().any(|id| id == tool_call_id)
+            || self.by_child_session.values().any(|id| id == tool_call_id);
+        if !still_pending {
+            return;
+        }
+        self.unbound.retain(|id| id != tool_call_id);
+        self.by_child_session.retain(|_, id| id != tool_call_id);
+        self.by_child_session
+            .insert(child_session_id.to_string(), tool_call_id.to_string());
+    }
+
+    pub fn take_for_child(&mut self, child_session_id: &str) -> Option<String> {
+        if let Some(id) = self.by_child_session.remove(child_session_id) {
+            return Some(id);
+        }
+        self.unbound.pop_front()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.unbound.is_empty() && self.by_child_session.is_empty()
+    }
+}
+
+pub type PendingSubagentTasks = Arc<StdMutex<PendingSubagentState>>;
 
 /// Pending-permissions map; the adapter's `respond_permission_fallback`
 /// reads it to route a reply to `POST /permission/{id}/reply`.
@@ -49,7 +108,7 @@ pub(super) async fn poll_once(
         }
     }
     for child_id in state.known_children() {
-        if poll_child_messages(client, &child_id, state, runtime_tx)
+        if poll_child_messages(client, directory, &child_id, state, runtime_tx)
             .await
             .is_err()
         {
@@ -61,11 +120,12 @@ pub(super) async fn poll_once(
 
 async fn poll_child_messages(
     client: &OpenCodeClient,
+    directory: &str,
     child_id: &str,
     state: &mut ListenerState,
     runtime_tx: &mpsc::Sender<Result<RuntimeEvent, RuntimeError>>,
 ) -> Result<(), ()> {
-    let messages = match client.list_messages(child_id).await {
+    let messages = match client.list_messages(child_id, Some(directory)).await {
         Ok(messages) => messages,
         Err(error) => {
             tracing::debug!(%error, child = %child_id, "OpenCode sub-agent listener: list_messages failed");
@@ -166,7 +226,11 @@ impl ListenerState {
         if historical.contains(&session.id) || self.child_to_parent.contains_key(&session.id) {
             return;
         }
-        let parent_tool_use_id = match pending_tasks.lock().ok().and_then(|mut q| q.pop_front()) {
+        let parent_tool_use_id = match pending_tasks
+            .lock()
+            .ok()
+            .and_then(|mut pending| pending.take_for_child(&session.id))
+        {
             Some(id) => id,
             None => {
                 tracing::warn!(child = %session.id, "OpenCode sub-agent listener: child session has no pending Task call_id to pair with");
@@ -245,19 +309,21 @@ impl ListenerState {
 
 #[cfg(test)]
 mod tests {
-    use super::{ListenerState, PendingSubagentTasks, PermissionRegistry};
+    use super::{ListenerState, PendingSubagentState, PendingSubagentTasks, PermissionRegistry};
     use opencode_sdk_rs::{
         Message, MessagePart, MessageRole, PendingPermission, Session, SessionStatus,
     };
     use serde_json::json;
-    use std::collections::{HashMap, VecDeque};
+    use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use tokio::sync::RwLock;
 
     fn pending(ids: &[&str]) -> PendingSubagentTasks {
-        Arc::new(Mutex::new(
-            ids.iter().map(|s| s.to_string()).collect::<VecDeque<_>>(),
-        ))
+        let mut state = PendingSubagentState::default();
+        for id in ids {
+            state.push_tool_call((*id).to_string());
+        }
+        Arc::new(Mutex::new(state))
     }
     fn registry() -> PermissionRegistry {
         Arc::new(RwLock::new(HashMap::new()))
@@ -312,7 +378,7 @@ mod tests {
         let queue = pending(&["call_a", "call_b"]);
         state.prime_snapshot(&[child("ses_old", "root"), child("not_mine", "other_root")]);
         assert!(state.child_to_parent.is_empty());
-        assert_eq!(queue.lock().unwrap().len(), 2);
+        assert!(!queue.lock().unwrap().is_empty());
         let after = [
             child("ses_old", "root"),
             child("ses_new_1", "root"),
@@ -325,9 +391,49 @@ mod tests {
     }
 
     #[test]
+    fn session_id_binding_wins_over_fifo_order() {
+        let mut state = ListenerState::new("root".into());
+        let queue = pending(&["call_first", "call_second"]);
+        state.prime_snapshot(&[]);
+        queue
+            .lock()
+            .unwrap()
+            .bind_child_session("ses_b", "call_second");
+        state.absorb_children(&[child("ses_b", "root"), child("ses_a", "root")], &queue);
+        assert_eq!(state.child_to_parent.get("ses_b").unwrap(), "call_second");
+        assert_eq!(state.child_to_parent.get("ses_a").unwrap(), "call_first");
+        assert!(queue.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn bind_after_fifo_consume_does_not_orphan_mapping() {
+        let mut state = ListenerState::new("root".into());
+        let queue = pending(&["call_a"]);
+        state.prime_snapshot(&[]);
+        state.absorb_children(&[child("ses_a", "root")], &queue);
+        assert!(queue.lock().unwrap().is_empty());
+        // Late task_id update must not re-insert a consumed tool call.
+        queue.lock().unwrap().bind_child_session("ses_a", "call_a");
+        assert!(queue.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn bind_is_idempotent_for_identical_mapping() {
+        let queue = pending(&["call_a"]);
+        {
+            let mut pending = queue.lock().unwrap();
+            pending.bind_child_session("ses_a", "call_a");
+            pending.bind_child_session("ses_a", "call_a");
+            assert!(!pending.is_empty());
+            assert_eq!(pending.take_for_child("ses_a").as_deref(), Some("call_a"));
+            assert!(pending.is_empty());
+        }
+    }
+
+    #[test]
     fn registration_is_idempotent_and_ignores_wrong_or_missing_parent() {
         let (mut state, queue) = primed_state();
-        queue.lock().unwrap().push_back("call_a".into());
+        queue.lock().unwrap().push_tool_call("call_a".into());
         state.absorb_children(&[child("ses_child", "root")], &queue);
         state.absorb_children(&[child("ses_child", "root")], &queue);
         assert_eq!(state.child_to_parent.len(), 1);
@@ -340,7 +446,7 @@ mod tests {
     #[test]
     fn handles_assistant_message_deltas_for_known_child_only() {
         let (mut state, queue) = primed_state();
-        queue.lock().unwrap().push_back("call_task".into());
+        queue.lock().unwrap().push_tool_call("call_task".into());
         state.absorb_children(&[child("ses_child", "root")], &queue);
         let first = state.handle_message(asst_text("ses_child", "Hello"));
         let second = state.handle_message(asst_text("ses_child", "Hello world"));
@@ -357,7 +463,7 @@ mod tests {
     #[tokio::test]
     async fn surface_permission_handles_known_dedupe_root_unknown_pair_and_prune() {
         let (mut state, queue) = primed_state();
-        queue.lock().unwrap().push_back("call_task_1".into());
+        queue.lock().unwrap().push_tool_call("call_task_1".into());
         state.absorb_children(&[child("ses_child", "root")], &queue);
         let reg = registry();
         // Known child → event stamped with parent_tool_use_id + registry entry.
@@ -390,7 +496,7 @@ mod tests {
             .surface_permission(perm("per_x", "ses_late"), &reg)
             .await
             .is_none());
-        q.lock().unwrap().push_back("call_late".into());
+        q.lock().unwrap().push_tool_call("call_late".into());
         s.absorb_children(&[child("ses_late", "root")], &q);
         assert!(s
             .surface_permission(perm("per_x", "ses_late"), &reg)

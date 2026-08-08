@@ -16,6 +16,75 @@ impl RuntimeUsage {
     }
 }
 
+/// One provider/model slice inside a token-usage report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeTokenUsageEntry {
+    /// Provider-native model id when the report contains a per-model split.
+    /// Otherwise the recorder uses the session's captured model.
+    pub model_id: Option<String>,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
+/// Provider-native accounting attached to a runtime event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeTokenUsage {
+    /// Final usage for one completed turn. `event_id` makes replay idempotent.
+    Delta {
+        /// Provider-native result/request identity.
+        event_id: Option<String>,
+        /// Correlation identity shared with history import. Claimed alongside
+        /// `event_id` without replacing the provider-native replay key.
+        correlation_id: Option<String>,
+        entries: Vec<RuntimeTokenUsageEntry>,
+    },
+    /// Monotonic session/thread totals. The recorder persists a checkpoint and
+    /// adds only the increase since the previous event.
+    Cumulative { entry: RuntimeTokenUsageEntry },
+}
+
+impl RuntimeTokenUsage {
+    pub fn delta(event_id: Option<String>, entries: Vec<RuntimeTokenUsageEntry>) -> Self {
+        Self::Delta {
+            event_id,
+            correlation_id: None,
+            entries,
+        }
+    }
+
+    pub fn cumulative(entry: RuntimeTokenUsageEntry) -> Self {
+        Self::Cumulative { entry }
+    }
+
+    /// Add a history/live correlation key while preserving the provider's own
+    /// replay identity. `fallback` is used only when the provider supplied no
+    /// event id at all.
+    pub fn correlate_event_id(&mut self, correlation: Option<String>, fallback: Option<String>) {
+        if let Self::Delta {
+            event_id,
+            correlation_id,
+            ..
+        } = self
+        {
+            *correlation_id = correlation.filter(|id| Some(id) != event_id.as_ref());
+            if event_id.is_none() {
+                *event_id = fallback;
+            }
+        }
+    }
+
+    pub fn is_noop(&self) -> bool {
+        match self {
+            Self::Delta { entries, .. } => entries
+                .iter()
+                .all(|entry| entry.input_tokens == 0 && entry.output_tokens == 0),
+            // A zero cumulative snapshot is a meaningful counter reset. The
+            // recorder must persist it so a later increase starts from zero.
+            Self::Cumulative { .. } => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimePermissionMode {
     Default,
@@ -79,6 +148,7 @@ pub struct RuntimeSpawnConfig {
     pub access_mode: Option<RuntimeAccessMode>,
     pub model: Option<String>,
     pub thinking_effort: Option<String>,
+    pub fast_mode: bool,
     pub system_prompt: Option<String>,
     pub resume_session_id: Option<String>,
     /// Allows a provider process to switch into its dangerous Bypass mode
@@ -101,6 +171,7 @@ impl Default for RuntimeSpawnConfig {
             access_mode: None,
             model: None,
             thinking_effort: None,
+            fast_mode: false,
             system_prompt: None,
             resume_session_id: None,
             allow_bypass_permissions: false,

@@ -21,6 +21,7 @@ pub struct AcpClient {
 }
 
 /// Options for `AcpClient::spawn`.
+#[derive(bon::Builder)]
 pub struct AcpSpawnOptions {
     pub command: Command,
     pub client_info: AcpClientInfo,
@@ -170,9 +171,20 @@ mod tests {
 
     use agent_client_protocol::UntypedMessage;
 
-    use super::{AcpClient, AcpClientInfo};
+    use super::{AcpClient, AcpClientInfo, AcpSpawnOptions};
     use crate::domain::agents::acp::error::AcpError;
     use crate::domain::agents::acp::types::AcpEvent;
+
+    #[test]
+    fn spawn_options_builder_defaults_transport_controls() {
+        let options = AcpSpawnOptions::builder()
+            .command(tokio::process::Command::new("/bin/false"))
+            .client_info(AcpClientInfo::default())
+            .build();
+
+        assert!(options.max_line_bytes.is_none());
+        assert!(options.spawn_guard.is_none());
+    }
 
     async fn build_in_memory_client() -> (
         AcpClient,

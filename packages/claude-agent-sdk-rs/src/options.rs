@@ -8,12 +8,16 @@ use crate::mcp::McpServerConfig;
 use crate::permissions::{CanUseTool, PermissionMode};
 
 /// Configuration for a Claude query.
+#[derive(bon::Builder)]
+#[builder(on(String, into))]
 pub struct Options {
     /// Working directory for the CLI process.
+    #[builder(default = default_cwd(), into)]
     pub cwd: PathBuf,
     /// Permission mode (default, plan, acceptEdits, bypassPermissions, dontAsk).
     pub permission_mode: Option<PermissionMode>,
     /// Override path to the `claude` CLI binary.
+    #[builder(into)]
     pub path_to_cli: Option<PathBuf>,
     /// Model name (e.g. "claude-opus-4-5").
     pub model: Option<String>,
@@ -28,18 +32,22 @@ pub struct Options {
     /// Allow entering `bypassPermissions` later without starting in that
     /// mode. This maps to Claude Code's
     /// `--allow-dangerously-skip-permissions` capability flag.
+    #[builder(default)]
     pub allow_dangerously_skip_permissions: bool,
     /// MCP server configurations, keyed by server name.
     pub mcp_servers: Option<HashMap<String, McpServerConfig>>,
     /// Settings sources (default: ["user", "project", "local"]).
+    #[builder(default = default_setting_sources())]
     pub setting_sources: Vec<String>,
     /// Always `true` — Cadencr always uses streaming partial messages.
     /// Hardcoded in `to_cli_args` via `--output-format stream-json`.
+    #[builder(skip = true)]
     pub include_partial_messages: bool,
     /// Re-emit stdin user messages on stdout so hosts can acknowledge
     /// when a steering prompt has actually reached Claude Code. Enabled by
     /// default; tests may disable it for mock CLIs that exit without draining
     /// every startup/control stdin frame.
+    #[builder(default = true)]
     pub replay_user_messages: bool,
     /// Language / locale override passed to the CLI.
     pub language: Option<String>,
@@ -63,29 +71,26 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Self {
-        Self {
-            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            permission_mode: None,
-            path_to_cli: None,
-            model: None,
-            effort: None,
-            system_prompt: None,
-            resume: None,
-            allowed_tools: None,
-            allow_dangerously_skip_permissions: false,
-            mcp_servers: None,
-            setting_sources: vec![
-                "user".to_string(),
-                "project".to_string(),
-                "local".to_string(),
-            ],
-            include_partial_messages: true,
-            replay_user_messages: true,
-            language: None,
-            can_use_tool: None,
-            abort_signal: None,
-            env: None,
-        }
+        Self::builder().build()
+    }
+}
+
+fn default_cwd() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn default_setting_sources() -> Vec<String> {
+    vec!["user".into(), "project".into(), "local".into()]
+}
+
+#[allow(clippy::new_without_default)]
+impl OptionsBuilder {
+    /// Start building [`Options`].
+    ///
+    /// Prefer [`Options::builder`] in new code.
+    #[deprecated(since = "0.9.0", note = "use Options::builder()")]
+    pub fn new() -> Self {
+        Options::builder()
     }
 }
 
@@ -186,103 +191,5 @@ impl Options {
         }
 
         args
-    }
-}
-
-/// Builder for [`Options`] with chainable methods.
-#[derive(Default)]
-pub struct OptionsBuilder {
-    inner: Options,
-}
-
-impl OptionsBuilder {
-    pub fn new() -> Self {
-        Self {
-            inner: Options::default(),
-        }
-    }
-
-    pub fn cwd(mut self, cwd: impl Into<PathBuf>) -> Self {
-        self.inner.cwd = cwd.into();
-        self
-    }
-
-    pub fn permission_mode(mut self, mode: PermissionMode) -> Self {
-        self.inner.permission_mode = Some(mode);
-        self
-    }
-
-    pub fn path_to_cli(mut self, path: impl Into<PathBuf>) -> Self {
-        self.inner.path_to_cli = Some(path.into());
-        self
-    }
-
-    pub fn model(mut self, model: impl Into<String>) -> Self {
-        self.inner.model = Some(model.into());
-        self
-    }
-
-    pub fn effort(mut self, effort: impl Into<String>) -> Self {
-        self.inner.effort = Some(effort.into());
-        self
-    }
-
-    pub fn system_prompt(mut self, prompt: impl Into<String>) -> Self {
-        self.inner.system_prompt = Some(prompt.into());
-        self
-    }
-
-    pub fn resume(mut self, session_id: impl Into<String>) -> Self {
-        self.inner.resume = Some(session_id.into());
-        self
-    }
-
-    pub fn allowed_tools(mut self, tools: Vec<String>) -> Self {
-        self.inner.allowed_tools = Some(tools);
-        self
-    }
-
-    pub fn allow_dangerously_skip_permissions(mut self, enabled: bool) -> Self {
-        self.inner.allow_dangerously_skip_permissions = enabled;
-        self
-    }
-
-    pub fn mcp_servers(mut self, servers: HashMap<String, McpServerConfig>) -> Self {
-        self.inner.mcp_servers = Some(servers);
-        self
-    }
-
-    pub fn setting_sources(mut self, sources: Vec<String>) -> Self {
-        self.inner.setting_sources = sources;
-        self
-    }
-
-    pub fn language(mut self, lang: impl Into<String>) -> Self {
-        self.inner.language = Some(lang.into());
-        self
-    }
-
-    pub fn replay_user_messages(mut self, enabled: bool) -> Self {
-        self.inner.replay_user_messages = enabled;
-        self
-    }
-
-    pub fn can_use_tool(mut self, handler: Arc<dyn CanUseTool>) -> Self {
-        self.inner.can_use_tool = Some(handler);
-        self
-    }
-
-    pub fn abort_signal(mut self, token: CancellationToken) -> Self {
-        self.inner.abort_signal = Some(token);
-        self
-    }
-
-    pub fn env(mut self, env: HashMap<String, String>) -> Self {
-        self.inner.env = Some(env);
-        self
-    }
-
-    pub fn build(self) -> Options {
-        self.inner
     }
 }

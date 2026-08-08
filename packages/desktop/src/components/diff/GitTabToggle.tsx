@@ -292,7 +292,22 @@ function Tab({
           />
         )}
         {!compact && (
-          <span aria-hidden className={cn("truncate", labelClassName, !active && COMPACT_LABELS)}>
+          <span
+            aria-hidden
+            className={cn(
+              // `truncate` clips to the span's own box, and the button's
+              // `leading-none` makes that box exactly one em tall — which is
+              // shorter than the glyphs in it, so descenders were sheared off
+              // ("Changes" lost the tail of its g). The line box needs the room
+              // the font actually asks for; the button stays `h-6` regardless.
+              // Unitless rather than `leading-4`: the label's size is a fixed
+              // 12px, so a rem-based line box would shrink away from it the
+              // moment the root font-size does (the mobile zoom path).
+              "truncate leading-[1.35]",
+              labelClassName,
+              !active && COMPACT_LABELS,
+            )}
+          >
             {label}
           </span>
         )}

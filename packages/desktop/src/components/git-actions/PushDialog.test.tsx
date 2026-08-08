@@ -1,19 +1,25 @@
 /**
  * PushDialog test suite.
  *
- * Focuses on the SSH-prompt retry path:
+ * Covers the three user-facing behaviors:
  *
- *   - When `usePushInput().mutateAsync` rejects, the prompt input must STAY
- *     visible with the typed value preserved (the user has to be able to
- *     retry without retyping a passphrase). A toast surfaces the failure.
- *
- *   - When the second submit succeeds, the input disappears.
+ *   1. Force-mode selection — `f` / `l` mnemonics and the mouse path both
+ *      reach the mutation body, and Cmd+Enter submits with the selection.
+ *   2. Background/reopen — Cmd+Enter during a run closes the dialog without
+ *      cancelling the push.
+ *   3. The SSH-prompt retry path: when `usePushInput().mutateAsync` rejects,
+ *      the prompt input must STAY visible with the typed value preserved
+ *      (the user has to be able to retry without retyping a passphrase),
+ *      and a toast surfaces the failure.
  *
  * Mock strategy mirrors `CommitDialog.test.tsx`: hoisted `vi.fn` mocks for
  * the orval hooks so each test can choose its own `mutateAsync` behavior.
+ * The real `usePushSubmission` is wired through a harness, exactly like
+ * `GitActionButton` does in the app.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@/test-utils";
+import type { ReactElement } from "react";
+import { act, render, screen, waitFor } from "@/test-utils";
 import { usePushOutputStore } from "@/stores/usePushOutputStore";
 
 const mocks = vi.hoisted(() => {
@@ -38,10 +44,16 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("@/api/generated", () => ({
-  usePush: mocks.usePushMock,
-  usePushInput: mocks.usePushInputMock,
-}));
+vi.mock("@/api/generated", async (importOriginal) => {
+  // `PushForceMode` is a plain const object in the generated client; the
+  // dialog indexes it, so keep the real value and stub only the hooks.
+  const actual = await importOriginal<typeof import("@/api/generated")>();
+  return {
+    PushForceMode: actual.PushForceMode,
+    usePush: mocks.usePushMock,
+    usePushInput: mocks.usePushInputMock,
+  };
+});
 
 vi.mock("sonner", () => ({
   toast: {
@@ -51,6 +63,29 @@ vi.mock("sonner", () => ({
 }));
 
 import PushDialog from "./PushDialog";
+import { usePushSubmission } from "./usePushSubmission";
+
+interface TestPushDialogProps {
+  featureId: number;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+/**
+ * Mirrors `GitActionDialogs`: the controller keeps rendering (it lives in
+ * `GitActionButton`) while the dialog itself unmounts on close. Anything
+ * that must survive backgrounding therefore has to live in the controller,
+ * and these tests would catch it drifting back into the dialog.
+ */
+function TestPushDialog({
+  featureId,
+  open,
+  onOpenChange,
+}: TestPushDialogProps): ReactElement | null {
+  const submission = usePushSubmission({ featureId, open, onOpenChange });
+  if (!open) return null;
+  return <PushDialog featureId={featureId} open submission={submission} />;
+}
 
 beforeEach(() => {
   mocks.pushMutateAsync.mockReset();
@@ -74,23 +109,174 @@ function seedPrompt(featureId: number): void {
   store.append(featureId, "Enter passphrase for key '/home/u/.ssh/id_ed25519':");
 }
 
+/**
+ * The picker renders through the shared `RadioCardGroup`, whose accessible
+ * name is the whole card (label + mnemonic + description). Selecting by
+ * position keeps these assertions readable and immune to copy edits.
+ */
+function selectedMode(): string | undefined {
+  const group = screen.getByRole("radiogroup", { name: /push mode/i });
+  const checked = group.querySelector('[role="radio"][aria-checked="true"]');
+  return checked?.textContent?.trim().split(/\s{2,}|\n/)[0];
+}
+
+describe("PushDialog force modes", () => {
+  it("does not push until the user asks for it", () => {
+    render(<TestPushDialog featureId={1} open={true} onOpenChange={vi.fn()} />);
+    expect(mocks.pushMutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("pushes without a force flag by default", async () => {
+    mocks.pushMutateAsync.mockImplementation(() => new Promise(() => {}));
+    const { user } = render(<TestPushDialog featureId={1} open={true} onOpenChange={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: /^Push$/ }));
+
+    expect(mocks.pushMutateAsync).toHaveBeenCalledWith({
+      data: { feature_id: 1, force: "none" },
+    });
+  });
+
+  it("selects force-with-lease with the l mnemonic and submits it with Cmd+Enter", async () => {
+    mocks.pushMutateAsync.mockImplementation(() => new Promise(() => {}));
+    const { user } = render(<TestPushDialog featureId={4} open={true} onOpenChange={vi.fn()} />);
+
+    await user.keyboard("l");
+    expect(selectedMode()).toMatch(/^Force with lease/);
+
+    await user.keyboard("{Meta>}{Enter}{/Meta}");
+
+    expect(mocks.pushMutateAsync).toHaveBeenCalledWith({
+      data: { feature_id: 4, force: "force-with-lease" },
+    });
+  });
+
+  it("moves between modes with the f and p mnemonics", async () => {
+    mocks.pushMutateAsync.mockImplementation(() => new Promise(() => {}));
+    const { user } = render(<TestPushDialog featureId={5} open={true} onOpenChange={vi.fn()} />);
+
+    await user.keyboard("f");
+    expect(selectedMode()).toMatch(/^Force(?! with)/);
+
+    // `p` is the way back to a plain push — the default is never mouse-only.
+    await user.keyboard("p");
+    expect(selectedMode()).toMatch(/^Push/);
+
+    await user.keyboard("f");
+    await user.click(screen.getByRole("button", { name: /Force push/ }));
+
+    expect(mocks.pushMutateAsync).toHaveBeenCalledWith({
+      data: { feature_id: 5, force: "force" },
+    });
+  });
+});
+
+describe("PushDialog picker affordances", () => {
+  it("does not auto-focus a mode card on open", () => {
+    // Regression: Radix's default `onOpenAutoFocus` put a focus ring on the
+    // first card, competing with the radio dot that marks the real selection.
+    render(<TestPushDialog featureId={1} open={true} onOpenChange={vi.fn()} />);
+
+    const group = screen.getByRole("radiogroup", { name: /push mode/i });
+    for (const radio of group.querySelectorAll('[role="radio"]')) {
+      expect(radio).not.toBe(document.activeElement);
+    }
+  });
+
+  it("gives every mode a visible mnemonic, including the default", () => {
+    render(<TestPushDialog featureId={1} open={true} onOpenChange={vi.fn()} />);
+
+    const group = screen.getByRole("radiogroup", { name: /push mode/i });
+    const badges = [...group.querySelectorAll("kbd")].map((k) => k.textContent?.trim());
+    expect(badges).toEqual(["p", "l", "f"]);
+  });
+
+  it("shows the exact command each mode will run", async () => {
+    const { user } = render(<TestPushDialog featureId={1} open={true} onOpenChange={vi.fn()} />);
+
+    expect(screen.getByText("git push -u origin HEAD")).toBeInTheDocument();
+
+    await user.keyboard("l");
+    expect(screen.getByText("git push -u --force-with-lease origin HEAD")).toBeInTheDocument();
+
+    await user.keyboard("f");
+    expect(screen.getByText("git push -u --force origin HEAD")).toBeInTheDocument();
+  });
+});
+
+describe("PushDialog background run", () => {
+  it("backgrounds a running push with Cmd+Enter instead of starting a second one", async () => {
+    mocks.pushMutateAsync.mockImplementation(() => new Promise(() => {}));
+    const onOpenChange = vi.fn();
+    const { user } = render(
+      <TestPushDialog featureId={6} open={true} onOpenChange={onOpenChange} />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /^Push$/ }));
+    expect(await screen.findByRole("button", { name: /Run in background/ })).toBeInTheDocument();
+
+    await user.keyboard("{Meta>}{Enter}{/Meta}");
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(mocks.pushMutateAsync).toHaveBeenCalledTimes(1);
+    // The run is still live in the store, which is what lets the user reopen it.
+    expect(usePushOutputStore.getState().byFeature[6]?.status).toBe("running");
+  });
+
+  it("keeps the chosen force mode when a backgrounded push fails and is reopened", async () => {
+    let settle: ((value: { success: boolean; error: string }) => void) | undefined;
+    mocks.pushMutateAsync.mockReturnValue(
+      new Promise((resolve) => {
+        settle = resolve;
+      }),
+    );
+    const onOpenChange = vi.fn();
+    const { user, rerender } = render(
+      <TestPushDialog featureId={13} open={true} onOpenChange={onOpenChange} />,
+    );
+
+    await user.keyboard("f");
+    await user.click(screen.getByRole("button", { name: /^Force push$/ }));
+    await user.keyboard("{Meta>}{Enter}{/Meta}");
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    rerender(<TestPushDialog featureId={13} open={false} onOpenChange={onOpenChange} />);
+
+    await act(async () => {
+      settle?.({ success: false, error: "non-fast-forward" });
+    });
+    rerender(<TestPushDialog featureId={13} open={true} onOpenChange={onOpenChange} />);
+
+    // The retry offers the mode that actually ran, not a plain push.
+    expect(screen.getByRole("button", { name: /Retry — force push/ })).toBeInTheDocument();
+  });
+
+  it("shows the still-running output when reopened", async () => {
+    mocks.pushMutateAsync.mockImplementation(() => new Promise(() => {}));
+    const { rerender } = render(
+      <TestPushDialog featureId={8} open={true} onOpenChange={vi.fn()} />,
+    );
+    usePushOutputStore.getState().start(8);
+    usePushOutputStore.getState().append(8, "Enumerating objects: 12, done.");
+
+    rerender(<TestPushDialog featureId={8} open={false} onOpenChange={vi.fn()} />);
+    rerender(<TestPushDialog featureId={8} open={true} onOpenChange={vi.fn()} />);
+
+    expect(await screen.findByText(/Enumerating objects/)).toBeInTheDocument();
+  });
+});
+
 describe("PushDialog SSH prompt retry", () => {
   it("keeps the prompt input visible with the typed value when sendInput throws, then submits successfully on retry", async () => {
     // The push itself never resolves during the test — it stays "running"
-    // while we exercise the prompt submit path. Avoid an unhandled promise
-    // rejection on test teardown by giving the unresolved push a noop
-    // catch-equivalent (vitest cancels the promise on teardown anyway).
+    // while we exercise the prompt submit path.
     mocks.pushMutateAsync.mockImplementation(() => new Promise(() => {}));
     // First call rejects (network drop), second call succeeds.
     mocks.pushInputMutateAsync
       .mockRejectedValueOnce(new Error("network down"))
       .mockResolvedValueOnce(undefined);
 
-    const onOpenChange = vi.fn();
-    const { user } = render(<PushDialog featureId={42} open={true} onOpenChange={onOpenChange} />);
-
-    // The dialog auto-starts the push on open; seed the prompt buffer
-    // afterwards so `detectSshPrompt` flips the form on.
+    const { user } = render(<TestPushDialog featureId={42} open={true} onOpenChange={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: /^Push$/ }));
     seedPrompt(42);
 
     // Wait for the prompt input to appear (the buffer change triggers a
@@ -123,100 +309,62 @@ describe("PushDialog SSH prompt retry", () => {
     });
   });
 
-  it("clears the input on a successful first submit", async () => {
+  it("does not re-ask an answered prompt after the dialog is reopened", async () => {
     mocks.pushMutateAsync.mockImplementation(() => new Promise(() => {}));
     mocks.pushInputMutateAsync.mockResolvedValueOnce(undefined);
+    const onOpenChange = vi.fn();
 
-    const { user } = render(<PushDialog featureId={9} open={true} onOpenChange={vi.fn()} />);
+    const { user, rerender } = render(
+      <TestPushDialog featureId={9} open={true} onOpenChange={onOpenChange} />,
+    );
+    await user.click(screen.getByRole("button", { name: /^Push$/ }));
     seedPrompt(9);
 
     const input = (await screen.findByLabelText(/Enter passphrase for key/)) as HTMLInputElement;
     await user.type(input, "secret");
     await user.click(screen.getByRole("button", { name: /Send/i }));
-
     await waitFor(() => {
       expect(screen.queryByLabelText(/Enter passphrase for key/)).not.toBeInTheDocument();
     });
+
+    rerender(<TestPushDialog featureId={9} open={false} onOpenChange={onOpenChange} />);
+    rerender(<TestPushDialog featureId={9} open={true} onOpenChange={onOpenChange} />);
+
+    expect(screen.queryByLabelText(/Enter passphrase for key/)).not.toBeInTheDocument();
     expect(mocks.toastError).not.toHaveBeenCalled();
-  });
-
-  it("fires exactly one toast.error per failed prompt submission", async () => {
-    mocks.pushMutateAsync.mockImplementation(() => new Promise(() => {}));
-    mocks.pushInputMutateAsync.mockRejectedValueOnce(new Error("boom"));
-
-    const { user } = render(<PushDialog featureId={11} open={true} onOpenChange={vi.fn()} />);
-    seedPrompt(11);
-
-    const input = (await screen.findByLabelText(/Enter passphrase for key/)) as HTMLInputElement;
-    await user.type(input, "abc");
-    await user.click(screen.getByRole("button", { name: /Send/i }));
-
-    await waitFor(() => {
-      expect(mocks.toastError).toHaveBeenCalledTimes(1);
-    });
-    // Give any spurious second call a tick to land before asserting the
-    // total stayed at 1. Using a microtask flush is enough — the dialog
-    // never schedules a deferred retry.
-    await Promise.resolve();
-    expect(mocks.toastError).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("PushDialog auto-start", () => {
-  it("calls the push mutation exactly once when first mounted with open=true", () => {
-    mocks.pushMutateAsync.mockImplementation(() => new Promise(() => {}));
-    render(<PushDialog featureId={1} open={true} onOpenChange={vi.fn()} />);
-    expect(mocks.pushMutateAsync).toHaveBeenCalledTimes(1);
-    expect(mocks.pushMutateAsync).toHaveBeenCalledWith({
-      data: { feature_id: 1 },
-    });
-  });
-
-  it("re-fires the push when open toggles false then back to true", () => {
-    mocks.pushMutateAsync.mockImplementation(() => new Promise(() => {}));
-    const onOpenChange = vi.fn();
-    const { rerender } = render(
-      <PushDialog featureId={2} open={true} onOpenChange={onOpenChange} />,
-    );
-    expect(mocks.pushMutateAsync).toHaveBeenCalledTimes(1);
-
-    // Close — the cleanup effect must reset `pushStartedRef` so the next
-    // open is a real fresh run, not a no-op.
-    rerender(<PushDialog featureId={2} open={false} onOpenChange={onOpenChange} />);
-    expect(mocks.pushMutateAsync).toHaveBeenCalledTimes(1);
-
-    // Reopen — fires a second push.
-    rerender(<PushDialog featureId={2} open={true} onOpenChange={onOpenChange} />);
-    expect(mocks.pushMutateAsync).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not fire a second push when re-rendered with the same open=true (StrictMode-safe)", () => {
-    mocks.pushMutateAsync.mockImplementation(() => new Promise(() => {}));
-    const onOpenChange = vi.fn();
-    const { rerender } = render(
-      <PushDialog featureId={3} open={true} onOpenChange={onOpenChange} />,
-    );
-    expect(mocks.pushMutateAsync).toHaveBeenCalledTimes(1);
-
-    // A re-render with identical props (e.g. parent state change) must
-    // NOT trigger another push — `pushStartedRef` guards against the
-    // StrictMode double-mount + parent-driven re-renders.
-    rerender(<PushDialog featureId={3} open={true} onOpenChange={onOpenChange} />);
-    rerender(<PushDialog featureId={3} open={true} onOpenChange={onOpenChange} />);
-    expect(mocks.pushMutateAsync).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("PushDialog success", () => {
   it("closes after push succeeds and leaves git refresh to the WS status event", async () => {
     mocks.pushMutateAsync.mockResolvedValue({ success: true });
-
     const onOpenChange = vi.fn();
-    render(<PushDialog featureId={7} open={true} onOpenChange={onOpenChange} />);
+
+    const { user } = render(
+      <TestPushDialog featureId={7} open={true} onOpenChange={onOpenChange} />,
+    );
+    await user.click(screen.getByRole("button", { name: /^Push$/ }));
 
     await waitFor(() => {
       expect(mocks.toastSuccess).toHaveBeenCalledWith("Pushed");
     });
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("surfaces a backend failure in the terminal pane and offers a retry", async () => {
+    mocks.pushMutateAsync.mockResolvedValue({
+      success: false,
+      error: "Updates were rejected because the tip of your branch is behind",
+    });
+    const onOpenChange = vi.fn();
+
+    const { user } = render(
+      <TestPushDialog featureId={12} open={true} onOpenChange={onOpenChange} />,
+    );
+    await user.click(screen.getByRole("button", { name: /^Push$/ }));
+
+    expect(await screen.findByText(/Updates were rejected/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Retry/ })).toBeInTheDocument();
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });
 });

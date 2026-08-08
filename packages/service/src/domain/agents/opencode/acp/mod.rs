@@ -81,12 +81,13 @@ pub(in crate::domain::agents::opencode) async fn spawn_headless_acp(
     let mut command = acp_command(&binary, cwd, port);
     command.env("OPENCODE_ENABLE_QUESTION_TOOL", "0");
 
-    let client = AcpClient::spawn(AcpSpawnOptions {
-        command,
-        client_info: AcpClientInfo::default(),
-        max_line_bytes: None,
-        spawn_guard: Some(Box::new(port_reservation)),
-    })
+    let client = AcpClient::spawn(
+        AcpSpawnOptions::builder()
+            .command(command)
+            .client_info(AcpClientInfo::default())
+            .spawn_guard(Box::new(port_reservation))
+            .build(),
+    )
     .await
     .map_err(|error| RuntimeError::new(error.to_string()))?;
     Ok((client, port))

@@ -56,6 +56,14 @@ const EXTENSION_TO_MIME: Record<string, string> = {
   pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 };
 
+/**
+ * First extension registered for a MIME type — the inverse of the map above,
+ * used to name a downloaded file. `jpg` wins over `jpeg` by insertion order.
+ */
+export function extensionForMime(mimeType: string): string | undefined {
+  return Object.keys(EXTENSION_TO_MIME).find((ext) => EXTENSION_TO_MIME[ext] === mimeType);
+}
+
 export function normalizeAttachmentMime(fileName: string, mimeType: string): string {
   if (mimeType) return mimeType;
   const extension = fileName.split(".").pop()?.toLowerCase() ?? "";

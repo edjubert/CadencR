@@ -15,7 +15,7 @@ import {
 } from "./sidecar";
 import { createSplashWindow, type SplashHandle } from "./splash";
 import { installContextMenu } from "./context-menu";
-import { devUserDataPath } from "./dev-user-data";
+import { resolveDevProfile, type DevProfile } from "./dev-user-data";
 import { sendToWindow } from "./safe-send";
 import { registerBrowserIpc } from "./browser-ipc";
 import { startBrowserBridgeServer, type BrowserBridgeHandle } from "./browser-bridge-server";
@@ -38,6 +38,8 @@ let sidecarStopPromise: Promise<void> | null = null;
 let browserIpcRegistered = false;
 let browserManager: BrowserManager | null = null;
 let browserBridge: BrowserBridgeHandle | null = null;
+/** Dev-env load result from module scope; the failure is re-raised by `bootstrap()`. */
+let devProfile: DevProfile | null = null;
 let startupRecovery: StartupRecoveryState | null = null;
 
 function startupRecoveryDbPath(): string {
@@ -178,8 +180,12 @@ function wireMainProcess(): void {
 
 async function bootstrap(): Promise<void> {
   if (!app.isPackaged) {
-    const dotenvPath = loadDevEnv();
-    console.info(`Loaded env from ${dotenvPath}`);
+    // Already loaded at module scope (see the `userData` block below); this is
+    // where a failure becomes reportable. Throwing at module scope would land
+    // before `whenReady`, outside the startup-recovery catch, and kill the app
+    // with nothing on screen at all.
+    if (devProfile?.envError) throw devProfile.envError;
+    console.info(`Loaded env from ${devProfile?.envPath}`);
   }
   installCsp();
   browserBridge = await startBrowserBridgeServer({
@@ -230,11 +236,12 @@ app.setAppUserModelId(app.isPackaged ? "com.cadencr.desktop" : "com.cadencr.desk
 
 if (!app.isPackaged) {
   app.setName("Cadencr Dev");
-  const devUserData = devUserDataPath(
-    app.getPath("appData"),
-    process.env.CADENCR_DEV_USER_DATA_SUFFIX,
-  );
-  app.setPath("userData", devUserData);
+  // `.env` is loaded in here rather than in `bootstrap()`: it carries the
+  // per-worktree profile suffix, and the instance lock below is keyed on the
+  // resulting `userData` path, so anything that lands in `process.env` after
+  // `app.whenReady()` arrives too late. See `resolveDevProfile`.
+  devProfile = resolveDevProfile(app.getPath("appData"), loadDevEnv);
+  app.setPath("userData", devProfile.userDataPath);
 }
 
 if (!app.requestSingleInstanceLock()) {

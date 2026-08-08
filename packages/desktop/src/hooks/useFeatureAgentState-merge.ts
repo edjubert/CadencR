@@ -7,6 +7,7 @@
 
 import type { AgentBlock } from "../api/generated";
 import type { AgentBlockData } from "@/components/AgentBlock";
+import { applyBlockContentBudget, clampJsonText, clampText } from "@/lib/block-content-budget";
 import {
   mergeCanonicalUserBlock,
   messageDbIdFromBlockId,
@@ -24,7 +25,9 @@ export function serverBlocksToAgentBlocks(serverBlocks: AgentBlock[]): AgentBloc
     const childBlocks = sb.childBlocks
       ? serverBlocksToAgentBlocks(sb.childBlocks as unknown as AgentBlock[])
       : undefined;
-    return {
+    // Clamp before the block is retained: this is the only choke point every
+    // hydrated and paginated block passes through. See `block-content-budget`.
+    return applyBlockContentBudget({
       id: sb.id,
       messageUuid: nullToUndefined(sb.messageUuid),
       promptDeliveryState: nullToUndefined(sb.promptDeliveryState),
@@ -44,7 +47,7 @@ export function serverBlocksToAgentBlocks(serverBlocks: AgentBlock[]): AgentBloc
       truncatedContent: sb.truncatedContent === true,
       // DB-loaded sub-agents are always complete (streaming state handles the active one)
       ...(isSubagent ? { taskComplete: true } : {}),
-    };
+    });
   });
 }
 
@@ -148,7 +151,11 @@ export function mergeIncrementalBlocks(acc: AccumulatedSession, newBlocks: Agent
       (block.type === "text" || block.type === "thinking") &&
       Boolean(last.parentToolUseId) === Boolean(block.parentToolUseId)
     ) {
-      last.content += block.content;
+      // Boundary-merged text accumulates across every incremental fetch, so the
+      // budget has to be enforced on the concatenation, not just per block.
+      const merged = clampText(last.content + block.content);
+      last.content = merged.text;
+      if (merged.truncated) last.truncatedContent = true;
     } else {
       targetList.push(block);
     }
@@ -168,10 +175,14 @@ export function applyToolCallUpdates(
   function walk(list: AgentBlockData[]) {
     for (const b of list) {
       if (b.id in updates) {
-        const newContent = updates[b.id];
-        if (b.content !== newContent) {
-          b.content = newContent;
-          b.toolArgs = newContent;
+        // `content` and `toolArgs` hold the same JSON envelope here, so clamp
+        // once and assign it to both rather than budgeting a throwaway copy of
+        // the block (which would parse the same megabytes twice).
+        const clamped = clampJsonText(updates[b.id]);
+        if (b.content !== clamped.text) {
+          b.content = clamped.text;
+          b.toolArgs = clamped.text;
+          if (clamped.truncated) b.truncatedContent = true;
           changed = true;
         }
       }

@@ -36,6 +36,7 @@ import { isInCodeMirrorEditor } from "@/lib/shortcuts/dom-targets";
 import { wsSessionIdFromFeature } from "@/lib/ws-session-id";
 import { useCloseFeatureActivity } from "@/hooks/useCloseFeatureActivity";
 import { useFeatureActivityCounts } from "@/hooks/useFeatureActivityCounts";
+import { NO_PORTS, useFeaturePorts } from "@/hooks/useFeaturePorts";
 import { useGlobalShortcutById } from "@/hooks/useShortcut";
 import { useLiveFeatureMeta } from "@/hooks/useLiveFeatureMeta";
 
@@ -59,6 +60,7 @@ function useProjectFeaturesData({ projectId, projectPath, activeFeatureId }: Pro
     { query: { staleTime: 5 * 60 * 1000 } },
   );
   const { shellCountsByFeatureId, browserCountsByFeatureId } = useFeatureActivityCounts(projectId);
+  const portsByFeatureId = useFeaturePorts();
   const liveMeta = useLiveFeatureMeta();
   const activeFeatures = useMemo(
     () => features.filter((feature) => feature.status === ACTIVE_FEATURE_STATUS),
@@ -117,6 +119,7 @@ function useProjectFeaturesData({ projectId, projectPath, activeFeatureId }: Pro
     getLiveTitle,
     isAutoNaming,
     labelSuggestions,
+    portsByFeatureId,
     rootNodeByFeatureId,
     shellCountsByFeatureId,
   };
@@ -310,6 +313,7 @@ function createFeatureRenderer(
       worktree={data.worktreeByFeatureId.get(feature.id)}
       shellCount={data.shellCountsByFeatureId.get(feature.id) ?? 0}
       browserCount={data.browserCountsByFeatureId[feature.id] ?? 0}
+      ports={data.portsByFeatureId.get(feature.id) ?? NO_PORTS}
       isEditingLabel={labels.editingFeatureId === feature.id}
       labelDraft={labels.editingFeatureId === feature.id ? labels.draft : ""}
       labelSuggestions={data.labelSuggestions}

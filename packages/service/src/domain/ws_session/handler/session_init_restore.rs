@@ -101,7 +101,8 @@ mod tests {
                 context_window INTEGER NOT NULL DEFAULT 200000,
                 pending_permission TEXT,
                 pending_questions TEXT,
-                thinking_effort TEXT
+                thinking_effort TEXT,
+                fast_mode INTEGER NOT NULL DEFAULT 0
             )"#,
         )
         .execute(&pool)
@@ -136,6 +137,7 @@ mod tests {
             output_tokens: None,
             context_window: None,
             thinking_effort: None,
+            fast_mode: false,
         };
         let (_, payload) = row.pending_gate_payload().expect("payload");
         assert_eq!(payload.request_id, "req_1");
@@ -182,6 +184,7 @@ mod tests {
             output_tokens: None,
             context_window: None,
             thinking_effort: None,
+            fast_mode: false,
         }
     }
 

@@ -35,6 +35,7 @@ pub struct SessionRow {
     pub output_tokens: Option<i64>,
     pub context_window: Option<i64>,
     pub thinking_effort: Option<String>,
+    pub fast_mode: bool,
 }
 
 impl SessionRow {

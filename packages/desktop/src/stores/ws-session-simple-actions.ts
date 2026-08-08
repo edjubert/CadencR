@@ -4,6 +4,7 @@ import {
   createCommandsGet,
   createDestroy,
   createEffortSet,
+  createFastModeSet,
   createEnvelope,
   createGateClose,
   createInterrupt,
@@ -29,7 +30,7 @@ import {
 } from "./ws-session-actions";
 import { discardStreamDeltas } from "./ws-delta-coalescer";
 import type { StoreAccessors } from "./ws-envelope-handler";
-import { parseErrorPayload } from "./ws-envelope-payload";
+import { parseErrorPayload, parseFastModePayload } from "./ws-envelope-payload";
 import { resyncMessagesOnReconnect } from "./ws-session-resync";
 import { buildSlashCommandsKey } from "./ws-session-store-helpers";
 import type {
@@ -52,6 +53,7 @@ type SimpleSessionActions = Pick<
   | "setProvider"
   | "setModel"
   | "setThinkingEffort"
+  | "setFastMode"
   | "setProfile"
   | "setPermissionMode"
   | "setAccessMode"
@@ -166,6 +168,22 @@ function createConfigurationActions(deps: SimpleSessionActionDeps) {
           currentThinkingEffort: thinkingEffort,
         }),
       );
+    },
+
+    async setFastMode(sessionId: string, enabled: boolean): Promise<void> {
+      const session = getSession(sessionId);
+      if (!session.serverSessionId) throw new Error("Session is not initialized yet");
+      const payload = await get().sendRequest(
+        sessionId,
+        createFastModeSet(session.serverSessionId, enabled),
+      );
+      const error = parseErrorPayload(payload);
+      if (error?.message || payload === null) {
+        throw new Error(error?.message ?? "Fast mode update timed out");
+      }
+      const next = parseFastModePayload(payload);
+      if (!next) throw new Error("Fast mode update returned an invalid response");
+      set(updateSession(get(), sessionId, { fastMode: next.enabled }));
     },
 
     setProfile(sessionId: string, profile: string) {

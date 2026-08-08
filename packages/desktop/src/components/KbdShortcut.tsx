@@ -2,6 +2,9 @@
  * Inline keyboard shortcut badge for buttons.
  * Accepts an array of key tokens: "cmd", "shift", "enter", or any letter/symbol.
  * Renders Lucide icons for modifier/special keys and text for letters.
+ *
+ * Callers that pre-format via `formatCombo` pass glyphs (`⌘`, `⇧`, `↵`), so
+ * the map recognizes both the raw tokens and their formatted equivalents.
  */
 import { CommandIcon, CornerDownLeftIcon, ArrowUpIcon } from "lucide-react";
 import type { ReactNode } from "react";
@@ -15,19 +18,23 @@ import { cn } from "@/lib/utils";
 const ICON_SIZE = "size-2.5";
 const ICON_SIZE_SM = "size-2";
 
-const KEY_MAP: Record<string, ReactNode> = {
-  cmd: <CommandIcon className={ICON_SIZE} />,
-  ctrl: <span className="leading-none">⌃</span>,
-  shift: <ArrowUpIcon className={ICON_SIZE} />,
-  enter: <CornerDownLeftIcon className={ICON_SIZE} />,
-};
+function createKeyMap(sizeClass: string): Record<string, ReactNode> {
+  const command = <CommandIcon className={sizeClass} />;
+  const shift = <ArrowUpIcon className={sizeClass} />;
+  const enter = <CornerDownLeftIcon className={sizeClass} />;
+  return {
+    cmd: command,
+    "⌘": command,
+    ctrl: <span className="leading-none">⌃</span>,
+    shift,
+    "⇧": shift,
+    enter,
+    "↵": enter,
+  };
+}
 
-const KEY_MAP_SM: Record<string, ReactNode> = {
-  cmd: <CommandIcon className={ICON_SIZE_SM} />,
-  ctrl: <span className="leading-none">⌃</span>,
-  shift: <ArrowUpIcon className={ICON_SIZE_SM} />,
-  enter: <CornerDownLeftIcon className={ICON_SIZE_SM} />,
-};
+const KEY_MAP = createKeyMap(ICON_SIZE);
+const KEY_MAP_SM = createKeyMap(ICON_SIZE_SM);
 
 const VARIANT_CLASSES = {
   inline:

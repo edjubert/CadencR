@@ -1,4 +1,5 @@
 import type { FollowOutputCallback, VirtuosoHandle } from "react-virtuoso";
+import { STREAM_BOTTOM_GAP_PX } from "./stream-fade";
 
 export type ScrollRef = (el: HTMLElement | null) => void;
 
@@ -14,6 +15,21 @@ export const MAX_VIEWPORT_FILL_PAGES = 6;
 
 export function canScroll(el: HTMLElement): boolean {
   return el.scrollHeight > el.clientHeight;
+}
+
+/**
+ * `canScroll` for the agent-stream scroller, which always carries a blank
+ * `STREAM_BOTTOM_GAP_PX` spacer under the last message.
+ *
+ * That spacer is scrollable but empty, so the raw check reports overflow on a
+ * conversation that visually fits — and every "did the user mean to scroll?"
+ * gate hangs off it. Left unsubtracted, a stray wheel-up on a short session
+ * disengages bottom-stick, and viewport backfill of older history stops before
+ * it starts. Other scrollers (`useStickToBottom`) have no such spacer and want
+ * the raw check.
+ */
+export function canScrollStream(el: HTMLElement): boolean {
+  return el.scrollHeight - STREAM_BOTTOM_GAP_PX > el.clientHeight;
 }
 
 /**

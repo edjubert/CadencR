@@ -20,7 +20,10 @@ use crate::domain::imports::jobs::ImportJobRegistry;
 use crate::domain::lsp::lifecycle::CrashTracker;
 use crate::domain::lsp::LspRegistry;
 use crate::domain::mcp::loopback::is_loopback_host;
+use crate::domain::neovim::NeovimManager;
+use crate::domain::ports::cache::PortScanCache;
 use crate::domain::push::PushNotifier;
+use crate::domain::schedules::models::ScheduleRanEvent;
 use crate::domain::session_status::SessionStatusBroadcaster;
 use crate::domain::terminal::service::PtyManager;
 use crate::domain::ws_session::handler::{new_sdk_sessions, ActiveTurnRegistry};
@@ -99,8 +102,14 @@ pub struct AppState {
     /// connected client subscribes once so a conversation created on one
     /// device shows up on the others without a manual refresh.
     pub feature_events_tx: FeatureEventBroadcaster,
+    /// Global "a schedule ran" broadcast. Subscribed once per client: a
+    /// schedule fires on the server's clock, into a conversation nobody need
+    /// have open, so nothing else tells the sidebar its rules moved.
+    pub schedule_events_tx: broadcast::Sender<ScheduleRanEvent>,
     /// PTY lifecycle manager for terminal sessions.
     pub pty_manager: PtyManager,
+    /// Neovim RPC manager (stub — RPC surface removed; awaiting PTY migration).
+    pub neovim_manager: NeovimManager,
     /// Broadcast channel for file-system change events.
     pub file_change_tx: broadcast::Sender<FileChangeEvent>,
     /// Broadcast when a settings JSON file changes on disk (our own writes or an
@@ -135,6 +144,9 @@ pub struct AppState {
     /// Process-wide PR/MR detection cache, populated by the forge poller and
     /// read by both the sidebar bootstrap endpoint and on-demand PR routes.
     pub forge_status: Arc<ForgeStatusCache>,
+    /// Last machine-wide listening-port scan, shared so concurrent sidebar
+    /// pollers coalesce onto one `lsof` sweep.
+    pub port_scan: Arc<PortScanCache>,
     /// Shared conditional-GET/rate-limit transport for all forge adapters.
     pub forge_http: Arc<ForgeHttp>,
     /// Owner-only token-file access for forge authentication.
@@ -228,6 +240,7 @@ impl AppState {
     ) -> Self {
         let (session_status_tx, _) = broadcast::channel(64);
         let (feature_events_tx, _) = broadcast::channel(64);
+        let (schedule_events_tx, _) = broadcast::channel(64);
         let (file_change_tx, _) = broadcast::channel(16);
         let (settings_events_tx, _) = broadcast::channel(16);
         let (remote_events_tx, _) = broadcast::channel(16);
@@ -241,8 +254,9 @@ impl AppState {
                 PushNotifier::ephemeral()
             }),
         );
+        let pty_manager = PtyManager::new();
         Self {
-            read_pool,
+            read_pool: read_pool.clone(),
             write_pool,
             db_path,
             browser_bridge: Arc::new(RwLock::new(BrowserBridgeConfig::from_env())),
@@ -253,7 +267,9 @@ impl AppState {
                 Arc::new(std::sync::atomic::AtomicU64::new(0)),
             ),
             feature_events_tx: FeatureEventBroadcaster::new(feature_events_tx),
-            pty_manager: PtyManager::new(),
+            schedule_events_tx,
+            pty_manager: pty_manager.clone(),
+            neovim_manager: NeovimManager::new(pty_manager, read_pool),
             file_change_tx,
             settings_events_tx,
             remote_events_tx,
@@ -266,6 +282,7 @@ impl AppState {
             custom_action_runs: Arc::new(CustomActionRunRegistry::new()),
             git_watcher: Arc::new(GitWatcherRegistry::new()),
             forge_status: Arc::new(ForgeStatusCache::default()),
+            port_scan: Arc::new(PortScanCache::default()),
             forge_http: Arc::new(ForgeHttp::default()),
             forge_auth: Arc::new(ForgeAuthStore::default()),
             forge_events_tx,
@@ -295,13 +312,15 @@ impl AppState {
     pub fn with_pool(pool: SqlitePool) -> Self {
         let (session_status_tx, _) = broadcast::channel(64);
         let (feature_events_tx, _) = broadcast::channel(64);
+        let (schedule_events_tx, _) = broadcast::channel(64);
         let (file_change_tx, _) = broadcast::channel(16);
         let (settings_events_tx, _) = broadcast::channel(16);
         let (remote_events_tx, _) = broadcast::channel(16);
         let (forge_events_tx, _) = broadcast::channel(64);
+        let pty_manager = PtyManager::new();
         Self {
             read_pool: pool.clone(),
-            write_pool: pool,
+            write_pool: pool.clone(),
             db_path: std::env::temp_dir()
                 .join("cadencr-test.db")
                 .to_string_lossy()
@@ -314,7 +333,9 @@ impl AppState {
                 std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             ),
             feature_events_tx: FeatureEventBroadcaster::new(feature_events_tx),
-            pty_manager: PtyManager::new(),
+            schedule_events_tx,
+            pty_manager: pty_manager.clone(),
+            neovim_manager: NeovimManager::new(pty_manager, pool),
             file_change_tx,
             settings_events_tx,
             remote_events_tx,
@@ -327,6 +348,7 @@ impl AppState {
             custom_action_runs: Arc::new(CustomActionRunRegistry::new()),
             git_watcher: Arc::new(GitWatcherRegistry::new()),
             forge_status: Arc::new(ForgeStatusCache::default()),
+            port_scan: Arc::new(PortScanCache::default()),
             forge_http: Arc::new(ForgeHttp::default()),
             forge_auth: Arc::new(ForgeAuthStore::default()),
             forge_events_tx,

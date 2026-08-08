@@ -4,6 +4,7 @@ import { Loader2 } from "lucide-react";
 import type { GitStatusSnapshot } from "@/api/generated";
 import type { GitAction } from "./useGitAction";
 import type { CommitSubmissionController } from "./useCommitSubmission";
+import type { PushSubmissionController } from "./usePushSubmission";
 
 const CommitDialog = lazy(() => import("./CommitDialog"));
 const StashChangesDialog = lazy(() => import("./StashChangesDialog"));
@@ -19,6 +20,7 @@ interface GitActionDialogsProps {
   snapshot: GitStatusSnapshot | undefined;
   updateDisabledReason: string | null;
   commitSubmission: CommitSubmissionController;
+  pushSubmission: PushSubmissionController;
   onOpenChange: (open: boolean) => void;
 }
 
@@ -29,6 +31,7 @@ export function GitActionDialogs({
   snapshot,
   updateDisabledReason,
   commitSubmission,
+  pushSubmission,
   onOpenChange,
 }: GitActionDialogsProps): ReactElement {
   return (
@@ -40,7 +43,7 @@ export function GitActionDialogs({
         <StashChangesDialog featureId={featureId} open onOpenChange={onOpenChange} />
       )}
       {activeDialog === "push" && (
-        <PushDialog featureId={featureId} open onOpenChange={onOpenChange} />
+        <PushDialog featureId={featureId} open submission={pushSubmission} />
       )}
       {activeDialog === "merge" && (
         <MergeDialog featureId={featureId} open onOpenChange={onOpenChange} />

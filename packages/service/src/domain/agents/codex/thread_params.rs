@@ -40,6 +40,7 @@ fn base_thread_params(config: &RuntimeSpawnConfig) -> Value {
     if let Some(model) = config.model.as_ref() {
         params["model"] = Value::String(model.clone());
     }
+    params["serviceTier"] = super::fast_service_tier_value(config.fast_mode);
     if let Some(mode) = collaboration_mode(
         config.permission_mode.as_ref(),
         config.model.as_deref(),
@@ -76,10 +77,23 @@ mod tests {
         let params = thread_start_params(&config, &Value::Null);
 
         assert_eq!(params["collaborationMode"]["mode"], json!("plan"));
+        assert!(params["serviceTier"].is_null());
         assert_eq!(
             params["collaborationMode"]["settings"]["reasoning_effort"],
             json!("high")
         );
+    }
+
+    #[test]
+    fn thread_start_params_enable_fast_service_tier() {
+        let config = RuntimeSpawnConfig {
+            fast_mode: true,
+            ..RuntimeSpawnConfig::default()
+        };
+
+        let params = thread_start_params(&config, &Value::Null);
+
+        assert_eq!(params["serviceTier"], json!("priority"));
     }
 
     #[test]

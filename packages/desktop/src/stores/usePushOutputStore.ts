@@ -26,3 +26,6 @@ export const selectPushOutput = bundle.selectOutput;
 
 /** Narrow selector: whether the push is currently running. */
 export const selectPushRunning = bundle.selectRunning;
+
+/** Narrow selector: current lifecycle status for one feature. */
+export const selectPushStatus = bundle.selectStatus;

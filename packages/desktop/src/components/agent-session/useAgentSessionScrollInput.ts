@@ -3,7 +3,7 @@ import { isAutoScrollPinSuppressed } from "@/lib/agent-scroll-suppression";
 import { isIos } from "@/lib/is-ios";
 import { isResizing } from "@/lib/resize-coordinator";
 import {
-  canScroll,
+  canScrollStream,
   isVerticalScrollbarPointer,
   pinToBottom,
   HISTORY_SCROLL_TOP_PX,
@@ -117,7 +117,7 @@ export function useAgentSessionScrollInput({
     (e: WheelEvent): void => {
       if (e.deltaY >= 0) return;
       const el = scrollerElRef.current;
-      if (!el || !canScroll(el)) return;
+      if (!el || !canScrollStream(el)) return;
       armUserScrollIntent();
       historyLoadArmedRef.current = true;
       setAutoScrollEnabled(false);
@@ -127,7 +127,7 @@ export function useAgentSessionScrollInput({
   const onPointerDown = useCallback(
     (e: PointerEvent): void => {
       const el = scrollerElRef.current;
-      if (!el || !canScroll(el) || !isVerticalScrollbarPointer(el, e)) return;
+      if (!el || !canScrollStream(el) || !isVerticalScrollbarPointer(el, e)) return;
       historyLoadArmedRef.current = true;
       armUserScrollIntent();
     },
@@ -148,7 +148,7 @@ export function useAgentSessionScrollInput({
       const y = e.touches[0]?.clientY ?? 0;
       if (y <= touchStartYRef.current + 5) return;
       const el = scrollerElRef.current;
-      if (!el || !canScroll(el)) return;
+      if (!el || !canScrollStream(el)) return;
       armUserScrollIntent();
       historyLoadArmedRef.current = true;
       setAutoScrollEnabled(false);
@@ -162,7 +162,7 @@ export function useAgentSessionScrollInput({
     const previousScrollTop = lastScrollTopRef.current;
     lastScrollTopRef.current = currentScrollTop;
 
-    if (suppressScrollIntentRef.current || !canScroll(el)) return;
+    if (suppressScrollIntentRef.current || !canScrollStream(el)) return;
     if (!userScrollIntentRef.current) return;
     const isScrollingUp = currentScrollTop < previousScrollTop - 1;
     if (!isScrollingUp) return;

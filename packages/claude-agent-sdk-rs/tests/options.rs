@@ -143,6 +143,28 @@ fn options_default_setting_sources_has_three_entries() {
     assert!(opts.setting_sources.contains(&"local".to_string()));
 }
 
+#[test]
+fn options_builder_preserves_default_policy_fields() {
+    let options = Options::builder().build();
+
+    assert_eq!(
+        options.cwd,
+        std::env::current_dir().unwrap_or_else(|_| ".".into())
+    );
+    assert_eq!(options.setting_sources, ["user", "project", "local"]);
+    assert!(options.include_partial_messages);
+    assert!(options.replay_user_messages);
+    assert!(!options.allow_dangerously_skip_permissions);
+}
+
+#[test]
+#[allow(deprecated)]
+fn legacy_options_builder_new_remains_compatible() {
+    let options = OptionsBuilder::new().model("claude-opus-4-5").build();
+
+    assert_eq!(options.model.as_deref(), Some("claude-opus-4-5"));
+}
+
 // ---------------------------------------------------------------------------
 // Options::to_cli_args
 // ---------------------------------------------------------------------------
@@ -172,7 +194,7 @@ fn to_cli_args_always_includes_replay_user_messages() {
 
 #[test]
 fn to_cli_args_can_disable_replay_user_messages_for_mock_clis() {
-    let opts = OptionsBuilder::new().replay_user_messages(false).build();
+    let opts = Options::builder().replay_user_messages(false).build();
     let args = opts.to_cli_args();
     assert!(
         !args.iter().any(|a| a == "--replay-user-messages"),
@@ -198,7 +220,7 @@ fn to_cli_args_always_forces_summarized_thinking_display() {
 
 #[test]
 fn to_cli_args_includes_model_when_set() {
-    let opts = OptionsBuilder::new().model("claude-opus-4-5").build();
+    let opts = Options::builder().model("claude-opus-4-5").build();
     let args = opts.to_cli_args();
     let pos = args
         .windows(2)
@@ -208,7 +230,7 @@ fn to_cli_args_includes_model_when_set() {
 
 #[test]
 fn to_cli_args_includes_resume_when_set() {
-    let opts = OptionsBuilder::new().resume("sess-abc-123").build();
+    let opts = Options::builder().resume("sess-abc-123").build();
     let args = opts.to_cli_args();
     let pos = args
         .windows(2)
@@ -218,7 +240,7 @@ fn to_cli_args_includes_resume_when_set() {
 
 #[test]
 fn to_cli_args_includes_permission_mode_when_set() {
-    let opts = OptionsBuilder::new()
+    let opts = Options::builder()
         .permission_mode(PermissionMode::Plan)
         .build();
     let args = opts.to_cli_args();
@@ -230,7 +252,7 @@ fn to_cli_args_includes_permission_mode_when_set() {
 
 #[test]
 fn to_cli_args_includes_allow_dangerously_skip_permissions_when_enabled() {
-    let opts = OptionsBuilder::new()
+    let opts = Options::builder()
         .allow_dangerously_skip_permissions(true)
         .build();
     let args = opts.to_cli_args();
@@ -254,10 +276,9 @@ fn to_cli_args_omits_permission_mode_when_unset() {
 
 #[test]
 fn to_cli_args_includes_permission_prompt_tool_when_can_use_tool_set() {
-    let opts = Options {
-        can_use_tool: Some(std::sync::Arc::new(AllowAllTools)),
-        ..Options::default()
-    };
+    let opts = Options::builder()
+        .can_use_tool(std::sync::Arc::new(AllowAllTools))
+        .build();
     let args = opts.to_cli_args();
     let pos = args
         .windows(2)
@@ -345,7 +366,7 @@ fn to_cli_args_wraps_mcp_servers_in_mcp_servers_key() {
             env: None,
         },
     );
-    let opts = OptionsBuilder::new().mcp_servers(servers).build();
+    let opts = Options::builder().mcp_servers(servers).build();
     let args = opts.to_cli_args();
 
     let pos = args

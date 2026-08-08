@@ -3,10 +3,12 @@ use serde_json::Value;
 use super::{ensure_success, OpenCodeClient};
 use crate::error::SdkError;
 
+#[bon::bon]
 impl OpenCodeClient {
     /// `POST /session/{id}/shell` — run a user shell command through
     /// OpenCode's native session route. OpenCode persists the synthetic user
     /// record and Bash part in the provider conversation before execution.
+    #[builder]
     pub async fn shell_command(
         &self,
         session_id: &str,
@@ -77,7 +79,12 @@ mod tests {
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
         client
-            .shell_command("ses_1", "plan", "printf hello | cat", Some("/tmp/project"))
+            .shell_command()
+            .session_id("ses_1")
+            .agent("plan")
+            .command("printf hello | cat")
+            .directory("/tmp/project")
+            .call()
             .await
             .expect("shell command");
 

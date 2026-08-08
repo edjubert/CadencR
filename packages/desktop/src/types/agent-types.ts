@@ -6,6 +6,13 @@ import type { PromptAttachmentKind } from "@/lib/prompt-attachments";
 
 export type AgentType = "session" | "auto_name";
 
+/**
+ * `source.type` marking an image whose payload was moved to the blob cache
+ * (`lib/prompt-image-cache`). Lives here, with the rest of the envelope schema,
+ * so the cache and the parser cannot drift apart on the wire format.
+ */
+export const PROMPT_BLOB_REF_TYPE = "cadencr_ref";
+
 /** File payload sent with prompts to agents. */
 export interface PromptAttachmentPayload {
   base64: string;
@@ -16,20 +23,42 @@ export interface PromptAttachmentPayload {
 
 export interface ParsedPromptAttachment {
   base64?: string;
+  /** Set instead of `base64` once the payload was moved to `prompt-image-cache`. */
+  ref?: string;
   fileName: string;
   kind: PromptAttachmentKind;
   mimeType: string;
 }
 
-interface ParsedUserMessageImage {
+export interface ParsedUserMessageImage {
   mediaType: string;
-  data: string;
+  /** Inline payload — present only while the image is still in the envelope. */
+  base64?: string;
+  /** Set instead of `base64` once the payload was moved to `prompt-image-cache`. */
+  ref?: string;
 }
 
 interface ParsedUserMessageContent {
   text: string;
   images: ParsedUserMessageImage[];
   attachments: ParsedPromptAttachment[];
+}
+
+/**
+ * One block as it actually arrives on the wire — every field optional, because
+ * this is untrusted JSON. `UserMessageContentBlock` below is the strict shape
+ * *we* write; this is the permissive shape everyone reading an envelope must
+ * narrow from, including the blob cache's rewriting walk.
+ */
+export interface RawUserMessageBlock {
+  type?: string;
+  text?: string;
+  file_name?: string;
+  kind?: string;
+  media_type?: string;
+  data?: string;
+  ref?: string;
+  source?: { type?: string; media_type?: string; data?: string; ref?: string };
 }
 
 type UserMessageContentBlock =
@@ -76,15 +105,7 @@ export function parseUserMessageContent(content: string): ParsedUserMessageConte
   if (!content.startsWith("[")) return { text: content, images: [], attachments: [] };
 
   try {
-    const parsed = JSON.parse(content) as Array<{
-      type: string;
-      text?: string;
-      file_name?: string;
-      kind?: string;
-      media_type?: string;
-      data?: string;
-      source?: { media_type?: string; data?: string };
-    }>;
+    const parsed = JSON.parse(content) as RawUserMessageBlock[];
     if (!Array.isArray(parsed)) {
       return { text: content, images: [], attachments: [] };
     }
@@ -93,16 +114,16 @@ export function parseUserMessageContent(content: string): ParsedUserMessageConte
       .filter((block) => block.type === "text" && typeof block.text === "string")
       .map((block) => block.text ?? "")
       .join("\n");
-    const images = parsed.flatMap((block) => {
-      if (
-        block.type !== "image" ||
-        typeof block.source?.media_type !== "string" ||
-        typeof block.source.data !== "string"
-      ) {
-        return [];
+    const images = parsed.flatMap((block): ParsedUserMessageImage[] => {
+      const source = block.source;
+      if (block.type !== "image" || typeof source?.media_type !== "string") return [];
+      // A payload lifted into `prompt-image-cache` leaves a ref behind; an
+      // envelope that was never off-loaded still carries its base64 inline.
+      if (source.type === PROMPT_BLOB_REF_TYPE && typeof source.ref === "string") {
+        return [{ mediaType: source.media_type, ref: source.ref }];
       }
-
-      return [{ mediaType: block.source.media_type, data: block.source.data }];
+      if (typeof source.data !== "string") return [];
+      return [{ mediaType: source.media_type, base64: source.data }];
     });
     const attachments = parsed.flatMap((block) => {
       if (
@@ -116,6 +137,7 @@ export function parseUserMessageContent(content: string): ParsedUserMessageConte
       return [
         {
           ...(typeof block.data === "string" ? { base64: block.data } : {}),
+          ...(typeof block.ref === "string" ? { ref: block.ref } : {}),
           fileName: block.file_name,
           kind: block.kind,
           mimeType: block.media_type,

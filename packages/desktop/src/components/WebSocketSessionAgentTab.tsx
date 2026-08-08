@@ -114,6 +114,8 @@ export function SessionAgentTab({
         }
         currentThinkingEffort={controls.ws.currentThinkingEffort}
         onThinkingEffortChange={controls.ws.setThinkingEffort}
+        fastMode={controls.ws.fastMode}
+        onFastModeChange={controls.ws.setFastMode}
         runtimeProvider={controls.ws.runtimeProvider}
         runtimeSessionId={controls.ws.runtimeSessionId || undefined}
         slashCommandsOverride={data.session?.slashCommands ?? []}

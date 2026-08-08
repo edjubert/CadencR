@@ -23,6 +23,16 @@ const catalog: AgentCatalog = {
       default_model: "lmstudio/qwen-3.6:35b-a3b",
       models: [{ id: "lmstudio/qwen-3.6:35b-a3b", label: "Qwen 3.6" }],
     },
+    {
+      id: "codex_cli",
+      label: "Codex",
+      status: "available",
+      default_model: "gpt-5.6-sol",
+      models: [
+        { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", supports_fast_mode: true },
+        { id: "gpt-5.4-mini", label: "GPT-5.4 Mini", supports_fast_mode: false },
+      ],
+    },
   ],
 };
 
@@ -147,5 +157,23 @@ describe("useAgentSessionModelState.canChangeProvider", () => {
       }),
     );
     expect(result.current.activeProviderId).toBe("claude_code");
+  });
+
+  it("exposes fast mode only when the confirmed model advertises it", () => {
+    const { result, rerender } = renderHook(
+      ({ modelId }) =>
+        useAgentSessionModelState({
+          agentCatalog: catalog,
+          currentProviderId: "codex_cli",
+          currentModelId: modelId,
+          hasConversation: false,
+        }),
+      { initialProps: { modelId: "gpt-5.6-sol" } },
+    );
+
+    expect(result.current.supportsFastMode).toBe(true);
+
+    rerender({ modelId: "gpt-5.4-mini" });
+    expect(result.current.supportsFastMode).toBe(false);
   });
 });

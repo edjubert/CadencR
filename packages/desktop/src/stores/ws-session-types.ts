@@ -147,6 +147,7 @@ export interface SessionEntry {
   permissionMode: PermissionMode;
   accessMode: AccessMode;
   currentThinkingEffort?: string;
+  fastMode: boolean;
   currentProfile?: string;
   pendingPlanApproval: PendingPlanApproval | null;
   compactRequestPending: boolean;
@@ -227,6 +228,7 @@ export function createSessionEntry(): SessionEntry {
     permissionMode: defaultEditModeFor(DEFAULT_PROVIDER),
     accessMode: "default",
     currentThinkingEffort: undefined,
+    fastMode: false,
     pendingPlanApproval: null,
     compactRequestPending: false,
     pendingManualCompact: false,

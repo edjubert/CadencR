@@ -14,7 +14,7 @@ use crate::error::AppError;
 use crate::shared::git_cli::guard_positionals;
 
 use super::log::get_unpushed_shas;
-use super::util::run_git_quiet;
+use super::util::{run_git_quiet, FIRST_PARENT_MERGES};
 
 /// Record separator emitted before every commit; field separator between the
 /// `--format` placeholders. Both are control bytes that can't appear in commit
@@ -25,8 +25,8 @@ const FORMAT: &str = "%x1e%H%x1f%h%x1f%s%x1f%an%x1f%ai%x1f%P%x1f%D%x1f%b%x1f";
 
 /// Parse a git `--shortstat` summary line such as
 /// `" 3 files changed, 10 insertions(+), 2 deletions(-)"` into
-/// `(files_changed, insertions, deletions)`. Merge commits (and the rare
-/// empty commit) produce no summary, yielding `(0, 0, 0)`.
+/// `(files_changed, insertions, deletions)`. An empty commit produces no
+/// summary, yielding `(0, 0, 0)`.
 fn parse_shortstat(tail: &str) -> (i32, i32, i32) {
     let (mut files, mut adds, mut dels) = (0, 0, 0);
     for segment in tail.split(',') {
@@ -78,7 +78,7 @@ fn parse_graph_log(output: &str) -> Vec<CommitGraphEntry> {
             .map(|s| s.to_string())
             .collect();
         // Field 8 (after the body's closing separator) holds the trailing
-        // `--shortstat` line. Absent for merges → all zeros.
+        // `--shortstat` line. Absent for an empty commit → all zeros.
         let (files_changed, additions, deletions) = fields
             .get(8)
             .map(|t| parse_shortstat(t))
@@ -113,10 +113,14 @@ pub async fn get_commit_graph(
     let format_arg = format!("--format={FORMAT}");
     let skip_arg = format!("--skip={}", skip.max(0));
     let max_arg = format!("--max-count={}", limit.max(1));
+    // A merge summarizes to nothing unless git is told which parent to diff
+    // against, so a merge row used to read "0 files" while the diff pane it
+    // opens shows the first-parent changes. Both sides now follow parent 1.
     let mut args = vec![
         "log",
         "--topo-order",
         "--shortstat",
+        FIRST_PARENT_MERGES,
         &format_arg,
         &skip_arg,
         &max_arg,
@@ -216,32 +220,27 @@ mod tests {
         assert!(parse_graph_log("").is_empty());
     }
 
-    /// End-to-end against real git: a feature branch and `main` that diverge
-    /// from a shared base. Logging both tips must surface the union of all
-    /// three commits with correct parents, refs, and per-commit shortstat.
-    #[tokio::test]
-    async fn get_commit_graph_unions_diverged_branches() {
+    /// `main` with a base commit, plus a `feature/x` branch one commit ahead
+    /// (a 2-line `b.txt`). Both graph fixtures start from this shape.
+    async fn repo_with_feature_branch() -> tempfile::TempDir {
         use crate::shared::git_cli::run_git;
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path();
-        run_git(&["init", "-q", "-b", "main"], path).await.unwrap();
-        run_git(&["config", "user.email", "t@example.com"], path)
-            .await
-            .unwrap();
-        run_git(&["config", "user.name", "T"], path).await.unwrap();
-        run_git(&["config", "commit.gpgsign", "false"], path)
-            .await
-            .unwrap();
-
-        // base on main
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &["config", "user.email", "t@example.com"],
+            &["config", "user.name", "T"],
+            &["config", "commit.gpgsign", "false"],
+        ] {
+            run_git(args, path).await.unwrap();
+        }
         tokio::fs::write(path.join("a.txt"), "1\n").await.unwrap();
         run_git(&["add", "."], path).await.unwrap();
         run_git(&["commit", "-q", "-m", "base"], path)
             .await
             .unwrap();
 
-        // feature branch: one commit adding a 2-line file
         run_git(&["checkout", "-q", "-b", "feature/x"], path)
             .await
             .unwrap();
@@ -252,6 +251,18 @@ mod tests {
         run_git(&["commit", "-q", "-m", "feat"], path)
             .await
             .unwrap();
+        dir
+    }
+
+    /// End-to-end against real git: a feature branch and `main` that diverge
+    /// from a shared base. Logging both tips must surface the union of all
+    /// three commits with correct parents, refs, and per-commit shortstat.
+    #[tokio::test]
+    async fn get_commit_graph_unions_diverged_branches() {
+        use crate::shared::git_cli::run_git;
+
+        let dir = repo_with_feature_branch().await;
+        let path = dir.path();
 
         // main advances independently
         run_git(&["checkout", "-q", "main"], path).await.unwrap();
@@ -303,6 +314,32 @@ mod tests {
         assert!(pushed("feat"), "the pushed feature tip");
         assert!(pushed("base"), "shared ancestor rode along");
         assert!(!pushed("main work"), "unpushed on the target tip");
+    }
+
+    /// A merge row must carry the same first-parent stat the diff pane shows
+    /// when that merge is opened — git summarizes a merge to nothing unless
+    /// told which parent to follow, which read as "0 files".
+    #[tokio::test]
+    async fn get_commit_graph_summarizes_merges_against_the_first_parent() {
+        use crate::shared::git_cli::run_git;
+
+        let dir = repo_with_feature_branch().await;
+        let path = dir.path();
+        run_git(&["checkout", "-q", "main"], path).await.unwrap();
+        run_git(
+            &["merge", "-q", "--no-ff", "-m", "merge feat", "feature/x"],
+            path,
+        )
+        .await
+        .unwrap();
+
+        let commits = get_commit_graph(path, &["main".to_string()], 0, 50)
+            .await
+            .unwrap();
+        let merge = commits.iter().find(|c| c.message == "merge feat").unwrap();
+        assert_eq!(merge.parents.len(), 2);
+        assert_eq!(merge.files_changed, 1);
+        assert_eq!(merge.additions, 2);
     }
 
     #[tokio::test]

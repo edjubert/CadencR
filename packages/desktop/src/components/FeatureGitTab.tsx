@@ -87,6 +87,7 @@ function useFeatureGitShortcuts(
     enabled,
     toggleFileList: view.toggleFileList,
     isFileListCollapseLoading: view.isFileListCollapseLoading,
+    isListView: panes.isListView,
     isPr: panes.isPr,
     sendDrafts: () => void drafts.send(),
     sendReviewThreads: reviews.sendSelected,

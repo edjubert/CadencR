@@ -3,10 +3,62 @@ use std::path::Path;
 
 use futures::{stream, StreamExt};
 
+use super::auth::{forge_to_app_error, host_configs, resolve_credentials};
+use super::provider::{ForgeContext, ForgeProvider};
+use super::{api_base_url, effective_kind, provider_for};
 use crate::app_state::AppState;
-use crate::domain::git::host::{detect_origin_remote, RemoteInfo};
+use crate::domain::git::host::{detect_origin_remote, GitHost, RemoteInfo};
 use crate::domain::git::service;
 use crate::error::AppError;
+
+/// A feature's forge, resolved end to end: which provider speaks for it, where
+/// its API lives, and the credentials to reach it with.
+pub struct FeatureForge {
+    pub context: ForgeContext,
+    pub kind: GitHost,
+    pub provider: &'static dyn ForgeProvider,
+}
+
+/// Resolve everything a per-feature forge call needs, in one place.
+///
+/// Both the comment list and the image proxy have to agree on the host, the
+/// kind, and the credentials for a feature — resolving them twice invites the
+/// two to drift, and an image authenticated against a host the comment fetch
+/// rejected would fail in a way neither route could explain.
+pub async fn feature_forge_context(
+    state: &AppState,
+    feature_id: i64,
+) -> Result<FeatureForge, AppError> {
+    let target = resolve_feature_target(state, feature_id).await;
+    if let Some(error) = target.error {
+        return Err(AppError::Internal(error));
+    }
+    let remote = target
+        .remote
+        .ok_or_else(|| AppError::BadRequest("Feature has no origin remote".into()))?;
+    let configs = host_configs()?;
+    let config = configs.get(&remote.hostname);
+    let kind = effective_kind(remote.host, config);
+    let provider = provider_for(kind)
+        .ok_or_else(|| AppError::BadRequest("Configure this remote's forge kind".into()))?;
+    let api_base_url = api_base_url(&remote.hostname, kind, config)
+        .map_err(forge_to_app_error)?
+        .ok_or_else(|| AppError::BadRequest("Configure this forge's API base URL".into()))?;
+    let credentials = resolve_credentials(&state.forge_auth, &remote.hostname, kind, config)
+        .await
+        .map_err(forge_to_app_error)?
+        .ok_or_else(|| AppError::BadRequest("Connect this forge in Settings first".into()))?;
+    Ok(FeatureForge {
+        context: ForgeContext {
+            remote,
+            api_base_url,
+            credentials,
+            http: state.forge_http.clone(),
+        },
+        kind,
+        provider,
+    })
+}
 
 #[derive(Debug, Clone)]
 pub struct FeatureForgeTarget {

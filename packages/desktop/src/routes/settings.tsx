@@ -1,25 +1,7 @@
 import { useEffect, useRef } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useShortcut } from "@/hooks/useShortcut";
-import {
-  ArrowLeft,
-  Bell,
-  BrainCircuit,
-  ChevronRight,
-  Code2,
-  Files,
-  GitMerge,
-  Globe,
-  History,
-  Info,
-  Keyboard,
-  MonitorCog,
-  Network,
-  Palette,
-  Plug,
-  Save,
-  Settings2,
-} from "lucide-react";
+import { ArrowLeft, ChevronRight, Files, History, Save, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -30,6 +12,7 @@ import { InterfaceSection } from "@/components/settings/InterfaceSection";
 import { GitSection } from "@/components/settings/GitSection";
 import { ProvidersSection } from "@/components/settings/ProvidersSection";
 import { AboutSection } from "@/components/settings/AboutSection";
+import { StatsSection } from "@/components/settings/StatsSection";
 import { AgentVerbositySettings } from "@/components/settings/AgentVerbositySettings";
 import { AgentSummaryModeToggle } from "@/components/settings/AgentSummaryModeToggle";
 import { ThemeSelector } from "@/components/settings/ThemeSelector";
@@ -42,14 +25,14 @@ import { WorkspaceJsonSettings } from "@/components/settings/SettingsJsonControl
 import { SettingsSubsection } from "@/components/settings/SettingsSubsection";
 import { SettingsRow } from "@/components/settings/SettingsRow";
 import { SettingsSwitchRow } from "@/components/settings/SettingsSwitchRow";
-import {
-  SettingsNavSidebar,
-  type SettingsNavGroup,
-} from "@/components/settings/SettingsNavSidebar";
+import { SettingsNavSidebar } from "@/components/settings/SettingsNavSidebar";
+import { NAV_GROUPS } from "@/components/settings/settings-nav-groups";
 import { IconTile } from "@/components/settings/IconTile";
 import { useDebouncedSetting } from "@/hooks/useDebouncedSetting";
 import { APP_VERSION } from "@/lib/app-version";
 import { RuntimeSettingsSection } from "@/components/settings/RuntimeSettingsSection";
+import { RadioCardGroup, type RadioCardOption } from "@/components/settings/RadioCardGroup";
+import { parseVimModeLevel, type VimModeLevel } from "@/lib/vim-mode-level";
 
 export const Route = createFileRoute("/settings")({
   component: SettingsPage,
@@ -58,93 +41,6 @@ export const Route = createFileRoute("/settings")({
     return {};
   },
 });
-
-const NAV_GROUPS: SettingsNavGroup[] = [
-  {
-    label: "General",
-    items: [
-      {
-        id: "appearance",
-        label: "Appearance",
-        icon: <Palette className="size-4" />,
-      },
-      { id: "editor", label: "Editor", icon: <Code2 className="size-4" /> },
-      {
-        id: "interface",
-        label: "Interface & Zoom",
-        icon: <MonitorCog className="size-4" />,
-      },
-      {
-        id: "notifications",
-        label: "Notifications",
-        icon: <Bell className="size-4" />,
-      },
-      {
-        id: "browser",
-        label: "Browser",
-        icon: <Globe className="size-4" />,
-      },
-    ],
-  },
-  {
-    label: "MCP",
-    items: [
-      {
-        id: "mcp",
-        label: "MCP",
-        icon: <Network className="size-4" />,
-      },
-    ],
-  },
-  {
-    label: "Agents",
-    items: [
-      {
-        id: "runtime",
-        label: "Runtime & Models",
-        icon: <BrainCircuit className="size-4" />,
-      },
-    ],
-  },
-  {
-    label: "Source Control",
-    items: [{ id: "git", label: "Git", icon: <GitMerge className="size-4" /> }],
-  },
-  {
-    label: "Providers",
-    items: [
-      {
-        id: "providers",
-        label: "CLI Providers",
-        icon: <Plug className="size-4" />,
-      },
-    ],
-  },
-  {
-    label: "About",
-    items: [
-      {
-        id: "about",
-        label: "About Cadencr",
-        icon: <Info className="size-4" />,
-      },
-    ],
-  },
-];
-
-function SettingsSidebarHeader(): React.JSX.Element {
-  return (
-    <div className="flex items-center gap-2">
-      <div className="grid size-7 place-items-center rounded-md bg-primary text-[var(--primary-foreground)]">
-        <Settings2 className="size-4" />
-      </div>
-      <div className="min-w-0">
-        <div className="text-sm font-semibold">Settings</div>
-        <div className="truncate text-[11px] text-muted-foreground">Cadencr v{APP_VERSION}</div>
-      </div>
-    </div>
-  );
-}
 
 function SettingsPage() {
   const { section } = Route.useSearch();
@@ -175,21 +71,8 @@ function SettingsPage() {
       <SettingsNavSidebar
         groups={NAV_GROUPS}
         scrollRef={mainRef}
-        header={<SettingsSidebarHeader />}
-        footer={
-          <div className="flex items-center justify-between gap-2">
-            <span>Changes save automatically.</span>
-            <button
-              type="button"
-              onClick={goBack}
-              title="Back to workspace (Esc)"
-              className="inline-flex items-center gap-1 rounded border border-border bg-card px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            >
-              <ArrowLeft className="size-3" />
-              Esc
-            </button>
-          </div>
-        }
+        header={<SidebarHeader />}
+        footer={<SidebarFooter onBack={goBack} />}
       />
 
       <main ref={mainRef} className="flex-1 overflow-y-auto">
@@ -227,11 +110,43 @@ function SettingsPage() {
           <RuntimeSettingsSection />
           <GitSection />
           <ProvidersSection />
+          <StatsSection />
           <AboutSection />
 
           <div className="h-12" />
         </div>
       </main>
+    </div>
+  );
+}
+
+function SidebarHeader(): React.JSX.Element {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="grid size-7 place-items-center rounded-md bg-primary text-[var(--primary-foreground)]">
+        <Settings2 className="size-4" />
+      </div>
+      <div className="min-w-0">
+        <div className="text-sm font-semibold">Settings</div>
+        <div className="truncate text-[11px] text-muted-foreground">Cadencr v{APP_VERSION}</div>
+      </div>
+    </div>
+  );
+}
+
+function SidebarFooter({ onBack }: { onBack: () => void }): React.JSX.Element {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span>Changes save automatically.</span>
+      <button
+        type="button"
+        onClick={onBack}
+        title="Back to workspace (Esc)"
+        className="inline-flex items-center gap-1 rounded border border-border bg-card px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      >
+        <ArrowLeft className="size-3" />
+        Esc
+      </button>
     </div>
   );
 }
@@ -324,12 +239,34 @@ function MaxOpenTabsControl(): React.JSX.Element {
   );
 }
 
+function useVimModeLevelOptions(): RadioCardOption<VimModeLevel>[] {
+  return [
+    {
+      value: "0",
+      label: "Off",
+      description: "Standard editing, no vim motions.",
+    },
+    {
+      value: "1",
+      label: "Vim motion",
+      description: "Modal editing via the built-in vim emulation.",
+    },
+    {
+      value: "2",
+      label: "Full Neovim",
+      description:
+        "A real Neovim instance with your own config, plugins and UI, rendered in the editor panel.",
+    },
+  ];
+}
+
 function EditorSection(): React.JSX.Element {
-  const vimMode = useDebouncedSetting("editor_vim_mode");
+  const vimModeLevel = useDebouncedSetting("editor_vim_mode_level");
   const autoSave = useDebouncedSetting("editor_auto_save");
   const gitBlame = useDebouncedSetting("editor_git_blame");
+  const vimModeLevelOptions = useVimModeLevelOptions();
 
-  const isVimEnabled = (vimMode.value ?? "false") === "true";
+  const currentVimModeLevel = parseVimModeLevel(vimModeLevel.value);
   const isAutoSaveEnabled = (autoSave.value ?? "false") === "true";
   const isGitBlameEnabled = (gitBlame.value ?? "false") === "true";
 
@@ -348,15 +285,19 @@ function EditorSection(): React.JSX.Element {
         >
           <LspServerList />
         </SettingsSubsection>
-        <SettingsSubsection padded={false}>
-          <SettingsSwitchRow
-            icon={<Keyboard className="size-4" />}
-            iconTint="cyan"
-            label="Vim motions"
-            description="Modal editing in the built-in code editor."
-            checked={isVimEnabled}
-            onCheckedChange={(checked) => vimMode.setValue(checked ? "true" : "false")}
+        <SettingsSubsection
+          title="Vim mode"
+          description="Choose how vim motions apply to the built-in code editor."
+        >
+          <RadioCardGroup<VimModeLevel>
+            ariaLabel="Vim mode level"
+            value={currentVimModeLevel}
+            onChange={(next) => vimModeLevel.setValue(next)}
+            options={vimModeLevelOptions}
+            layout="stack"
           />
+        </SettingsSubsection>
+        <SettingsSubsection padded={false}>
           <SettingsSwitchRow
             icon={<Save className="size-4" />}
             iconTint="green"

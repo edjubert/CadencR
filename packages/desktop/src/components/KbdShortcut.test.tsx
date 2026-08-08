@@ -24,6 +24,16 @@ describe("KbdShortcut", () => {
     expect(container.querySelector("svg")).toBeInTheDocument();
   });
 
+  it("renders the ArrowUp shift icon for both the shift token and the ⇧ glyph", () => {
+    const { container, rerender } = render(<KbdShortcut keys={["shift"]} />);
+    expect(container.querySelector(".lucide-arrow-up")).toBeInTheDocument();
+    expect(screen.queryByText("⇧")).toBeNull();
+
+    rerender(<KbdShortcut keys={["⇧"]} />);
+    expect(container.querySelector(".lucide-arrow-up")).toBeInTheDocument();
+    expect(screen.queryByText("⇧")).toBeNull();
+  });
+
   it("renders mixed keys", () => {
     const { container } = render(<KbdShortcut keys={["cmd", "S"]} />);
     expect(container.querySelector("svg")).toBeInTheDocument();

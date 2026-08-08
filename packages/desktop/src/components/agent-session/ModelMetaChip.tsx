@@ -1,4 +1,4 @@
-import { ChevronDownIcon, Loader2Icon } from "lucide-react";
+import { ChevronDownIcon, Loader2Icon, ZapIcon } from "lucide-react";
 import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { ProviderIcon } from "@/lib/provider-icons";
 import { resolveProviderModelAlias } from "@/lib/provider-model-aliases";
@@ -39,6 +39,10 @@ interface ModelMetaChipProps {
   currentThinkingEffort?: ThinkingEffortLevel;
   supportedThinkingEfforts: ThinkingEffortLevel[];
   onThinkingEffortChange?: (thinkingEffort?: ThinkingEffortLevel) => void;
+  supportsFastMode?: boolean;
+  fastMode?: boolean;
+  isFastModePending?: boolean;
+  onFastModeChange?: (enabled: boolean) => void;
   onModelSelected?: () => void;
 }
 
@@ -56,6 +60,10 @@ export function ModelMetaChip({
   currentThinkingEffort,
   supportedThinkingEfforts,
   onThinkingEffortChange,
+  supportsFastMode = false,
+  fastMode = false,
+  isFastModePending = false,
+  onFastModeChange,
   onModelSelected,
 }: ModelMetaChipProps): ReactNode {
   const isModelLoading = modelSelectionStatus !== "ready";
@@ -118,6 +126,14 @@ export function ModelMetaChip({
           selectedThinkingEffort={selectedThinkingEffort}
           supportedThinkingEfforts={supportedThinkingEfforts}
           onCycle={handleThinkingEffortCycle}
+          trailingSegment={supportsFastMode && !!onFastModeChange}
+        />
+      )}
+      {supportsFastMode && onFastModeChange && (
+        <FastModeSegment
+          enabled={fastMode}
+          pending={isFastModePending}
+          onToggle={() => onFastModeChange(!fastMode)}
         />
       )}
     </div>
@@ -179,6 +195,7 @@ interface ThinkingEffortSegmentProps {
   selectedThinkingEffort?: ThinkingEffortLevel;
   supportedThinkingEfforts: ThinkingEffortLevel[];
   onCycle: () => void;
+  trailingSegment: boolean;
 }
 
 function ThinkingEffortSegment({
@@ -186,6 +203,7 @@ function ThinkingEffortSegment({
   selectedThinkingEffort,
   supportedThinkingEfforts,
   onCycle,
+  trailingSegment,
 }: ThinkingEffortSegmentProps): ReactNode {
   return (
     <>
@@ -199,7 +217,8 @@ function ThinkingEffortSegment({
           onClick={onCycle}
           className={cn(
             MODEL_SEGMENT,
-            "rounded-r-md px-2 text-[var(--chip-violet-soft)] hover:bg-[var(--chip-violet-bg)]/10",
+            "px-2 text-[var(--chip-violet-soft)] hover:bg-[var(--chip-violet-bg)]/10",
+            !trailingSegment && "rounded-r-md",
           )}
           aria-label="Cycle thinking effort"
         >
@@ -208,6 +227,59 @@ function ThinkingEffortSegment({
             value={selectedThinkingEffort}
             compact
           />
+        </button>
+      </ShortcutTooltip>
+    </>
+  );
+}
+
+function FastModeSegment({
+  enabled,
+  pending,
+  onToggle,
+}: {
+  enabled: boolean;
+  pending: boolean;
+  onToggle: () => void;
+}): ReactNode {
+  const stateLabel = enabled ? "On" : "Off";
+  return (
+    <>
+      <div className="w-px bg-[var(--chip-violet-soft)]/15" aria-hidden="true" />
+      <ShortcutTooltip label={`Fast mode: ${stateLabel}`}>
+        <button
+          type="button"
+          onClick={onToggle}
+          disabled={pending}
+          aria-label={`Turn fast mode ${enabled ? "off" : "on"}`}
+          aria-pressed={enabled}
+          aria-busy={pending}
+          data-state={enabled ? "on" : "off"}
+          className={cn(
+            MODEL_SEGMENT,
+            // Model chip stays on --chip-violet-* (DESIGN.md). Never theme
+            // --primary here — on Frost that paints cyan/blue into a violet
+            // control. ON is a charged violet cell: dense fill, bright soft
+            // ink, inset hairline + outer glow so it reads as lit, not tinted.
+            "rounded-r-md px-2 disabled:cursor-wait",
+            enabled
+              ? "bg-[var(--chip-violet-bg)]/70 font-semibold text-[var(--chip-violet-soft)] shadow-[inset_0_0_0_1px_color-mix(in_oklch,var(--chip-violet-soft)_65%,transparent),0_0_22px_-1px_color-mix(in_oklch,var(--chip-violet-bg)_75%,transparent)] hover:bg-[var(--chip-violet-bg)]/80"
+              : "text-[var(--chip-violet-soft)]/35 hover:bg-[var(--chip-violet-bg)]/10 hover:text-[var(--chip-violet-soft)]/70",
+          )}
+        >
+          {pending ? (
+            <Loader2Icon className="size-3 animate-spin" aria-hidden="true" />
+          ) : (
+            <ZapIcon
+              className={cn(
+                "size-3 shrink-0 transition-[filter,color] duration-150",
+                enabled &&
+                  "fill-current text-[var(--chip-violet-soft)] drop-shadow-[0_0_6px_color-mix(in_oklch,var(--chip-violet-soft)_85%,transparent)]",
+              )}
+              aria-hidden="true"
+            />
+          )}
+          <span className={cn(enabled && "tracking-wide")}>Fast</span>
         </button>
       </ShortcutTooltip>
     </>

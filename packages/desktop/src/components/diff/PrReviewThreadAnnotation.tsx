@@ -8,7 +8,8 @@ import {
 } from "lucide-react";
 import type { CommentThread } from "@/api/generated";
 import { Markdown } from "@/components/Markdown";
-import { AuthorInitials, relativeTime } from "@/components/FeaturePrViewParts";
+import { relativeTime } from "@/components/FeaturePrViewParts";
+import { ForgeAvatar } from "@/components/ForgeImage";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { openExternalUrl } from "@/lib/open-external";
@@ -101,7 +102,7 @@ function RemoteThread({
         {visibleComments.map((comment, index) => (
           <article key={`${comment.created_at}:${index}`} className="space-y-1.5 px-3 py-2.5">
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] !text-[var(--editor-comment)]">
-              <AuthorInitials name={comment.author.display_name ?? comment.author.username} />
+              <ForgeAvatar user={comment.author} />
               <span className="truncate text-xs font-medium !text-[var(--editor-fg)]">
                 {comment.author.display_name ?? comment.author.username}
               </span>

@@ -14,6 +14,8 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 #[path = "session_init_effort.rs"]
 mod session_init_effort;
+#[path = "session_init_fast_mode.rs"]
+mod session_init_fast_mode;
 #[path = "session_init_feature.rs"]
 mod session_init_feature;
 #[path = "session_init_restore.rs"]
@@ -150,6 +152,7 @@ pub(super) async fn handle_init(
     let stored_model = row.as_ref().and_then(|r| r.model.clone());
     let effective_model = stored_model.clone().or(payload.model.clone());
     let stored_thinking_effort = row.as_ref().and_then(|r| r.thinking_effort.clone());
+    let stored_fast_mode = row.as_ref().is_some_and(|r| r.fast_mode);
     let selected_provider = runtime_provider.or(payload.provider.clone());
     let effective_provider = match selected_provider {
         Some(provider) => provider,
@@ -276,6 +279,32 @@ pub(super) async fn handle_init(
         &mut runtime_config,
     )
     .await;
+    let effective_fast_mode = match session_init_fast_mode::resolve(
+        app_state,
+        session_init_fast_mode::RestoreFastModeOptions {
+            db_session_id,
+            provider: &effective_provider,
+            model: effective_model.as_deref(),
+            cwd: &runtime_config.cwd,
+            profile: effective_profile.as_deref(),
+            stored_fast_mode,
+        },
+    )
+    .await
+    {
+        Ok(enabled) => enabled,
+        Err(error) => {
+            warn!(db_session_id, %error, "failed to normalize restored fast mode");
+            send_error(
+                sender,
+                &envelope.id,
+                "DB_ERROR",
+                "Failed to restore fast mode",
+            );
+            return;
+        }
+    };
+    runtime_config.fast_mode = effective_fast_mode;
 
     info!(
         db_session_id,
@@ -320,6 +349,7 @@ pub(super) async fn handle_init(
             provider: Some(effective_provider.clone()),
             model: effective_model,
             thinking_effort: effective_thinking_effort,
+            fast_mode: effective_fast_mode,
             profile: effective_profile,
             codex_permission_mode: if effective_provider
                 == crate::domain::agents::codex::PROVIDER_ID

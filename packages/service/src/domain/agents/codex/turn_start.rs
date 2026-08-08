@@ -5,32 +5,41 @@ use serde_json::{json, Value};
 use super::model::{approval_policy, approvals_reviewer, sandbox_policy};
 use crate::domain::agents::adapter::{RuntimeAccessMode, RuntimePermissionMode};
 
+pub(super) struct TurnStartOptions<'a> {
+    pub(super) cwd: &'a Path,
+    pub(super) permission_mode: Option<&'a RuntimePermissionMode>,
+    pub(super) access_mode: Option<&'a RuntimeAccessMode>,
+    pub(super) model: Option<String>,
+    pub(super) effort: Option<String>,
+    pub(super) fast_mode: bool,
+}
+
 pub(super) fn turn_start_params(
     thread_id: &str,
     input: Vec<Value>,
-    cwd: &Path,
-    permission_mode: Option<&RuntimePermissionMode>,
-    access_mode: Option<&RuntimeAccessMode>,
-    model: Option<String>,
-    effort: Option<String>,
+    options: TurnStartOptions<'_>,
 ) -> Value {
-    let collaboration_mode =
-        collaboration_mode(permission_mode, model.as_deref(), effort.as_deref());
+    let collaboration_mode = collaboration_mode(
+        options.permission_mode,
+        options.model.as_deref(),
+        options.effort.as_deref(),
+    );
     let mut params = json!({
         "threadId": thread_id,
         "input": input,
-        "cwd": cwd.to_string_lossy(),
-        "approvalPolicy": approval_policy(permission_mode, access_mode),
-        "approvalsReviewer": approvals_reviewer(access_mode),
-        "sandboxPolicy": sandbox_policy(permission_mode, access_mode, cwd),
+        "cwd": options.cwd.to_string_lossy(),
+        "approvalPolicy": approval_policy(options.permission_mode, options.access_mode),
+        "approvalsReviewer": approvals_reviewer(options.access_mode),
+        "sandboxPolicy": sandbox_policy(options.permission_mode, options.access_mode, options.cwd),
         "summary": "detailed",
     });
-    if let Some(model) = model {
+    if let Some(model) = options.model {
         params["model"] = Value::String(model);
     }
-    if let Some(effort) = effort {
+    if let Some(effort) = options.effort {
         params["effort"] = Value::String(effort);
     }
+    params["serviceTier"] = super::fast_service_tier_value(options.fast_mode);
     if let Some(collaboration_mode) = collaboration_mode {
         params["collaborationMode"] = collaboration_mode;
     }
@@ -68,7 +77,7 @@ pub(super) fn collaboration_mode(
 
 #[cfg(test)]
 mod tests {
-    use super::turn_start_params;
+    use super::{turn_start_params, TurnStartOptions};
     use std::path::Path;
 
     #[test]
@@ -76,16 +85,20 @@ mod tests {
         let params = turn_start_params(
             "thread",
             vec![serde_json::json!({ "type": "text", "text": "hello" })],
-            Path::new("/tmp/app"),
-            None,
-            None,
-            Some("gpt-5.6-sol".to_string()),
-            Some("ultra".to_string()),
+            TurnStartOptions {
+                cwd: Path::new("/tmp/app"),
+                permission_mode: None,
+                access_mode: None,
+                model: Some("gpt-5.6-sol".to_string()),
+                effort: Some("ultra".to_string()),
+                fast_mode: true,
+            },
         );
 
         assert_eq!(params["summary"], "detailed");
         assert_eq!(params["effort"], "ultra");
         assert_eq!(params["model"], "gpt-5.6-sol");
+        assert_eq!(params["serviceTier"], "priority");
         assert_eq!(
             params["collaborationMode"]["settings"]["reasoning_effort"],
             "ultra"
@@ -97,11 +110,14 @@ mod tests {
         let params = turn_start_params(
             "thread",
             vec![serde_json::json!({ "type": "text", "text": "plan" })],
-            Path::new("/tmp/app"),
-            Some(&crate::domain::agents::adapter::RuntimePermissionMode::Plan),
-            None,
-            Some("gpt-5.5".to_string()),
-            Some("high".to_string()),
+            TurnStartOptions {
+                cwd: Path::new("/tmp/app"),
+                permission_mode: Some(&crate::domain::agents::adapter::RuntimePermissionMode::Plan),
+                access_mode: None,
+                model: Some("gpt-5.5".to_string()),
+                effort: Some("high".to_string()),
+                fast_mode: false,
+            },
         );
 
         assert_eq!(params["collaborationMode"]["mode"], "plan");
@@ -123,11 +139,14 @@ mod tests {
         let params = turn_start_params(
             "thread",
             vec![serde_json::json!({ "type": "text", "text": "plan" })],
-            Path::new("/tmp/app"),
-            Some(&crate::domain::agents::adapter::RuntimePermissionMode::Plan),
-            None,
-            None,
-            Some("high".to_string()),
+            TurnStartOptions {
+                cwd: Path::new("/tmp/app"),
+                permission_mode: Some(&crate::domain::agents::adapter::RuntimePermissionMode::Plan),
+                access_mode: None,
+                model: None,
+                effort: Some("high".to_string()),
+                fast_mode: false,
+            },
         );
 
         assert!(params.get("collaborationMode").is_none());
@@ -138,11 +157,16 @@ mod tests {
         let params = turn_start_params(
             "thread",
             vec![serde_json::json!({ "type": "text", "text": "approved" })],
-            Path::new("/tmp/app"),
-            Some(&crate::domain::agents::adapter::RuntimePermissionMode::AcceptEdits),
-            None,
-            Some("gpt-5.5".to_string()),
-            Some("high".to_string()),
+            TurnStartOptions {
+                cwd: Path::new("/tmp/app"),
+                permission_mode: Some(
+                    &crate::domain::agents::adapter::RuntimePermissionMode::AcceptEdits,
+                ),
+                access_mode: None,
+                model: Some("gpt-5.5".to_string()),
+                effort: Some("high".to_string()),
+                fast_mode: false,
+            },
         );
 
         assert_eq!(params["collaborationMode"]["mode"], "default");

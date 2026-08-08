@@ -33,6 +33,23 @@ pub fn foreground_command_counts_by_feature(manager: &PtyManager) -> HashMap<i64
     counts
 }
 
+/// Shell pid of every live feature terminal, keyed to the feature it serves.
+/// Exited shells are skipped — their handles linger for a grace period, and a
+/// recycled pid must not be credited to the feature that used to own it.
+pub fn live_shell_pids_by_feature(manager: &PtyManager) -> HashMap<i32, i64> {
+    let mut roots = HashMap::new();
+    for entry in manager.terminals.iter() {
+        let handle = entry.value();
+        if handle.alive.borrow().is_some() {
+            continue;
+        }
+        if let Some(shell_pid) = handle.shell_process_group_leader {
+            roots.insert(shell_pid, handle.feature_id);
+        }
+    }
+    roots
+}
+
 fn foreground_process_group(handle: &PtyHandle) -> Option<i32> {
     #[cfg(unix)]
     {

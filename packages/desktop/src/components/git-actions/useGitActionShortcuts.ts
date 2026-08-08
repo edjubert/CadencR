@@ -1,10 +1,10 @@
 import { useGlobalShortcutById, useShortcut } from "@/hooks/useShortcut";
 import { isInCodeMirrorEditor } from "@/lib/shortcuts/dom-targets";
-import type { CommitActivity, GitActionState } from "./useGitAction";
+import type { GitActionState, GitActivities } from "./useGitAction";
 
 interface GitActionShortcutOptions {
   state: GitActionState;
-  commitActivity: CommitActivity;
+  activities: GitActivities;
   openCommit: () => void;
   openPush: () => void;
   openCompare: () => Promise<void>;
@@ -14,12 +14,14 @@ interface GitActionShortcutOptions {
 export function useGitActionShortcuts(options: GitActionShortcutOptions): void {
   useShortcut("git-commit", (event) => {
     if (isInCodeMirrorEditor(event.target)) return;
-    if (!options.commitActivity && options.state.disabled.commit !== null) return;
+    if (!options.activities.commit && options.state.disabled.commit !== null) return;
     event.preventDefault();
     options.openCommit();
   });
   useShortcut("git-push", (event) => {
-    if (options.state.disabled.push !== null) return;
+    // A backgrounded push stays reachable even when the snapshot now says
+    // "Nothing to push" — the shortcut reopens the running/failed output.
+    if (!options.activities.push && options.state.disabled.push !== null) return;
     event.preventDefault();
     options.openPush();
   });

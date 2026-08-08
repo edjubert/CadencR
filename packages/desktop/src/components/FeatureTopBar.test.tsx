@@ -64,6 +64,7 @@ vi.mock("@/api/generated", () => ({
   useListFeatureWorktrees: vi.fn(() => ({ data: [], isLoading: false, error: null })),
   useGetFileBlobShas: vi.fn(() => ({ data: [] })),
   // GitActionButton + BranchChip dependencies — feature/git-workflow-overhaul.
+  PushForceMode: { none: "none", force: "force", "force-with-lease": "force-with-lease" },
   usePush: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
   useCommit: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
   useGetUncommittedFiles: vi.fn(() => ({ data: [], isLoading: false, isError: false })),

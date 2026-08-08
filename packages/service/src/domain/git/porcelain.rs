@@ -18,8 +18,9 @@ use super::models::{ConflictKind, FileStageState};
 /// `"modified"`, `"deleted"`, `"renamed"`, or `"untracked"`.
 ///
 /// `additions`/`deletions` are filled from `git diff --numstat` (sum of staged
-/// and unstaged sides). They are `0` for untracked files (numstat doesn't
-/// cover them) and for binary files (where numstat reports `-`).
+/// and unstaged sides). Untracked files get `additions` from a streamed line
+/// count (git's numstat never covers them) and `deletions: 0`. Binary files
+/// stay at `0` (numstat reports `-`; untracked binaries are skipped the same way).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct UncommittedFile {
     pub path: String,

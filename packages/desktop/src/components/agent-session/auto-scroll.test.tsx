@@ -129,6 +129,7 @@ vi.mock("@/hooks/useImageAttachments", () => ({
     addFiles: vi.fn(),
     removeAttachment: vi.fn(),
     clearAttachments: vi.fn(),
+    restoreAttachments: vi.fn(),
     dragHandlers: {},
     isDragging: false,
   })),
@@ -311,6 +312,33 @@ describe("AgentSession auto-scroll", () => {
     const scroller = getScroller();
     // Content fits — scrollHeight <= clientHeight, no scrolling possible.
     stubGeometry(scroller, 200, 400);
+    expect(getAutoScrollButton()).toHaveAttribute("aria-pressed", "true");
+
+    act(() => {
+      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -50, bubbles: true }));
+    });
+    expect(getAutoScrollButton()).toHaveAttribute("aria-pressed", "true");
+  });
+
+  // The same rule, one step subtler: the stream always renders a blank
+  // `STREAM_BOTTOM_GAP_PX` spacer under the last message, so a conversation that
+  // visually fits still overflows by that much. Reading raw `scrollHeight >
+  // clientHeight` here would call that scrollable and let an idle wheel-up kill
+  // stick — see `canScrollStream`.
+  it("rule 2: wheel-up ignores the bottom spacer's overflow", () => {
+    render(
+      <AgentSession
+        agentType="session"
+        blocks={[makeBlock("1", "Hello")]}
+        status="agent"
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+      />,
+    );
+
+    const scroller = getScroller();
+    // 380px of content in a 400px viewport, plus the 40px spacer.
+    stubGeometry(scroller, 420, 400);
     expect(getAutoScrollButton()).toHaveAttribute("aria-pressed", "true");
 
     act(() => {

@@ -55,12 +55,13 @@ pub async fn spawn_acp_runtime_session(
         context_window,
         hooks,
     } = args;
-    let client = AcpClient::spawn(AcpSpawnOptions {
-        command,
-        client_info,
-        max_line_bytes: None,
-        spawn_guard,
-    })
+    let client = AcpClient::spawn(
+        AcpSpawnOptions::builder()
+            .command(command)
+            .client_info(client_info)
+            .maybe_spawn_guard(spawn_guard)
+            .build(),
+    )
     .await
     .map_err(|e| RuntimeError::new(format!("failed to spawn ACP subprocess: {e}")))?;
     let pid = client.pid();

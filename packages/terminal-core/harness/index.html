@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>terminal-core harness</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 0;
+        padding: 1rem;
+        background: #1a1a1a;
+        color: #ddd;
+      }
+      h1 {
+        font-size: 1rem;
+        margin: 0 0 0.75rem;
+      }
+      .controls {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        margin-bottom: 0.75rem;
+      }
+      button,
+      select {
+        font: inherit;
+        padding: 0.25rem 0.5rem;
+      }
+      #surface {
+        width: 100%;
+        height: 60vh;
+        outline: 1px solid #444;
+      }
+      #surface:focus {
+        outline: 2px solid #6ae;
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+      #status {
+        margin-top: 0.75rem;
+        font-family: ui-monospace, monospace;
+        font-size: 0.8rem;
+        color: #9a9;
+      }
+      #error {
+        margin-top: 0.75rem;
+        font-family: ui-monospace, monospace;
+        color: #f77;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>terminal-core harness — WebGPU renderer</h1>
+
+    <div class="controls">
+      <button id="feed-text">Feed text</button>
+      <button id="feed-colors">Feed 256 colors</button>
+      <button id="feed-truecolor">Feed true color</button>
+      <button id="feed-clear">Clear</button>
+      <select id="font">
+        <option value="ui-monospace, monospace">System monospace</option>
+        <option value="'Courier New', monospace">Courier New</option>
+        <option value="Menlo, monospace">Menlo</option>
+      </select>
+      <select id="theme">
+        <option value="dark">Dark theme</option>
+        <option value="light">Light theme</option>
+        <option value="solarized">Solarized theme</option>
+      </select>
+    </div>
+
+    <div id="surface" tabindex="0"><canvas id="canvas"></canvas></div>
+
+    <div id="status">initialising…</div>
+    <div id="error"></div>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

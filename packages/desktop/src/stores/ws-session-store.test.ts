@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useWsSessionStore, applyMutations, createStreamingState } from "./ws-session-store";
+import { BLOCK_CONTENT_MAX_CHARS, TRUNCATION_NOTICE } from "@/lib/block-content-budget";
 import { updateSession } from "./ws-session-types";
 import { invalidateWorktreeQueries } from "@/lib/worktreeQueries";
 import { forceReconnectAll } from "@/lib/ws-reconnect";
@@ -1521,6 +1522,26 @@ describe("ws-session-store", () => {
     });
 
     expect(useWsSessionStore.getState().sessions["s1"].currentThinkingEffort).toBeUndefined();
+  });
+
+  it("updates fast mode only after the backend confirms it", async () => {
+    const { store, ws } = await connectInitializedSession();
+
+    const pending = store.setFastMode("s1", true);
+    const envelope = JSON.parse(ws.sent[ws.sent.length - 1]);
+    expect(envelope.action).toBe("fast_mode.set");
+    expect(envelope.payload).toMatchObject({ session_id: "srv-1", enabled: true });
+    expect(useWsSessionStore.getState().sessions["s1"].fastMode).toBe(false);
+
+    ws.simulateMessage({
+      domain: "session",
+      action: "fast_mode.set.ok",
+      ref: envelope.id,
+      payload: { enabled: true },
+    });
+    await pending;
+
+    expect(useWsSessionStore.getState().sessions["s1"].fastMode).toBe(true);
   });
 
   it("sets hasFileChanges when Write tool_call block is received", async () => {
@@ -3206,6 +3227,62 @@ describe("ws-session-store", () => {
       expect(divider).toBeDefined();
       expect(divider?.content).toContain('"trigger":"auto"');
       expect(divider?.content).toContain('"pre_tokens":90000');
+    });
+
+    // Appended blocks are inserted verbatim by `applyMutations` — only the
+    // *update* path runs through `mergeToolContent`. A block that arrives whole
+    // (a big tool_result, a non-streamed assistant message) was therefore
+    // retained at full size for the life of the session.
+    it("bounds a streamed block that arrives whole", async () => {
+      const store = useWsSessionStore.getState();
+      store.connect("s1");
+      await tick();
+      const ws = getWs();
+      ws.simulateMessage({
+        domain: "session",
+        action: "initialized",
+        payload: { session_id: "srv-1" },
+      });
+
+      const huge = "x".repeat(BLOCK_CONTENT_MAX_CHARS + 50_000);
+      ws.simulateMessage({
+        domain: "session",
+        action: "message",
+        payload: {
+          blocks: [{ type: "assistant", message: { content: [{ type: "text", text: huge }] } }],
+        },
+      });
+
+      const session = useWsSessionStore.getState().sessions["s1"];
+      const block = session.blocks.find((b) => b.type === "text");
+      expect(block).toBeDefined();
+      expect(block!.content.length).toBeLessThan(huge.length);
+      expect(block!.content).toContain(TRUNCATION_NOTICE);
+      expect(block!.truncatedContent).toBe(true);
+    });
+
+    it("leaves an ordinary streamed block untouched", async () => {
+      const store = useWsSessionStore.getState();
+      store.connect("s1");
+      await tick();
+      const ws = getWs();
+      ws.simulateMessage({
+        domain: "session",
+        action: "initialized",
+        payload: { session_id: "srv-1" },
+      });
+      ws.simulateMessage({
+        domain: "session",
+        action: "message",
+        payload: {
+          blocks: [{ type: "assistant", message: { content: [{ type: "text", text: "hello" }] } }],
+        },
+      });
+
+      const session = useWsSessionStore.getState().sessions["s1"];
+      const block = session.blocks.find((b) => b.type === "text");
+      expect(block?.content).toBe("hello");
+      expect(block?.truncatedContent).toBeUndefined();
     });
 
     it("manual compact completes when the compact boundary arrives", async () => {

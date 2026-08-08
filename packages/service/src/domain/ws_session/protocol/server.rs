@@ -34,6 +34,8 @@ pub struct SessionInitializedPayload {
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_effort: Option<String>,
+    #[serde(default)]
+    pub fast_mode: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -141,6 +143,10 @@ pub struct SessionErrorPayload {
     /// mode in the cycle without re-querying state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// Delay requested after a transient rate-limit response. Clients use this
+    /// instead of immediately feeding a reconnect storm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
@@ -290,6 +296,11 @@ pub struct ModelSetOkPayload {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct EffortSetOkPayload {
     pub thinking_effort: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FastModeSetOkPayload {
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

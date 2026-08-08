@@ -1,5 +1,49 @@
 import path from "node:path";
 
+export interface DevProfile {
+  /** Where the dev app should point `userData` — and what the instance lock is keyed on. */
+  userDataPath: string;
+  /** Path of the `.env` that was loaded, or `null` when loading failed. */
+  envPath: string | null;
+  /** Load failure, for the caller to raise once it can be shown to the user. */
+  envError: unknown;
+}
+
+/**
+ * Resolves the dev profile directory, loading `.env` FIRST.
+ *
+ * The order is the whole point. `CADENCR_DEV_USER_DATA_SUFFIX` is what keeps
+ * each worktree on its own profile, `scripts/configure-worktree-dev.mts` writes
+ * it into `packages/desktop/.env`, and nothing else puts it in the environment
+ * — so reading the suffix before loading that file silently yields the shared
+ * `desktop-dev` profile for every checkout. Since Electron's single-instance
+ * lock is keyed on `userData`, the second worktree to start then dies with
+ * "second instance — exiting" even though its ports are unique.
+ *
+ * A `.env` failure is returned, not thrown: this runs at module scope, before
+ * `app.whenReady()` and so outside the startup-recovery `catch` — raising here
+ * would take the app down with nothing on screen. `bootstrap()` re-raises it
+ * where it can at least be reported.
+ */
+export function resolveDevProfile(
+  appDataPath: string,
+  loadEnv: () => string,
+  env: Record<string, string | undefined> = process.env,
+): DevProfile {
+  let envPath: string | null = null;
+  let envError: unknown = null;
+  try {
+    envPath = loadEnv();
+  } catch (error) {
+    envError = error;
+  }
+  return {
+    userDataPath: devUserDataPath(appDataPath, env.CADENCR_DEV_USER_DATA_SUFFIX),
+    envPath,
+    envError,
+  };
+}
+
 export function devUserDataPath(appDataPath: string, suffix: string | undefined): string {
   const safeSuffix = suffix ? sanitizeSuffix(suffix) : "";
   const profileName = safeSuffix ? `desktop-dev-${safeSuffix}` : "desktop-dev";

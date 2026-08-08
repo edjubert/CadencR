@@ -111,6 +111,9 @@ function SessionComposer({
       providers={meta.visibleProviders}
       canChangeProvider={meta.model.canChangeProvider}
       supportedThinkingEfforts={meta.model.supportedThinkingEfforts}
+      supportsFastMode={meta.model.supportsFastMode}
+      isFastModePending={meta.isFastModePending}
+      onFastModeChange={meta.handleFastModeChange}
       projectPath={base.projectPath}
       isAgentWorking={base.isAgentWorking}
       agentTabActive={props.agentTabActive ?? true}

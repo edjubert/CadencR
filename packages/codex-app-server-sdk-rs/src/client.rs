@@ -30,10 +30,12 @@ pub struct CodexAppServerClient {
     inner: Arc<Inner>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, bon::Builder)]
 pub struct AppServerSpawnOptions {
     pub env: Option<HashMap<String, String>>,
+    #[builder(default)]
     pub enable_features: Vec<String>,
+    #[builder(default)]
     pub client_info: AppServerClientInfo,
     pub request_timeout: Option<Duration>,
     pub max_line_bytes: Option<usize>,

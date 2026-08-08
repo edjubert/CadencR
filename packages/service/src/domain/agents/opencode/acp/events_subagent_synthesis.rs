@@ -15,10 +15,13 @@
 //!    - `rawOutput.metadata.sessionId` = the (otherwise unused) sub-agent
 //!      session id
 //!
-//! The body itself is wrapped as
-//! `task_id: <child-session>\n\n<task_result>\n…body…\n</task_result>`.
+//! The body itself is wrapped in one of two shapes OpenCode has used:
 //!
-//! This module strips the wrapper and builds a synthetic
+//! - Legacy: `task_id: <child-session>\n\n<task_result>\n…body…\n</task_result>`
+//! - Current (`renderOutput` in `tool/task.ts`):  
+//!   `<task id="…" state="completed">\n<task_result>\n…body…\n</task_result>\n</task>`
+//!
+//! This module strips those wrappers and builds a synthetic
 //! `AssistantMessage` event tagged with `parent_tool_use_id == <task
 //! tool_use_id>` so the FE's existing nesting path renders the body as a
 //! child Text block inside the Task tool block. Mirrors the Codex pattern
@@ -33,10 +36,10 @@ use crate::domain::agents::adapter::{
 
 /// Pull the cleaned sub-agent body text out of a Task / Agent
 /// `tool_call_update` body. Prefers `rawOutput.output` (most authoritative),
-/// falls back to recursively-unwrapped `content[0]`. Strips the OpenCode
-/// `task_id: <sid>\n\n` prefix and outer `<task_result>…</task_result>`
-/// markers, then trims. Returns `None` if no body text is present or the
-/// result is empty.
+/// falls back to recursively-unwrapped `content[0]`. Strips OpenCode's
+/// legacy `task_id:` preamble and/or `<task id=…>` envelope plus inner
+/// `<task_result>` / `<task_error>` markers, then trims. Returns `None` if
+/// no body text is present or the result is empty.
 pub(super) fn extract_subagent_body(body: &Value) -> Option<String> {
     let raw = raw_text_from_body(body)?;
     let cleaned = strip_subagent_wrappers(&raw);
@@ -65,25 +68,57 @@ fn raw_text_from_body(body: &Value) -> Option<String> {
     None
 }
 
-/// Strip the `task_id: …\n\n` prefix line and the outer
-/// `<task_result>` / `</task_result>` markers OpenCode wraps the body in.
-/// Defensive: if either marker is absent, leave the rest of the text
-/// unchanged so a future wire-shape change still surfaces something readable.
+/// Strip OpenCode's Task output wrappers.
+///
+/// Handles both the legacy `task_id:` preamble and the current
+/// `<task id="…" state="…">…</task>` envelope, then peels
+/// `<task_result>` / `</task_result>` (or `<task_error>`). Defensive: if
+/// markers are absent, leave the rest of the text unchanged so a future
+/// wire-shape change still surfaces something readable.
 fn strip_subagent_wrappers(raw: &str) -> String {
     let without_prefix = match raw.split_once("\n\n") {
         Some((first_line, rest)) if first_line.trim_start().starts_with("task_id:") => rest,
         _ => raw,
     };
-    let trimmed = without_prefix.trim();
-    let inside = trimmed
-        .strip_prefix("<task_result>")
-        .map(str::trim_start)
-        .unwrap_or(trimmed);
-    let inside = inside
-        .strip_suffix("</task_result>")
+    let without_task_envelope = strip_task_element(without_prefix);
+    let trimmed = without_task_envelope.trim();
+    for tag in ["task_result", "task_error"] {
+        if let Some(inside) = extract_tagged(trimmed, tag) {
+            return inside.trim().to_string();
+        }
+    }
+    trimmed.to_string()
+}
+
+/// Peel a leading `<task …>` / trailing `</task>` envelope when present.
+/// Must not treat `<task_result>` / `<task_error>` as the outer envelope.
+fn strip_task_element(raw: &str) -> &str {
+    let trimmed = raw.trim();
+    let Some(rest) = trimmed.strip_prefix("<task") else {
+        return trimmed;
+    };
+    // `<task` must be followed by whitespace, `>`, or `/` — not `_result`.
+    match rest.chars().next() {
+        Some(' ' | '\t' | '\n' | '\r' | '>' | '/') => {}
+        _ => return trimmed,
+    }
+    let Some(after_open) = rest.find('>').map(|index| &rest[index + 1..]) else {
+        return trimmed;
+    };
+    after_open
+        .trim()
+        .strip_suffix("</task>")
         .map(str::trim_end)
-        .unwrap_or(inside);
-    inside.to_string()
+        .unwrap_or(after_open.trim())
+}
+
+fn extract_tagged<'a>(raw: &'a str, tag: &str) -> Option<&'a str> {
+    let start_tag = format!("<{tag}>");
+    let end_tag = format!("</{tag}>");
+    let start = raw.find(&start_tag)?;
+    let content_start = start + start_tag.len();
+    let end = raw[content_start..].find(&end_tag)? + content_start;
+    Some(&raw[content_start..end])
 }
 
 /// Recursive text unwrap matching OpenCode's `{type:"content", content:{…}}`
@@ -155,8 +190,7 @@ mod tests {
 
     #[test]
     fn extracts_body_from_raw_output_and_strips_full_wrapper() {
-        // The shape captured in `/tmp/cadencr-acp-wire.log`:
-        //   rawOutput.output = "task_id: ses_…\n\n<task_result>\nbody\n</task_result>"
+        // Legacy shape: task_id preamble + <task_result>.
         let body = json!({
             "rawOutput": {
                 "output": "task_id: ses_child\n\n<task_result>\nReal body line 1\nReal body line 2\n</task_result>",
@@ -165,6 +199,20 @@ mod tests {
         });
         let extracted = extract_subagent_body(&body).expect("body");
         assert_eq!(extracted, "Real body line 1\nReal body line 2");
+    }
+
+    #[test]
+    fn extracts_body_from_current_task_element_wrapper() {
+        // Current OpenCode renderOutput shape (v1.18+):
+        //   <task id="ses_…" state="completed">\n<task_result>\n…\n</task_result>\n</task>
+        let body = json!({
+            "rawOutput": {
+                "output": "<task id=\"ses_child\" state=\"completed\">\n<task_result>\nCurrent body line 1\nCurrent body line 2\n</task_result>\n</task>",
+                "metadata": { "sessionId": "ses_child" }
+            }
+        });
+        let extracted = extract_subagent_body(&body).expect("body");
+        assert_eq!(extracted, "Current body line 1\nCurrent body line 2");
     }
 
     #[test]

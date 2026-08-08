@@ -40,6 +40,8 @@ pub enum WsSessionAction {
     ModelSetOk,
     #[serde(rename = "effort.set.ok")]
     EffortSetOk,
+    #[serde(rename = "fast_mode.set.ok")]
+    FastModeSetOk,
     #[serde(rename = "mode.changed")]
     ModeChanged,
     #[serde(rename = "profile.changed")]
@@ -79,6 +81,7 @@ impl WsSessionAction {
             Self::CompactStarted => "compact.started",
             Self::ModelSetOk => "model.set.ok",
             Self::EffortSetOk => "effort.set.ok",
+            Self::FastModeSetOk => "fast_mode.set.ok",
             Self::ModeChanged => "mode.changed",
             Self::ProfileChanged => "profile.changed",
             Self::BranchRewound => "branch.rewound",
@@ -113,6 +116,7 @@ impl WsSessionAction {
             Self::CompactStarted,
             Self::ModelSetOk,
             Self::EffortSetOk,
+            Self::FastModeSetOk,
             Self::ModeChanged,
             Self::ProfileChanged,
             Self::BranchRewound,

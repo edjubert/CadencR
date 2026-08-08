@@ -17,6 +17,8 @@ export const RECONNECT_INTERVAL_MS = 1000;
 export const RECONNECT_MAX_MS = 30_000;
 export const AUTO_RECONNECT_TIMEOUT_MS = 240_000;
 export const AUTO_RECONNECT_TIMEOUT_SECONDS = AUTO_RECONNECT_TIMEOUT_MS / 1000;
+export const RECONNECT_STABLE_MS = 10_000;
+export const WS_RATE_LIMIT_RETRY_MS = 5_000;
 
 /** Backoff for the Nth (1-based) consecutive failure, with half-range jitter. */
 function backoffDelayMs(failures: number): number {
@@ -40,6 +42,10 @@ export function notifyRateLimited(retryAfterMs: number): void {
   if (until > rateLimitedUntil) rateLimitedUntil = until;
 }
 
+export function isRateLimited(): boolean {
+  return Date.now() < rateLimitedUntil;
+}
+
 /** Lift the rate-limit hold (the backend is reachable again). */
 export function clearRateLimit(): void {
   rateLimitedUntil = 0;
@@ -49,12 +55,18 @@ interface ReconnectorOptions {
   onManualRequired?: (key: string) => void;
 }
 
+interface ScheduleReconnectOptions extends ReconnectorOptions {
+  /** Per-attempt floor used when a close signal implies reconnect pressure. */
+  minimumDelayMs?: number;
+}
+
 interface ForceReconnectOptions {
   bypassManualPause?: boolean;
 }
 
 interface ReconnectEntry {
   timer: ReturnType<typeof setTimeout> | null;
+  stableTimer: ReturnType<typeof setTimeout> | null;
   firstFailureAt: number | null;
   /** Consecutive failures since the last successful connect; drives backoff. */
   failures: number;
@@ -71,6 +83,7 @@ function getOrCreate(key: string): ReconnectEntry {
   if (!entry) {
     entry = {
       timer: null,
+      stableTimer: null,
       firstFailureAt: null,
       failures: 0,
       manualOnly: false,
@@ -95,11 +108,15 @@ function pauseForManualReconnect(key: string, entry: ReconnectEntry): void {
 export function scheduleReconnect(
   key: string,
   connect: () => void,
-  options?: ReconnectorOptions,
+  options?: ScheduleReconnectOptions,
 ): void {
   const entry = getOrCreate(key);
   entry.connect = connect;
   applyOptions(entry, options);
+  if (entry.stableTimer) {
+    clearTimeout(entry.stableTimer);
+    entry.stableTimer = null;
+  }
   if (entry.timer) return;
   if (entry.manualOnly) return;
 
@@ -112,22 +129,36 @@ export function scheduleReconnect(
 
   entry.failures += 1;
   // Wait at least the backoff, and never retry before a 429's Retry-After.
-  const delay = Math.max(backoffDelayMs(entry.failures), rateLimitedUntil - now);
+  const delay = Math.max(
+    backoffDelayMs(entry.failures),
+    rateLimitedUntil - now,
+    options?.minimumDelayMs ?? 0,
+  );
 
-  entry.timer = setTimeout(() => {
+  const attemptConnect = (): void => {
+    const rateLimitDelay = rateLimitedUntil - Date.now();
+    if (rateLimitDelay > 0) {
+      entry.timer = setTimeout(attemptConnect, rateLimitDelay);
+      return;
+    }
     entry.timer = null;
     if (entry.manualOnly) return;
     if (isHiddenBrowserRemote()) return;
     connect();
-  }, delay);
+  };
+  entry.timer = setTimeout(attemptConnect, delay);
 }
 
 export function resetReconnectState(key: string): void {
   const entry = entries.get(key);
   if (!entry) return;
-  entry.firstFailureAt = null;
-  entry.failures = 0;
-  entry.manualOnly = false;
+  if (entry.stableTimer) clearTimeout(entry.stableTimer);
+  entry.stableTimer = setTimeout(() => {
+    entry.stableTimer = null;
+    entry.firstFailureAt = null;
+    entry.failures = 0;
+    entry.manualOnly = false;
+  }, RECONNECT_STABLE_MS);
 }
 
 export function clearReconnect(key: string): void {
@@ -136,6 +167,7 @@ export function clearReconnect(key: string): void {
     clearTimeout(entry.timer);
     entry.timer = null;
   }
+  if (entry?.stableTimer) clearTimeout(entry.stableTimer);
   entries.delete(key);
 }
 
@@ -170,6 +202,10 @@ export function forceReconnect(key: string, options?: ForceReconnectOptions): vo
   if (!entry?.connect) return;
   if (options?.bypassManualPause) {
     clearRateLimit();
+    if (entry.stableTimer) {
+      clearTimeout(entry.stableTimer);
+      entry.stableTimer = null;
+    }
     entry.firstFailureAt = null;
     entry.failures = 0;
     entry.manualOnly = false;

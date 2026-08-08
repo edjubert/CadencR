@@ -79,21 +79,33 @@ export function TabContentRegistry({
   const layoutState = layoutStateOverride ?? storeLayoutState;
   const hosts = useTabHostRegistry((s) => s.hosts);
   const [visitedTabs, setVisitedTabs] = useState<Partial<Record<TabKind, true>>>({});
-  const visibleTabsKey = ALL_TAB_KINDS.filter((tab) => isTabVisible(layoutState, tab)).join("|");
+  const visibleTabs = ALL_TAB_KINDS.filter((tab) => isTabVisible(layoutState, tab));
+  const visibleTabsKey = visibleTabs.join("|");
 
+  // Keyed on `visibleTabsKey`, deliberately not on `visibleTabs`/`layoutState`:
+  // the string is identity-stable, while both of those get a fresh identity on
+  // every render wherever splits are off (`FeatureLayoutShell` substitutes a
+  // flat layout there). With an object in the deps this effect re-ran every
+  // render and re-scheduled `setVisitedTabs`. An updater returning `prev` does
+  // not save you: it only skips scheduling through React's eager-bailout fast
+  // path, which is disabled whenever the fiber already has queued work — so
+  // under an agent stream it left a Default-lane update pending at the tail of
+  // nearly every commit, and that is precisely what React counts toward
+  // "Maximum update depth exceeded" (#185). The closure reads `visibleTabs`,
+  // which the key fully determines, so it can never go stale.
   useEffect(() => {
     if (!mountVisibleOnly) return;
     setVisitedTabs((prev) => {
       let changed = false;
       const next = { ...prev };
-      for (const tab of ALL_TAB_KINDS) {
-        if (!isTabVisible(layoutState, tab) || next[tab]) continue;
+      for (const tab of visibleTabs) {
+        if (next[tab]) continue;
         next[tab] = true;
         changed = true;
       }
       return changed ? next : prev;
     });
-  }, [layoutState, mountVisibleOnly, visibleTabsKey]);
+  }, [mountVisibleOnly, visibleTabsKey]);
 
   // Move each tab-mount into the host pane currently owning that tab. Runs
   // *synchronously* before paint so the user never sees a flash of misplaced

@@ -6,9 +6,11 @@ mod domain;
 mod error;
 mod remote;
 mod shared;
+mod shutdown;
 
 use axum::http::header::{HeaderName, CONTENT_TYPE};
 use axum::http::Method;
+use axum::serve::ListenerExt;
 use clap::Parser;
 use std::path::PathBuf;
 use tower_http::cors::CorsLayer;
@@ -88,6 +90,7 @@ async fn main() -> anyhow::Result<()> {
                 app_version: config.app_version.as_deref(),
             })
             .await?;
+            domain::usage_stats::history_import::run_once(&write_pool).await;
             let read_pool = db::create_read_pool(&db_path).await?;
 
             // Resolve the JSON settings dir, migrate legacy SQLite settings into
@@ -203,9 +206,9 @@ async fn main() -> anyhow::Result<()> {
             // Resume periodic custom-action schedules from a previous launch.
             state.custom_action_scheduler.bootstrap(&state).await;
 
-            // Background dispatcher for user-scheduled messages (one poll loop
-            // for the process lifetime; survives client disconnects).
-            domain::scheduled_messages::scheduler::spawn(state.clone());
+            // Background dispatcher for user schedules (one poll loop for the
+            // process lifetime; survives client disconnects).
+            domain::schedules::scheduler::spawn(state.clone());
             domain::mcp::control::message_queue::spawn(state.clone());
             domain::git::forge::spawn(state.clone());
 
@@ -221,63 +224,41 @@ async fn main() -> anyhow::Result<()> {
 
             let pty_manager = state.pty_manager.clone();
             let remote_for_shutdown = state.remote.clone();
+            let write_pool_for_shutdown = state.write_pool.clone();
             let app = api::build_router(state).layer(build_cors_layer(config.frontend_port));
 
             let addr = format!("127.0.0.1:{}", config.port);
             info!("Cadencr service listening on {addr}");
 
             let listener = tokio::net::TcpListener::bind(&addr).await?;
-            // Wrap in a `Listener` that disables Nagle's algorithm on every
-            // accepted connection. Nagle is the default on `tokio::net::TcpStream`
-            // and silently coalesces small frames for ~200 ms — which turns
-            // a real-time WebSocket stream (commit output, agent output) into
-            // a "dump everything at the end" feed. We never want that here.
-            axum::serve(NoDelayListener(listener), app)
-                .with_graceful_shutdown(shutdown_signal(pty_manager, remote_for_shutdown))
-                .await?;
+            // Disable Nagle's algorithm on every accepted connection. Nagle is
+            // the default on `tokio::net::TcpStream` and silently coalesces
+            // small frames for ~200 ms, which destroys real-time WS streaming.
+            let listener = listener.tap_io(|stream| {
+                if let Err(err) = stream.set_nodelay(true) {
+                    tracing::warn!("set_nodelay failed: {err}");
+                }
+            });
+            // Shutdown ordering lives in `shutdown`: the signal future only
+            // closes the listener, then teardown and the HTTP drain run together.
+            let (drain_tx, drain_rx) = tokio::sync::oneshot::channel();
+            let server = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(shutdown::stop_admitting_on_signal(drain_tx));
+            shutdown::serve_then_shutdown(
+                server,
+                drain_rx,
+                pty_manager,
+                remote_for_shutdown,
+                write_pool_for_shutdown,
+            )
+            .await?;
         }
     }
 
     Ok(())
-}
-
-/// `tokio::net::TcpListener` wrapper that disables Nagle's algorithm on every
-/// accepted connection. Without this, small WebSocket frames (single
-/// command-output chunks, agent stream lines) sit in the OS TCP buffer for
-/// up to ~200 ms before being flushed, which destroys the live-streaming UX
-/// the commit dialog and agent panes depend on.
-struct NoDelayListener(tokio::net::TcpListener);
-
-impl axum::serve::Listener for NoDelayListener {
-    type Io = tokio::net::TcpStream;
-    type Addr = std::net::SocketAddr;
-
-    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
-        loop {
-            match self.0.accept().await {
-                Ok((stream, addr)) => {
-                    // Best-effort: a `set_nodelay` failure on a localhost
-                    // TCP stream is exotic and not worth aborting the
-                    // connection over — log it and continue.
-                    if let Err(err) = stream.set_nodelay(true) {
-                        tracing::warn!("set_nodelay failed: {err}");
-                    }
-                    return (stream, addr);
-                }
-                Err(err) => {
-                    // Mirror axum's own retry-with-backoff behavior on
-                    // transient accept errors; without this an EMFILE / per-
-                    // process FD exhaustion would tight-loop.
-                    tracing::warn!("accept failed: {err}");
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                }
-            }
-        }
-    }
-
-    fn local_addr(&self) -> std::io::Result<Self::Addr> {
-        self.0.local_addr()
-    }
 }
 
 fn build_cors_layer(frontend_port: u16) -> CorsLayer {
@@ -323,39 +304,4 @@ fn init_tracing(to_stderr: bool) {
     } else {
         tracing_subscriber::fmt().with_env_filter(filter).init();
     }
-}
-
-async fn shutdown_signal(
-    pty_manager: domain::terminal::service::PtyManager,
-    remote: std::sync::Arc<remote::RemoteController>,
-) {
-    let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
-    };
-    #[cfg(unix)]
-    let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler")
-            .recv()
-            .await;
-    };
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
-    }
-    tracing::info!("Shutdown signal received, shutting down gracefully...");
-
-    // Drop the remote listener first so no new remote-driven work starts while
-    // we tear the rest down. Bounded so a hung remote WS can't block quit.
-    remote.stop().await;
-
-    pty_manager.kill_all();
-    crate::domain::agents::shutdown_runtime_servers().await;
-
-    tracing::info!("Runtime servers stopped.");
 }

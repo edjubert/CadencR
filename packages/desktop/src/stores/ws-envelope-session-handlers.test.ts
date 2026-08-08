@@ -28,6 +28,18 @@ describe("handleInitialized", () => {
     expect(ctx.getSession("s1").serverSessionId).toBe("123");
     expect(ctx.getSession("s1").sessionDbId).toBe(123);
   });
+
+  it("restores backend-confirmed fast mode", () => {
+    const ctx = createTestContext(createSessionEntry());
+
+    handleInitialized(ctx, "s1", {
+      session_id: "123",
+      provider: "codex_cli",
+      fast_mode: true,
+    });
+
+    expect(ctx.getSession("s1").fastMode).toBe(true);
+  });
 });
 
 describe("handleMcpServers", () => {

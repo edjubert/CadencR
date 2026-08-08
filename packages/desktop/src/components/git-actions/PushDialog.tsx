@@ -1,15 +1,21 @@
 /**
- * Push dialog: streams `git push -u origin HEAD` through a backend PTY
- * and surfaces a passphrase / yes-no input whenever ssh prompts.
+ * Push dialog: picks a force mode, then streams `git push` through a
+ * backend PTY and surfaces a passphrase / yes-no input whenever ssh
+ * prompts.
  *
- * Why a dialog at all (the previous push was a fire-and-forget mutation):
+ * Why a dialog at all (the original push was a fire-and-forget mutation):
  *  - SSH-protected keys produce a real prompt the user has to answer.
  *    Without a UI surface the push hangs invisibly until the PTY's
  *    stdin times out — terrible failure mode.
  *  - Even on the happy path, seeing live `git push` output (delta
  *    compression, byte counts, `remote: …` messages) is useful
- *    transparency. The dialog auto-closes on success in ~milliseconds
- *    when nothing prompts.
+ *    transparency.
+ *  - Force pushes are destructive, so the mode has to be an explicit,
+ *    visible choice rather than a hidden modifier.
+ *
+ * Like commit, the run itself lives in `usePushSubmission` one level up:
+ * closing this dialog backgrounds the push instead of abandoning it, and
+ * reopening remounts a view over the same streaming state.
  *
  * Per `error-handling.md`, stderr surfaces inline in the terminal pane
  * (no silent swallow). Per `no-optimistic-updates.md`, we don't
@@ -17,22 +23,21 @@
  * everything downstream.
  */
 import {
-  useEffect,
+  memo,
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
-  type Dispatch,
   type FormEvent,
   type ReactElement,
   type RefObject,
-  type SetStateAction,
 } from "react";
-import { Loader2 } from "lucide-react";
-import { toast } from "sonner";
+import { Loader2, Minimize2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -40,72 +45,119 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { KbdShortcut } from "@/components/KbdShortcut";
-import { usePush, usePushInput } from "@/api/generated";
-import {
-  selectPushOutput,
-  selectPushRunning,
-  usePushOutputStore,
-} from "@/stores/usePushOutputStore";
+import { PushForceMode, usePushInput } from "@/api/generated";
+import { selectPushOutput, usePushOutputStore } from "@/stores/usePushOutputStore";
 import { detectSshPrompt } from "./detectSshPrompt";
 import { PushOutputPane } from "./PushOutputPane";
-import { apiErrorMessage, toastError } from "@/lib/api-errors";
-import { useDialogSubmitShortcut } from "./useDialogSubmitShortcut";
+import { PushForceSelector } from "./PushForceSelector";
+import { toastError } from "@/lib/api-errors";
+import { usePushDialogShortcuts } from "./usePushDialogShortcuts";
+import type { PushSubmissionController } from "./usePushSubmission";
 
 // Hoisted so the `keys` prop is reference-stable across re-renders (streaming
 // buffer chunks re-render this dialog frequently).
 const ESC_KEYS: string[] = ["esc"];
+const SUBMIT_KEYS: string[] = ["cmd", "enter"];
+
+const SUBMIT_LABEL: Record<PushForceMode, string> = {
+  [PushForceMode.none]: "Push",
+  [PushForceMode["force-with-lease"]]: "Force push (with lease)",
+  [PushForceMode.force]: "Force push",
+};
 
 interface PushDialogProps {
   featureId: number;
   open: boolean;
-  onOpenChange: (open: boolean) => void;
+  submission: PushSubmissionController;
 }
 
-interface PushLifecycleArgs {
-  featureId: number;
-  open: boolean;
-  runPush: () => Promise<void>;
-  setFailed: Dispatch<SetStateAction<boolean>>;
-  setAnsweredOffset: Dispatch<SetStateAction<number>>;
-  setInputValue: Dispatch<SetStateAction<string>>;
-}
+export default function PushDialog({ featureId, open, submission }: PushDialogProps): ReactElement {
+  const {
+    outcome,
+    submitting,
+    submit,
+    onDialogOpenChange,
+    force,
+    setForce,
+    answeredOffset,
+    markPromptAnswered,
+  } = submission;
+  const failed = outcome === "error";
 
-function usePushDialogLifecycle({
-  featureId,
-  open,
-  runPush,
-  setFailed,
-  setAnsweredOffset,
-  setInputValue,
-}: PushLifecycleArgs): void {
-  const pushStartedRef = useRef(false);
-  useEffect(() => {
-    if (!open || pushStartedRef.current) return;
-    pushStartedRef.current = true;
-    setFailed(false);
-    setAnsweredOffset(-1);
-    const store = usePushOutputStore.getState();
-    store.reset(featureId);
-    store.start(featureId);
-    void runPush();
-    // The dialog is keyed by feature; only opening it should start a push.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-  useEffect(() => {
-    if (open) return;
-    pushStartedRef.current = false;
-    setFailed(false);
-    setAnsweredOffset(-1);
-    setInputValue("");
-    usePushOutputStore.getState().reset(featureId);
-  }, [featureId, open, setAnsweredOffset, setFailed, setInputValue]);
+  const handleSubmit = useCallback((): void => {
+    if (submitting) return;
+    void submit(force);
+  }, [force, submit, submitting]);
+
+  const handleSubmitShortcut = useCallback((): void => {
+    // Mirrors commit: Cmd/Ctrl+Enter starts the push, and once it is
+    // running the same chord sends it to the background.
+    if (submitting) onDialogOpenChange(false);
+    else handleSubmit();
+  }, [handleSubmit, onDialogOpenChange, submitting]);
+
+  usePushDialogShortcuts({
+    open,
+    // While ssh is prompting, the mnemonics would eat the passphrase.
+    mnemonicsEnabled: !submitting,
+    onModeChange: setForce,
+    onSubmitShortcut: handleSubmitShortcut,
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onDialogOpenChange}>
+      <DialogContent
+        // Radix would otherwise focus the first mode card, painting a ring
+        // that reads as a second "selected" state next to the radio dot.
+        // Same suppression as `MergeDialog` — the mnemonics and ⌘/Ctrl+Enter
+        // are document-level, so nothing needs seeded focus.
+        onOpenAutoFocus={(event) => event.preventDefault()}
+        // Same width as `CommitDialog`: git's progress lines need the room.
+        className="!w-[min(90vw,48rem)] !max-w-[min(90vw,48rem)] sm:!max-w-[min(90vw,48rem)]"
+      >
+        <DialogHeader>
+          <DialogTitle>
+            {submitting ? "Pushing to remote" : failed ? "Push failed" : "Push to remote"}
+          </DialogTitle>
+          {submitting && (
+            <DialogDescription>
+              You can keep this open or continue in the background.
+            </DialogDescription>
+          )}
+          {failed && (
+            <DialogDescription>
+              Review the output, then retry — possibly with a different push mode.
+            </DialogDescription>
+          )}
+        </DialogHeader>
+
+        <div className="min-w-0 space-y-3">
+          {!submitting && <PushForceSelector value={force} onChange={setForce} />}
+          <PushOutputPane featureId={featureId} isMutationPending={submitting} hasFailed={failed} />
+          <PushPromptSection
+            featureId={featureId}
+            answeredOffset={answeredOffset}
+            onAnswered={markPromptAnswered}
+          />
+        </div>
+
+        <PushFooter
+          submitting={submitting}
+          failed={failed}
+          force={force}
+          onSubmit={handleSubmit}
+          onClose={() => onDialogOpenChange(false)}
+        />
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 function useActivePushPrompt(
   buffer: string,
   answeredOffset: number,
   inputRef: RefObject<HTMLInputElement | null>,
-) {
+): ReturnType<typeof detectSshPrompt> {
   const activePrompt = useMemo(() => {
     const detected = detectSshPrompt(buffer);
     return detected && detected.offset > answeredOffset ? detected : null;
@@ -116,158 +168,31 @@ function useActivePushPrompt(
   return activePrompt;
 }
 
-function usePushRunner(
-  featureId: number,
-  onOpenChange: (open: boolean) => void,
-  setFailed: Dispatch<SetStateAction<boolean>>,
-) {
-  const push = usePush();
-  const showError = useCallback(
-    (detail: string): void => {
-      usePushOutputStore.getState().fail(featureId, detail);
-      setFailed(true);
-    },
-    [featureId, setFailed],
-  );
-  const runPush = useCallback(async (): Promise<void> => {
-    try {
-      const result = await push.mutateAsync({ data: { feature_id: featureId } });
-      if (!result.success) {
-        showError(result.error ?? "Push failed.");
-        return;
-      }
-      toast.success("Pushed");
-      onOpenChange(false);
-    } catch (error) {
-      showError(apiErrorMessage(error, "Push failed."));
-    }
-  }, [featureId, onOpenChange, push, showError]);
-  return useMemo(() => ({ push, runPush }), [push, runPush]);
-}
-
-interface PushDialogViewProps {
+interface PushPromptSectionProps {
   featureId: number;
-  open: boolean;
-  failed: boolean;
-  submitting: boolean;
-  pushPending: boolean;
-  inputPending: boolean;
-  inputValue: string;
-  activePrompt: ReturnType<typeof detectSshPrompt>;
-  inputRef: RefObject<HTMLInputElement | null>;
-  onOpenChange: (open: boolean) => void;
-  onInputChange: (value: string) => void;
-  onPromptSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  answeredOffset: number;
+  onAnswered: (offset: number) => void;
 }
 
-function PushDialogView({
+/**
+ * Owns the buffer subscription so a chunk arriving every few milliseconds
+ * re-renders only the prompt, not the dialog frame, the mode picker and the
+ * footer around it (`PushOutputPane` subscribes independently).
+ */
+const PushPromptSection = memo(function PushPromptSection({
   featureId,
-  open,
-  failed,
-  submitting,
-  pushPending,
-  inputPending,
-  inputValue,
-  activePrompt,
-  inputRef,
-  onOpenChange,
-  onInputChange,
-  onPromptSubmit,
-}: PushDialogViewProps): ReactElement {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="!w-[min(90vw,48rem)] !max-w-[min(90vw,48rem)] sm:!max-w-[min(90vw,48rem)]">
-        <DialogHeader>
-          <DialogTitle>Push to remote</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3 min-w-0">
-          <PushOutputPane
-            featureId={featureId}
-            isMutationPending={pushPending}
-            hasFailed={failed}
-          />
-          {activePrompt && (
-            <form onSubmit={onPromptSubmit} className="space-y-1.5">
-              <label
-                htmlFor="push-prompt-input"
-                className="block text-xs font-mono text-muted-foreground"
-              >
-                {activePrompt.text}
-              </label>
-              <div className="flex gap-2">
-                <Input
-                  id="push-prompt-input"
-                  ref={inputRef}
-                  type={activePrompt.kind === "password" ? "password" : "text"}
-                  value={inputValue}
-                  onChange={(event) => onInputChange(event.target.value)}
-                  autoComplete="off"
-                  data-1p-ignore
-                  spellCheck={false}
-                  disabled={inputPending}
-                />
-                <Button type="submit" disabled={inputPending}>
-                  {inputPending && <Loader2 className="size-3.5 animate-spin mr-2" />}
-                  Send
-                </Button>
-              </div>
-            </form>
-          )}
-        </div>
-        <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={submitting}
-            title={submitting ? "Push is running — wait for it to finish." : "Close this dialog"}
-          >
-            {submitting ? "Running…" : "Close"}
-            <KbdShortcut keys={ESC_KEYS} variant="hint" />
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-export default function PushDialog({
-  featureId,
-  open,
-  onOpenChange,
-}: PushDialogProps): ReactElement {
-  const [failed, setFailed] = useState(false);
-  // Offset of the last prompt the user has already answered. Compared to
-  // `detectSshPrompt`'s output: a NEW prompt at a strictly larger offset
-  // re-shows the input. Storing offsets (rather than a boolean "answered")
-  // is what lets us tell apart "same prompt still on screen" from "ssh is
-  // asking another question further down".
-  const [answeredOffset, setAnsweredOffset] = useState<number>(-1);
-  const [inputValue, setInputValue] = useState("");
-  const inputRef = useRef<HTMLInputElement | null>(null);
-
-  // Buffer + lifecycle from the streaming store (narrow selectors so this
-  // dialog re-renders only on its feature's chunks).
+  answeredOffset,
+  onAnswered,
+}: PushPromptSectionProps): ReactElement | null {
   const buffer = usePushOutputStore(selectPushOutput(featureId));
-  const wsRunning = usePushOutputStore(selectPushRunning(featureId));
-
-  const runner = usePushRunner(featureId, onOpenChange, setFailed);
+  const [value, setValue] = useState("");
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const sendInput = usePushInput();
-  const submitting = runner.push.isPending || wsRunning;
-
   const activePrompt = useActivePushPrompt(buffer, answeredOffset, inputRef);
-  usePushDialogLifecycle({
-    featureId,
-    open,
-    runPush: runner.runPush,
-    setFailed,
-    setAnsweredOffset,
-    setInputValue,
-  });
 
-  async function handlePromptSubmit(e: FormEvent<HTMLFormElement>): Promise<void> {
-    e.preventDefault();
+  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
     if (!activePrompt) return;
-    const text = inputValue;
     const offset = activePrompt.offset;
     // Don't mark the prompt as answered until the POST resolves — if the
     // call throws (network drop, backend rejected the input) we want the
@@ -275,46 +200,86 @@ export default function PushDialog({
     // disables itself via `sendInput.isPending`, which prevents double
     // submits while the request is inflight.
     try {
-      await sendInput.mutateAsync({
-        data: { feature_id: featureId, text },
-      });
-      // Success: hide the input and clear the typed value. Backend
-      // acknowledged the answer, no retry needed.
-      setAnsweredOffset(offset);
-      setInputValue("");
+      await sendInput.mutateAsync({ data: { feature_id: featureId, text: value } });
+      onAnswered(offset);
+      setValue("");
     } catch (err) {
-      // Do NOT call showError here — the push itself is still running and
-      // may yet succeed (e.g. agent answered the same prompt). A toast
-      // explains the partial failure without polluting the terminal pane.
-      // Leave `answeredOffset` and `inputValue` untouched so the prompt
-      // stays visible with the typed value preserved for retry.
+      // Do NOT fail the run here — the push itself is still running and
+      // may yet succeed. A toast explains the partial failure without
+      // polluting the terminal pane, and the prompt stays visible with
+      // the typed value preserved for retry.
       toastError(err, "Failed to send input.");
     }
   }
 
-  // Cmd/Ctrl+Enter closes the dialog when push is finished — same shortcut
-  // convention as commit. During a running push we unregister the shortcut so
-  // it doesn't fight the prompt input's own Enter.
-  useDialogSubmitShortcut({
-    open,
-    enabled: !submitting,
-    onSubmit: () => onOpenChange(false),
-  });
+  if (!activePrompt) return null;
 
   return (
-    <PushDialogView
-      featureId={featureId}
-      open={open}
-      failed={failed}
-      submitting={submitting}
-      pushPending={runner.push.isPending}
-      inputPending={sendInput.isPending}
-      inputValue={inputValue}
-      activePrompt={activePrompt}
-      inputRef={inputRef}
-      onOpenChange={onOpenChange}
-      onInputChange={setInputValue}
-      onPromptSubmit={handlePromptSubmit}
-    />
+    <form onSubmit={handleSubmit} className="space-y-1.5">
+      <label htmlFor="push-prompt-input" className="block font-mono text-xs text-muted-foreground">
+        {activePrompt.text}
+      </label>
+      <div className="flex gap-2">
+        <Input
+          id="push-prompt-input"
+          ref={inputRef}
+          type={activePrompt.kind === "password" ? "password" : "text"}
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          autoComplete="off"
+          data-1p-ignore
+          spellCheck={false}
+          disabled={sendInput.isPending}
+        />
+        <Button type="submit" disabled={sendInput.isPending}>
+          {sendInput.isPending && <Loader2 className="mr-2 size-3.5 animate-spin" />}
+          Send
+        </Button>
+      </div>
+    </form>
+  );
+});
+
+interface PushFooterProps {
+  submitting: boolean;
+  failed: boolean;
+  force: PushForceMode;
+  onSubmit: () => void;
+  onClose: () => void;
+}
+
+function PushFooter({
+  submitting,
+  failed,
+  force,
+  onSubmit,
+  onClose,
+}: PushFooterProps): ReactElement {
+  if (submitting) {
+    return (
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>
+          <Minimize2 className="mr-2 size-4" />
+          Run in background
+          <KbdShortcut keys={SUBMIT_KEYS} variant="hint" />
+        </Button>
+      </DialogFooter>
+    );
+  }
+  const label = SUBMIT_LABEL[force];
+  return (
+    <DialogFooter>
+      <Button variant="outline" onClick={onClose}>
+        Close
+        <KbdShortcut keys={ESC_KEYS} variant="hint" />
+      </Button>
+      <Button
+        variant={force === PushForceMode.force ? "destructive" : "default"}
+        onClick={onSubmit}
+      >
+        {failed ? `Retry — ${label.toLowerCase()}` : label}
+        <KbdShortcut keys={SUBMIT_KEYS} variant="hint" />
+      </Button>
+    </DialogFooter>
   );
 }

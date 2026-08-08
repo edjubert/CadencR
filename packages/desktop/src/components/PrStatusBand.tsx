@@ -10,7 +10,8 @@ import {
 } from "lucide-react";
 import { useCallback, useState, type ReactElement, type ReactNode, type WheelEvent } from "react";
 import type { CiCheck, CiState, PrStatusSnapshot, ReviewState } from "@/api/generated";
-import { AuthorInitials, relativeTime } from "@/components/FeaturePrViewParts";
+import { relativeTime } from "@/components/FeaturePrViewParts";
+import { ForgeAvatar } from "@/components/ForgeImage";
 import {
   PR_TONE_DOT,
   prIndicatorTone,
@@ -148,7 +149,7 @@ function PrIdentityLine({ status }: { status: PrStatusSnapshot }): ReactElement 
       </span>
       <span className="shrink-0 capitalize">{pr.state}</span>
       <Segment>
-        <AuthorInitials name={author} />
+        <ForgeAvatar user={pr.author} />
         <span className="max-w-40 truncate">{author}</span>
       </Segment>
       <Segment className="@max-[24rem]:hidden" title={branches}>

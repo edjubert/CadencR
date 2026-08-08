@@ -9,8 +9,9 @@ use crate::domain::agents::adapter::{
     RuntimeError, RuntimeEvent, RuntimeMessageRx, RuntimeSessionWeakHandle,
 };
 use crate::domain::agents::{runtime_adapter, runtime_session_finished};
-use crate::domain::runtime_stream::{RuntimeUsageSnapshot, RuntimeUsageState};
+use crate::domain::runtime_stream::RuntimeUsageState;
 use crate::domain::session_status::{AgentStatus, SessionStatusBroadcaster};
+use crate::domain::usage_stats::UsageAttribution;
 use crate::domain::ws_session::persistence::WsSessionPersistence;
 use crate::domain::ws_session::protocol::{SessionEndedPayload, WsEnvelope};
 use crate::domain::ws_session::sender_registry::WsFeatureSenderRegistry;
@@ -47,6 +48,17 @@ pub(super) struct StreamReaderTask {
 pub(super) struct StreamReaderState {
     pub(super) runtime_session_id: Option<String>,
     pub(super) usage_state: RuntimeUsageState,
+    /// Provider/model/effort captured when the current turn starts producing
+    /// events. The session row is mutable while a turn runs, so reading it only
+    /// when the final token report arrives could file usage under the next
+    /// model. Cleared at every Result boundary.
+    pub(super) usage_attribution: Option<UsageAttribution>,
+    /// Distinguishes an attribution lookup that found nothing from one that has
+    /// not run yet, avoiding a database read for every event in the turn.
+    pub(super) usage_attribution_captured: bool,
+    /// First provider assistant-message id observed in this turn. Provider
+    /// histories use this same id, closing replay overlap at the import cutoff.
+    pub(super) provider_usage_event_id: Option<String>,
     pub(super) last_runtime_activity: Instant,
     pub(super) last_provider_reconcile: Instant,
     pub(super) turn_state: StreamTurnState,
@@ -87,22 +99,6 @@ enum ReaderAction {
     Event(RuntimeEvent),
     Error(RuntimeError),
     Closed,
-}
-
-impl StreamReaderState {
-    fn new(initial_usage: RuntimeUsageSnapshot) -> Self {
-        Self {
-            runtime_session_id: None,
-            usage_state: RuntimeUsageState::new(initial_usage),
-            last_runtime_activity: Instant::now(),
-            last_provider_reconcile: Instant::now(),
-            turn_state: StreamTurnState::new(),
-            live_background_agents: HashSet::new(),
-            message_seq: 0,
-            received_prompt_message_uuids: Vec::new(),
-            diagnostics: super::stream_diagnostics::StreamDiagnostics::new(),
-        }
-    }
 }
 
 /// The owner connection has gone. The orphaned runtime is closed only once the
@@ -180,30 +176,6 @@ impl StreamReaderTask {
             self.cleanup_session_on_end,
         )
         .await;
-    }
-
-    /// Seed the usage state from what the session already shows: the persisted
-    /// token totals plus the best known window. Carrying the totals (rather
-    /// than starting at zero) is what lets a window-only update be emitted
-    /// mid-flight without blanking the bar.
-    async fn initial_usage_snapshot(&self) -> RuntimeUsageSnapshot {
-        let row = WsSessionPersistence::get_session_row(&self.write_pool, self.db_session_id).await;
-        let persisted = |value: Option<i64>| value.and_then(|v| u64::try_from(v).ok()).unwrap_or(0);
-
-        let context_window = match self.provider_context_window {
-            Some(cw) if cw > 0 => Some(cw),
-            _ => row
-                .as_ref()
-                .and_then(|row| row.context_window)
-                .and_then(|cw| u64::try_from(cw).ok())
-                .filter(|cw| *cw > 0),
-        };
-
-        RuntimeUsageSnapshot {
-            input_tokens: persisted(row.as_ref().and_then(|row| row.input_tokens)),
-            output_tokens: persisted(row.as_ref().and_then(|row| row.output_tokens)),
-            context_window,
-        }
     }
 
     async fn next_action(&mut self, state: &mut StreamReaderState) -> ReaderAction {

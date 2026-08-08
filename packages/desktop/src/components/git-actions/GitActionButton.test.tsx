@@ -4,6 +4,7 @@ import { render, screen } from "@/test-utils";
 import type { GitStatusSnapshot } from "@/api/generated";
 import { useGitStatusStore } from "@/stores/useGitStatusStore";
 import { useCommitOutputStore } from "@/stores/useCommitOutputStore";
+import { usePushOutputStore } from "@/stores/usePushOutputStore";
 import { GitActionButton } from "./GitActionButton";
 import {
   resetStashMutationCoordinatorForTest,
@@ -39,6 +40,11 @@ vi.mock("./UpdateBranchDialog", () => ({
 vi.mock("./StashChangesDialog", () => ({
   default: ({ open }: { open: boolean }) =>
     open ? <div role="dialog" aria-label="Stash changes" /> : null,
+}));
+
+vi.mock("./PushDialog", () => ({
+  default: ({ open }: { open: boolean }) =>
+    open ? <div role="dialog" aria-label="Push progress" /> : null,
 }));
 
 function makeMergeableSnapshot(featureId: number): GitStatusSnapshot {
@@ -77,6 +83,7 @@ beforeEach(() => {
   buttonMocks.updatePending = false;
   useGitStatusStore.setState({ byFeature: {}, errorByFeature: {}, watcherEpoch: {} });
   useCommitOutputStore.setState({ byFeature: {} });
+  usePushOutputStore.setState({ byFeature: {} });
   resetStashMutationCoordinatorForTest();
 });
 
@@ -120,6 +127,45 @@ describe("GitActionButton shortcuts", () => {
 
     expect(await screen.findByText("View commit progress")).toBeInTheDocument();
     expect(screen.getByText("Merge")).toBeInTheDocument();
+  });
+
+  it("replaces the primary action with a clickable Pushing control", async () => {
+    useGitStatusStore.getState().setStatus({ ...makeMergeableSnapshot(42), ahead_of_remote: 2 });
+    usePushOutputStore.getState().start(42);
+
+    const { user } = render(<GitActionButton featureId={42} projectId={7} />);
+
+    const progressButton = screen.getByRole("button", { name: "Pushing" });
+    expect(progressButton.querySelector(".animate-spin")).not.toBeNull();
+    await user.click(progressButton);
+
+    expect(await screen.findByRole("dialog", { name: "Push progress" })).toBeInTheDocument();
+  });
+
+  it("keeps a backgrounded push failure reachable once the snapshot says nothing to push", async () => {
+    // Post-failure the branch may look identical to a clean one; the run
+    // still has to be reachable or its output is lost.
+    useGitStatusStore.getState().setStatus(makeMergeableSnapshot(42));
+    const store = usePushOutputStore.getState();
+    store.start(42);
+    store.append(42, "! [rejected]\n");
+    store.complete(42, false);
+
+    const { user } = render(<GitActionButton featureId={42} projectId={7} />);
+
+    await user.click(screen.getByRole("button", { name: "Push failed" }));
+    expect(await screen.findByRole("dialog", { name: "Push progress" })).toBeInTheDocument();
+  });
+
+  it("prefers commit over push when both are running", () => {
+    useGitStatusStore.getState().setStatus(makeDirtyMergeableSnapshot(42));
+    useCommitOutputStore.getState().start(42);
+    usePushOutputStore.getState().start(42);
+
+    render(<GitActionButton featureId={42} projectId={7} />);
+
+    expect(screen.getByRole("button", { name: "Committing" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Pushing" })).not.toBeInTheDocument();
   });
 
   it("opens git actions with Cmd+G while an input is focused", async () => {

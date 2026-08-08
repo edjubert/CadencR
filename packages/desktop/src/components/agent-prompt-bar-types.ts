@@ -1,11 +1,18 @@
 import type { ReactNode } from "react";
 import type { SlashCommand } from "@/lib/slash-command";
 import type { PromptCommandPolicy } from "@/lib/prompt-command-policy";
+import type { WorktreeMode } from "@/lib/worktree-mode";
 import type { LiveAgentStatus } from "@/types/agent";
 import type { PromptAttachmentPayload } from "@/types/agent-types";
 import type { PermissionMode } from "@/types/permission-mode";
 import type { AgentQuestion, AgentQuestionAnswers } from "./AgentQuestionDrawer";
 import type { PendingPermission, PermissionDecisionValue } from "./ToolPermissionPrompt";
+
+export interface ReferencedWorktreeSelection {
+  mode: WorktreeMode;
+  selectedBranch: string | null;
+  onSelect: (branch: string) => void;
+}
 
 export interface SplitSendAction {
   label: string;
@@ -29,7 +36,9 @@ export interface AgentPromptBarProps {
    * `sessionId` exists), a "schedule" affordance appears next to Send. Rejects
    * on failure so the bar keeps the user's text.
    */
-  onSchedule?: (message: string, scheduledAt: Date) => Promise<void>;
+  /** Opens the conversation's schedule editor prefilled with `prompt`.
+   *  `onSaved` runs once the schedule is persisted, clearing the composer. */
+  onScheduleRequest?: (prompt: string, onSaved: () => void) => void;
   onStop: () => void;
   status: LiveAgentStatus;
   splitSendActions?: SplitSendAction[];
@@ -61,6 +70,11 @@ export interface AgentPromptBarProps {
   promptCommandPolicy?: PromptCommandPolicy;
   slashCommandsLoading?: boolean;
   pendingPermission?: PendingPermission | null;
+  /**
+   * Pre-first-prompt selection state used to offer the live worktree of a
+   * referenced conversation. Omitted once the conversation has started.
+   */
+  referencedWorktreeSelection?: ReferencedWorktreeSelection;
   onPermissionDecision?: (
     decision: PermissionDecisionValue,
     feedback?: string,

@@ -20,6 +20,17 @@ pub enum AppError {
     /// LSP host's crash-backoff to signal "retry later", matching the
     /// semantics web clients already understand.
     ServiceUnavailable(String),
+    NeovimSpawnError {
+        detail: String,
+    },
+    NeovimHandshakeTimeout,
+    NeovimNotRunning {
+        feature_id: String,
+    },
+    NeovimProcessNotRunning,
+    NeovimFileNotFound {
+        path: String,
+    },
 }
 
 impl std::fmt::Display for AppError {
@@ -32,6 +43,17 @@ impl std::fmt::Display for AppError {
             AppError::Internal(msg) => write!(f, "Internal error: {msg}"),
             AppError::Conflict(msg) => write!(f, "Conflict: {msg}"),
             AppError::ServiceUnavailable(msg) => write!(f, "Service unavailable: {msg}"),
+            AppError::NeovimSpawnError { detail } => write!(f, "Neovim spawn error: {detail}"),
+            AppError::NeovimHandshakeTimeout => write!(f, "Neovim handshake timeout"),
+            AppError::NeovimNotRunning { feature_id } => {
+                write!(f, "Neovim not running for feature: {feature_id}")
+            }
+            AppError::NeovimProcessNotRunning => {
+                write!(f, "Neovim process is not running")
+            }
+            AppError::NeovimFileNotFound { path } => {
+                write!(f, "Neovim could not open file: {path}")
+            }
         }
     }
 }
@@ -52,6 +74,18 @@ impl IntoResponse for AppError {
             AppError::ServiceUnavailable(_) => {
                 (StatusCode::SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE")
             }
+            AppError::NeovimSpawnError { .. } => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "NEOVIM_SPAWN_ERROR")
+            }
+            AppError::NeovimHandshakeTimeout => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "NEOVIM_HANDSHAKE_TIMEOUT",
+            ),
+            AppError::NeovimNotRunning { .. } => (StatusCode::NOT_FOUND, "NEOVIM_NOT_RUNNING"),
+            AppError::NeovimProcessNotRunning => {
+                (StatusCode::NOT_FOUND, "NEOVIM_PROCESS_NOT_RUNNING")
+            }
+            AppError::NeovimFileNotFound { .. } => (StatusCode::NOT_FOUND, "NEOVIM_FILE_NOT_FOUND"),
         };
 
         if status.is_server_error() {
@@ -103,6 +137,15 @@ mod tests {
         let err = AppError::Internal("boom".into());
         let response = err.into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn neovim_file_not_found_maps_to_404_and_stable_code() {
+        let response = AppError::NeovimFileNotFound {
+            path: "/tmp/missing.rs".to_string(),
+        }
+        .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

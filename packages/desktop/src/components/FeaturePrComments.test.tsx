@@ -40,6 +40,35 @@ describe("PrCommentThread actions", () => {
     expect(container.querySelector("article")).toHaveAttribute("data-selected", "true");
   });
 
+  it("keeps the pick control on the first author's meta row", () => {
+    const value = thread({
+      comments: [
+        {
+          author: { username: "alice", display_name: "Alice", avatar_url: null },
+          body_markdown: "root",
+          created_at: "2026-07-20T09:00:00Z",
+          url: null,
+        },
+        {
+          author: { username: "bob", display_name: "Bob", avatar_url: null },
+          body_markdown: "reply",
+          created_at: "2026-07-20T10:00:00Z",
+          url: null,
+        },
+      ],
+    });
+    render(<PrCommentThread thread={value} onSelectedChange={vi.fn()} />);
+
+    const checkbox = screen.getByRole("checkbox", {
+      name: /pick src\/app\.ts:12 for the agent/i,
+    });
+    const authorRow = checkbox.closest("div");
+    expect(authorRow).toHaveTextContent("Alice");
+    expect(authorRow).toHaveTextContent("src/app.ts:12");
+    // Replies stay author-only — one picker for the thread.
+    expect(screen.getAllByRole("checkbox")).toHaveLength(1);
+  });
+
   it("offers direct current-diff navigation and a provider-aware reply action", () => {
     const onViewThread = vi.fn();
     const value = thread();

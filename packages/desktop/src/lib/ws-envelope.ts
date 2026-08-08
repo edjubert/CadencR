@@ -224,6 +224,13 @@ export function createEffortSet(sessionId: string, thinkingEffort?: string): WsE
   });
 }
 
+export function createFastModeSet(sessionId: string, enabled: boolean): WsEnvelope {
+  return createEnvelope("session", "fast_mode.set", {
+    session_id: sessionId,
+    enabled,
+  });
+}
+
 export function createProfileSet(sessionId: string, profile: string): WsEnvelope {
   return createEnvelope("session", "profile.set", {
     session_id: sessionId,

@@ -94,6 +94,8 @@ export function useAgentSessionModelState(params: UseAgentSessionModelStateParam
   const supportedThinkingEfforts = supportedThinkingEffortLevels(
     modelSelectionStatus === "ready" ? selectedModel : undefined,
   );
+  const supportsFastMode =
+    modelSelectionStatus === "ready" && selectedModel?.supports_fast_mode === true;
 
   return {
     modelSelectionStatus,
@@ -103,5 +105,6 @@ export function useAgentSessionModelState(params: UseAgentSessionModelStateParam
     currentModelLabel,
     canChangeProvider,
     supportedThinkingEfforts,
+    supportsFastMode,
   };
 }

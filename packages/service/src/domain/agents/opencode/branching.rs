@@ -33,9 +33,10 @@ async fn truncate_with_client(
     client: &OpenCodeClient,
     ctx: &BranchContext,
 ) -> Result<BranchResult, BranchError> {
-    let messages = wait_for_messages(client, &ctx.source_runtime_session_id).await?;
-    let message_id = cut_message_id(ctx, &messages)?;
     let directory = ctx.cwd.to_string_lossy();
+    let messages =
+        wait_for_messages(client, &ctx.source_runtime_session_id, directory.as_ref()).await?;
+    let message_id = cut_message_id(ctx, &messages)?;
     let forked = client
         .fork_session(
             &ctx.source_runtime_session_id,
@@ -52,10 +53,11 @@ async fn truncate_with_client(
 async fn wait_for_messages(
     client: &OpenCodeClient,
     session_id: &str,
+    directory: &str,
 ) -> Result<Vec<Message>, BranchError> {
     let deadline = tokio::time::Instant::now() + SERVER_READY_TIMEOUT;
     loop {
-        match client.list_messages(session_id).await {
+        match client.list_messages(session_id, Some(directory)).await {
             Ok(messages) => return Ok(messages),
             Err(error) if tokio::time::Instant::now() < deadline => {
                 tracing::debug!(%error, "waiting for OpenCode HTTP backend");

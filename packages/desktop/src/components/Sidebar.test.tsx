@@ -66,6 +66,7 @@ vi.mock("../api/generated", () => ({
   useListFeatures: vi.fn(() => ({ data: [] })),
   useListPinnedFeatures: vi.fn(() => ({ data: [] })),
   useListFeatureActivity: vi.fn(() => ({ data: [], error: null })),
+  useListFeaturePorts: vi.fn(() => ({ data: [], error: null })),
   useCreateFeature: vi.fn(() => ({ mutate: vi.fn() })),
   useDeleteFeature: vi.fn(() => ({ mutate: vi.fn() })),
   useUpdateFeatureStatus: vi.fn(() => ({ mutate: vi.fn() })),
@@ -97,6 +98,14 @@ vi.mock("../api/generated", () => ({
     isLoading: false,
     isError: false,
   })),
+  // Schedules sidebar entry (count badge).
+  useListSchedules: vi.fn(() => ({ data: [], isLoading: false })),
+  useCreateSchedule: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
+  useUpdateSchedule: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
+  useDeleteSchedule: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
+  useSetScheduleEnabled: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
+  useRunSchedule: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
+  getListSchedulesQueryKey: vi.fn(() => ["/api/schedules"]),
 }));
 
 vi.mock("@/components/ProjectBadge", () => ({

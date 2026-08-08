@@ -49,6 +49,18 @@ function renderGroup(args: {
 }
 
 describe("WorktreeButtonGroup", () => {
+  it("loads branch metadata for an externally selected branch", () => {
+    renderGroup({
+      branches: [branch("feat/attached", { attached: "/tmp/wt" })],
+      selectedBranch: "feat/attached",
+      mode: "branch_worktree",
+    });
+    expect(mocks.mockUseListBranches).toHaveBeenLastCalledWith(
+      { project_id: 1 },
+      { query: { enabled: true } },
+    );
+  });
+
   it("shows the current mode label in the mode segment", () => {
     renderGroup({ branches: [], selectedBranch: null, mode: "on_branch" });
     expect(screen.getByRole("button", { name: /branch \/ worktree behavior/i })).toHaveTextContent(
@@ -141,5 +153,68 @@ describe("WorktreeButtonGroup", () => {
     await user.click(screen.getByRole("button", { name: /^main$|^branch$/i }));
     await user.click(await screen.findByText("feat/attached"));
     expect(onModeChange).toHaveBeenCalledWith("branch_worktree");
+  });
+
+  it("pulses once when a reuse selection lands after mount", () => {
+    const { rerender } = renderGroup({
+      branches: [branch("feat/attached", { attached: "/tmp/wt" })],
+      selectedBranch: null,
+      mode: "on_branch",
+    });
+    expect(document.querySelector(".worktree-reuse-flash")).toBeNull();
+
+    mocks.mockUseListBranches.mockReturnValue({
+      data: [branch("feat/attached", { attached: "/tmp/wt" })],
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
+    rerender(
+      <WorktreeButtonGroup
+        projectId={1}
+        defaultBranch="main"
+        projectPath="/repo"
+        mode="branch_worktree"
+        onModeChange={vi.fn()}
+        selectedBranch="feat/attached"
+        onSelectedBranchChange={vi.fn()}
+      />,
+    );
+    expect(document.querySelector(".worktree-reuse-flash")).not.toBeNull();
+
+    rerender(
+      <WorktreeButtonGroup
+        projectId={1}
+        defaultBranch="main"
+        projectPath="/repo"
+        mode="on_branch"
+        onModeChange={vi.fn()}
+        selectedBranch={null}
+        onSelectedBranchChange={vi.fn()}
+      />,
+    );
+    expect(document.querySelector(".worktree-reuse-flash")).toBeNull();
+  });
+
+  it("does not pulse when the selected branch needs a new worktree", () => {
+    const { rerender } = renderGroup({
+      branches: [branch("feat/new")],
+      selectedBranch: null,
+      mode: "on_branch",
+    });
+
+    rerender(
+      <WorktreeButtonGroup
+        projectId={1}
+        defaultBranch="main"
+        projectPath="/repo"
+        mode="branch_worktree"
+        onModeChange={vi.fn()}
+        selectedBranch="feat/new"
+        onSelectedBranchChange={vi.fn()}
+      />,
+    );
+
+    expect(document.querySelector(".worktree-reuse-flash")).toBeNull();
   });
 });

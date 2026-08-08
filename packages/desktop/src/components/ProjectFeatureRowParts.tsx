@@ -9,11 +9,12 @@ import {
   TerminalIcon,
   TrashIcon,
 } from "lucide-react";
-import type { Feature, GitStats, PrStatusSnapshot } from "@/api/generated";
-import { Badge } from "@/components/ui/badge";
+import type { AllocatedPort, Feature, GitStats, PrStatusSnapshot } from "@/api/generated";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { FeatureLabelChip } from "@/components/FeatureLabelChip";
+import { FeatureMetaBadge } from "@/components/FeatureMetaBadge";
+import { FeaturePortsBadge } from "@/components/FeaturePortsBadge";
 import { FeatureLabelEditor } from "@/components/FeatureLabelEditor";
 import { FeaturePrIndicator } from "@/components/PrStatusIndicators";
 import { NumStat } from "@/components/NumStat";
@@ -27,6 +28,7 @@ interface FeatureRowMetaLineProps {
   gitStats: GitStats | undefined;
   shellCount: number;
   browserCount: number;
+  ports: readonly AllocatedPort[];
   isEditingLabel: boolean;
   labelDraft: string;
   labelSuggestions: readonly string[];
@@ -34,6 +36,7 @@ interface FeatureRowMetaLineProps {
   onLabelDraftChange: (value: string) => void;
   onSaveLabel: (featureId: number, override?: string) => void;
   onCancelLabelEdit: () => void;
+  onOpenPort: (port: number) => void;
 }
 
 /**
@@ -47,6 +50,7 @@ export function FeatureRowMetaLine({
   gitStats,
   shellCount,
   browserCount,
+  ports,
   isEditingLabel,
   labelDraft,
   labelSuggestions,
@@ -54,12 +58,13 @@ export function FeatureRowMetaLine({
   onLabelDraftChange,
   onSaveLabel,
   onCancelLabelEdit,
+  onOpenPort,
 }: FeatureRowMetaLineProps): ReactElement | null {
   const hasStats = gitStats != null && (gitStats.insertions > 0 || gitStats.deletions > 0);
   // `FeaturePrIndicator` also renders for an error with no proposal — a forge
   // auth failure must not be the one thing that keeps this line from mounting.
   const hasPrIndicator = prStatus?.pr != null || prStatus?.error != null;
-  const hasActivity = shellCount > 0 || browserCount > 0;
+  const hasActivity = shellCount > 0 || browserCount > 0 || ports.length > 0;
   if (!isEditingLabel && !feature.label && !hasStats && !hasActivity && !hasPrIndicator) {
     return null;
   }
@@ -99,6 +104,7 @@ export function FeatureRowMetaLine({
       )}
       <FeaturePrIndicator snapshot={prStatus} />
       <FeatureActivityIndicators shellCount={shellCount} browserCount={browserCount} />
+      <FeaturePortsBadge ports={ports} onOpenPort={onOpenPort} />
     </div>
   );
 }
@@ -286,14 +292,8 @@ function FeatureActivityBadge({
   if (count <= 0) return null;
   const label = `${count} ${count === 1 ? labelSingular : labelPlural}`;
   return (
-    <Badge
-      variant="outline"
-      aria-label={label}
-      title={label}
-      className="h-5 gap-0.5 rounded border-border/60 bg-background/40 px-1 font-mono text-[10px] leading-none text-muted-foreground"
-    >
-      {icon}
+    <FeatureMetaBadge icon={icon} label={label}>
       <span>{count}</span>
-    </Badge>
+    </FeatureMetaBadge>
   );
 }

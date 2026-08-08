@@ -137,6 +137,12 @@ pub struct EffortSetPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FastModeSetPayload {
+    pub session_id: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ProfileSetPayload {
     pub session_id: String,
     pub profile: String,

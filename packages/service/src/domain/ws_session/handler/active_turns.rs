@@ -23,7 +23,7 @@ use tokio::sync::Mutex;
 
 use crate::domain::agents::adapter::{RuntimeSessionHandle, RuntimeSessionWeakHandle};
 
-use super::types::{SdkHandle, SdkSessions};
+use super::types::{QueryState, SdkHandle, SdkSessions};
 
 /// Inner of [`SdkSessions`] (`Arc<Mutex<HashMap<i64, SdkHandle>>>`) — the
 /// target a [`Weak`] points at.
@@ -181,6 +181,57 @@ impl ActiveTurnRegistry {
                 None
             }
         }
+    }
+
+    /// Pid of every live agent process, keyed to the feature it serves.
+    ///
+    /// Read straight from the owning connections' session maps rather than from
+    /// a registration side-table, so a runtime respawned mid-session (model
+    /// change, resume, compaction) is always reported under its current pid. A
+    /// map or runtime that is busy is skipped instead of waited on: this only
+    /// feeds port attribution, which re-runs seconds later.
+    pub(crate) async fn agent_process_owners(&self) -> HashMap<i32, i64> {
+        let owners = self.live_owners().await;
+        let mut pids = HashMap::new();
+        for sessions in owners {
+            let Ok(sessions) = sessions.try_lock() else {
+                continue;
+            };
+            for handle in sessions.values() {
+                let QueryState::Active { query, .. } = &handle.state else {
+                    continue;
+                };
+                let Ok(runtime) = query.try_read() else {
+                    continue;
+                };
+                if let Some(pid) = runtime.pid() {
+                    pids.insert(pid as i32, handle.feature_id);
+                }
+            }
+        }
+        pids
+    }
+
+    /// The distinct connection session maps still reachable from the registry.
+    /// Collected under the registry lock and returned before any of them is
+    /// locked, since a connection holds its own map while it waits on the
+    /// registry.
+    async fn live_owners(&self) -> Vec<SdkSessions> {
+        let turns = self.turns.lock().await;
+        let mut seen = Vec::new();
+        let mut owners = Vec::new();
+        for turn in turns.values() {
+            let Some(owner) = turn.owner.upgrade() else {
+                continue;
+            };
+            let key = Arc::as_ptr(&owner) as usize;
+            if seen.contains(&key) {
+                continue;
+            }
+            seen.push(key);
+            owners.push(owner);
+        }
+        owners
     }
 
     /// Drop every entry owned by `owner` — called when its connection closes.

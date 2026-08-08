@@ -16,12 +16,14 @@ async fn migration_preserves_existing_custom_models_with_unknown_effort() {
          CURRENT_TIMESTAMP); \
          CREATE TABLE agent_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT \
          NULL); \
+         CREATE TABLE agent_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT); \
          CREATE TABLE agent_session_message_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, \
          target_session_id INTEGER NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL DEFAULT \
          'pending'); \
          CREATE TABLE scheduled_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, feature_id INTEGER \
          NOT NULL, text TEXT NOT NULL, scheduled_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT \
-         'pending'); \
+         'pending', created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL \
+         DEFAULT (datetime('now'))); \
          CREATE TABLE agent_session_reply_waits (id INTEGER PRIMARY KEY AUTOINCREMENT); \
          INSERT INTO claude_code_custom_models (model_id, label, description) \
          VALUES ('legacy-proxy', 'Legacy proxy', 'keep me')",
@@ -31,6 +33,7 @@ async fn migration_preserves_existing_custom_models_with_unknown_effort() {
     .unwrap();
     seed_migrations_before_target(&pool).await;
 
+    crate::shared::migrate::test_fixtures::create_schedules_migration_prerequisites(&pool).await;
     run_migrations(&MigrationContext::pool_only(&pool))
         .await
         .unwrap();

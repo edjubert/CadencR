@@ -194,6 +194,7 @@ async fn pending_spawn_config(
             access_mode: spawned_access_mode,
             model: spawned_model,
             thinking_effort: spawned_thinking_effort,
+            fast_mode: handle.config.fast_mode,
             system_prompt: handle.config.system_prompt.clone(),
             resume_session_id,
             allow_bypass_permissions: handle.config.allow_bypass_permissions,

@@ -18,7 +18,61 @@ const DEFAULT_COMPARE_LABEL = "Open pull request";
 
 export type GitAction = "commit" | "stash" | "update" | "push" | "pr" | "merge";
 export type PrimaryGitAction = Exclude<GitAction, "stash">;
-export type CommitActivity = "running" | "failed" | null;
+/**
+ * Background state of a long-running Git action. `null` means nothing is
+ * in flight, so the action behaves normally; otherwise the button and the
+ * picker turn into a way back into the still-live output.
+ */
+export type GitActivity = "running" | "failed" | null;
+
+/** Per-action background state. Only commit and push stream in background. */
+export interface GitActivities {
+  commit: GitActivity;
+  push: GitActivity;
+}
+
+/** Actions that can be busy in the background, in primary-button priority order. */
+export const ACTIVITY_ACTIONS = ["commit", "push"] as const;
+export type ActivityAction = (typeof ACTIVITY_ACTIONS)[number];
+
+export function isActivityAction(action: GitAction): action is ActivityAction {
+  return (ACTIVITY_ACTIONS as readonly GitAction[]).includes(action);
+}
+
+const ACTIVITY_LABELS: Record<ActivityAction, Record<Exclude<GitActivity, null>, string>> = {
+  commit: { running: "Committing", failed: "Commit failed" },
+  push: { running: "Pushing", failed: "Push failed" },
+};
+
+/** Button copy while a run is in flight or has failed. */
+export function gitActivityLabel(
+  action: ActivityAction,
+  activity: Exclude<GitActivity, null>,
+): string {
+  return ACTIVITY_LABELS[action][activity];
+}
+
+/**
+ * Tooltip and picker-row copy: a backgrounded run turns its row into "show
+ * me that output", which is the only way back into it.
+ */
+export function gitActivityHint(
+  action: ActivityAction,
+  activity: Exclude<GitActivity, null>,
+): string {
+  return `View ${action} ${activity === "running" ? "progress" : "error"}`;
+}
+
+/** The busiest action to surface on the primary button, if any. */
+export function activeGitActivity(
+  activities: GitActivities,
+): { action: ActivityAction; activity: Exclude<GitActivity, null> } | null {
+  for (const action of ACTIVITY_ACTIONS) {
+    const activity = activities[action];
+    if (activity) return { action, activity };
+  }
+  return null;
+}
 
 export interface GitUpdateRecoveryActionState {
   operation: GitOperationKind;

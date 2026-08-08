@@ -15,6 +15,10 @@ Frontend path alias: `@` → `packages/desktop/src/`. Frontend ↔ backend is HT
 
 ## Gotchas
 
+**Never remove any database.** Not the dev DB, not the production DB, not a custom `CADENCR_DB_PATH` — never delete, truncate, overwrite, or replace a database file. No exceptions.
+
+**Never roll back without explicit approval.** Do not reset, revert, or restore away changes unless the user has sent exactly: `I approve this rollback`. Paraphrases do not count.
+
 **Never run bare `cargo`.** Use `pnpm rust -- <args>` (or `node scripts/cargo-env.mjs cargo …`). The wrapper pins `CARGO_TARGET_DIR` to this worktree and strips `RUSTC_WRAPPER`/`SCCACHE_*`; bare cargo triggers a cold rebuild and mixes artifacts across branches.
 
 **`pnpm start` is not an alias for `pnpm dev`.** `start` is desktop-only: it builds the service binary once and never runs it, so the frontend talks to nothing unless a service is already up. `pnpm dev` runs both (plus the landing site). The first `pnpm dev` in a fresh worktree cold-builds the whole Rust tree — `pnpm dev:precompile` does that ahead of time.

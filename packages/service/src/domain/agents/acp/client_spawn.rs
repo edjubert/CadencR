@@ -102,12 +102,10 @@ where
     R: AsyncRead + Send + Unpin + 'static,
     E: AsyncRead + Send + Unpin + 'static,
 {
-    let options = AcpSpawnOptions {
-        command: tokio::process::Command::new("/bin/false"),
-        client_info,
-        max_line_bytes: None,
-        spawn_guard: None,
-    };
+    let options = AcpSpawnOptions::builder()
+        .command(tokio::process::Command::new("/bin/false"))
+        .client_info(client_info)
+        .build();
     assemble(stdin, stdout, stderr, None, None, options).await
 }
 

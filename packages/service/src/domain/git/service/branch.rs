@@ -34,27 +34,27 @@ pub async fn check_merge_conflicts(
     let (project_path, branch) =
         get_project_and_branch(state, params.project_id, params.feature_id).await?;
     let (repo_path, target) =
-        resolve_merge_conflict_repo_and_target(state, params.feature_id, project_path).await?;
+        resolve_feature_repo_and_target(state, params.feature_id, &project_path).await?;
     commands::check_merge_conflicts(Path::new(&repo_path), &branch, &target).await
 }
 
-async fn resolve_merge_conflict_repo_and_target(
+async fn resolve_feature_repo_and_target(
     state: &AppState,
     feature_id: i64,
-    fallback_project_path: String,
+    fallback_project_path: &str,
 ) -> Result<(String, String), AppError> {
     if let Some(stored) =
         repository::get_feature_setting(&state.read_pool, feature_id, SETTING_TARGET_BRANCH).await?
     {
         let target = stored.trim();
         if !target.is_empty() {
-            return Ok((fallback_project_path, target.to_string()));
+            return Ok((fallback_project_path.to_string(), target.to_string()));
         }
     }
 
     let git_path = resolve_feature_git_path(state, feature_id)
         .await?
-        .unwrap_or(fallback_project_path);
+        .unwrap_or_else(|| fallback_project_path.to_string());
     let target =
         workflow_service::resolve_target_branch(state, feature_id, Path::new(&git_path)).await?;
     Ok((git_path, target))
@@ -95,12 +95,18 @@ pub async fn delete_feature_branch(
             "Cannot remove the default branch",
         ));
     }
-    let result = commands::delete_branch(Path::new(&project_path), &branch, params.force).await?;
-    Ok(SuccessResponse {
-        success: result.success,
-        error: result.error,
-        blocked_reason: None,
-    })
+    let (_, target_branch) =
+        resolve_feature_repo_and_target(state, params.feature_id, &project_path).await?;
+    if workflow_service::same_branch_identity(&branch, &target_branch) {
+        return Ok(branch_delete_blocked(
+            "target_branch",
+            "Cannot remove the target branch",
+        ));
+    }
+    if params.force {
+        return delete_branch_after_validation(Path::new(&project_path), &branch).await;
+    }
+    delete_branch_against_target(Path::new(&project_path), &branch, &target_branch).await
 }
 
 async fn delete_no_worktree_feature_branch(
@@ -112,8 +118,8 @@ async fn delete_no_worktree_feature_branch(
 ) -> Result<SuccessResponse, AppError> {
     let repo = Path::new(project_path);
     let (_, target_branch) =
-        resolve_merge_conflict_repo_and_target(state, feature_id, project_path.to_string()).await?;
-    if branch == target_branch {
+        resolve_feature_repo_and_target(state, feature_id, project_path).await?;
+    if workflow_service::same_branch_identity(branch, &target_branch) {
         return Ok(branch_delete_blocked(
             "target_branch",
             "Cannot remove the target branch",
@@ -125,6 +131,12 @@ async fn delete_no_worktree_feature_branch(
             "default_branch",
             "Cannot remove the default branch",
         ));
+    }
+
+    if !force {
+        if let Some(blocked) = unmerged_branch_blocker(repo, branch, &target_branch).await? {
+            return Ok(blocked);
+        }
     }
 
     let current_branch = commands::get_current_branch(repo).await?;
@@ -139,7 +151,39 @@ async fn delete_no_worktree_feature_branch(
         }
     }
 
-    let result = commands::delete_branch(repo, branch, force).await?;
+    delete_branch_after_validation(repo, branch).await
+}
+
+async fn delete_branch_against_target(
+    repo: &Path,
+    branch: &str,
+    target_branch: &str,
+) -> Result<SuccessResponse, AppError> {
+    if let Some(blocked) = unmerged_branch_blocker(repo, branch, target_branch).await? {
+        return Ok(blocked);
+    }
+    delete_branch_after_validation(repo, branch).await
+}
+
+async fn unmerged_branch_blocker(
+    repo: &Path,
+    branch: &str,
+    target_branch: &str,
+) -> Result<Option<SuccessResponse>, AppError> {
+    if commands::is_branch_merged(repo, branch, target_branch).await? {
+        return Ok(None);
+    }
+    Ok(Some(branch_delete_blocked(
+        "unmerged_branch",
+        format!("Branch '{branch}' is not fully merged into target branch '{target_branch}'"),
+    )))
+}
+
+async fn delete_branch_after_validation(
+    repo: &Path,
+    branch: &str,
+) -> Result<SuccessResponse, AppError> {
+    let result = commands::force_delete_branch(repo, branch).await?;
     Ok(SuccessResponse {
         success: result.success,
         error: result.error,
@@ -154,7 +198,7 @@ pub async fn check_branch_delete(
     let (project_path, branch) =
         get_project_and_branch(state, params.project_id, params.feature_id).await?;
     let (repo_path, target_branch) =
-        resolve_merge_conflict_repo_and_target(state, params.feature_id, project_path).await?;
+        resolve_feature_repo_and_target(state, params.feature_id, &project_path).await?;
     let default_branch = workflow_service::resolve_default_branch(Path::new(&repo_path)).await?;
     let is_default_branch = workflow_service::same_branch_identity(&branch, &default_branch);
     let branch_exists = commands::list_local_branches(Path::new(&repo_path))
@@ -236,10 +280,9 @@ mod tests {
             .unwrap();
 
         let state = AppState::with_pool(pool);
-        let (repo_path, target) =
-            resolve_merge_conflict_repo_and_target(&state, 1, "/tmp/project".to_string())
-                .await
-                .unwrap();
+        let (repo_path, target) = resolve_feature_repo_and_target(&state, 1, "/tmp/project")
+            .await
+            .unwrap();
         assert_eq!(repo_path, "/tmp/project");
         assert_eq!(target, "develop");
     }

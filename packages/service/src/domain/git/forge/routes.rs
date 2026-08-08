@@ -10,11 +10,11 @@ use super::auth::{
 };
 use super::poller::refresh_all;
 use super::provider::{
-    FeaturePrParams, ForgeAuthContext, ForgeAuthSource, ForgeAuthStatus, ForgeContext,
-    ForgeCredentials, ForgeHostConfig, ForgeTokenDeleteParams, ForgeTokenDeleteResponse,
-    ForgeTokenRequest, PrCommentsResponse, PrStatusSnapshot,
+    FeaturePrParams, ForgeAuthContext, ForgeAuthSource, ForgeAuthStatus, ForgeCredentials,
+    ForgeHostConfig, ForgeTokenDeleteParams, ForgeTokenDeleteResponse, ForgeTokenRequest,
+    PrCommentsResponse, PrStatusSnapshot,
 };
-use super::repository::{detected_project_remotes, resolve_feature_target};
+use super::repository::{detected_project_remotes, feature_forge_context};
 use super::{api_base_url, effective_kind, provider_for};
 use crate::app_state::AppState;
 use crate::domain::git::host::GitHost;
@@ -187,33 +187,10 @@ pub async fn get_pr_comments_handler(
             fetched_at: chrono::Utc::now().timestamp_millis(),
         }));
     };
-    let target = resolve_feature_target(&state, params.feature_id).await;
-    if let Some(error) = target.error {
-        return Err(AppError::Internal(error));
-    }
-    let remote = target
-        .remote
-        .ok_or_else(|| AppError::BadRequest("Feature has no origin remote".into()))?;
-    let configs = host_configs()?;
-    let config = configs.get(&remote.hostname);
-    let kind = effective_kind(remote.host, config);
-    let provider = provider_for(kind)
-        .ok_or_else(|| AppError::BadRequest("Configure this remote's forge kind".into()))?;
-    let api_base_url = api_base_url(&remote.hostname, kind, config)
-        .map_err(forge_to_app_error)?
-        .ok_or_else(|| AppError::BadRequest("Configure this forge's API base URL".into()))?;
-    let credentials = resolve_credentials(&state.forge_auth, &remote.hostname, kind, config)
-        .await
-        .map_err(forge_to_app_error)?
-        .ok_or_else(|| AppError::BadRequest("Connect this forge in Settings first".into()))?;
-    let context = ForgeContext {
-        remote,
-        api_base_url,
-        credentials,
-        http: state.forge_http.clone(),
-    };
-    let threads = provider
-        .comments(&context, pr.number)
+    let forge = feature_forge_context(&state, params.feature_id).await?;
+    let threads = forge
+        .provider
+        .comments(&forge.context, pr.number)
         .await
         .map_err(forge_to_app_error)?;
     Ok(Json(PrCommentsResponse {
@@ -236,6 +213,10 @@ pub fn forge_router() -> Router<AppState> {
         .route("/api/git/pr-statuses", get(get_pr_statuses_handler))
         .route("/api/git/pr", get(get_pr_handler))
         .route("/api/git/pr/comments", get(get_pr_comments_handler))
+        .route(
+            "/api/git/forge/image",
+            get(super::image_routes::get_forge_image_handler),
+        )
 }
 
 async fn refresh_if_stale(state: &AppState, feature_id: i64) -> Result<(), AppError> {
