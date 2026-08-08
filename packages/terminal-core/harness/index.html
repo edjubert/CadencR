@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>terminal-core harness</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 2rem; }
+      pre { background: #111; color: #eee; padding: 1rem; font-size: 14px; line-height: 1.3; }
+      .row { margin: 0.5rem 0; }
+      code { background: #eee; padding: 0.1rem 0.3rem; }
+    </style>
+  </head>
+  <body>
+    <h1>terminal-core harness</h1>
+    <p>
+      Proves the wasm engine parses ANSI into a grid and encodes keys. Rendering
+      is deliberately plain text here — the WebGPU renderer is a separate plan.
+    </p>
+
+    <div class="row">
+      <button id="feed-text">Feed plain text</button>
+      <button id="feed-sgr">Feed colored + positioned text</button>
+      <button id="feed-clear">Clear screen</button>
+    </div>
+
+    <div class="row">
+      Press a key with the grid focused to see its encoding:
+      <strong id="encoded">—</strong>
+    </div>
+
+    <pre id="grid" tabindex="0">loading…</pre>
+
+    <script type="module">
+      import init, { Terminal, encodeKey } from "../pkg/terminal_core.js";
+
+      await init();
+
+      const COLUMNS = 60;
+      const LINES = 12;
+      const term = new Terminal(COLUMNS, LINES);
+      const gridEl = document.getElementById("grid");
+      const encodedEl = document.getElementById("encoded");
+
+      function render() {
+        const rows = [];
+        for (let line = 0; line < term.screenLines; line += 1) {
+          rows.push(term.rowText(line));
+        }
+        rows.push("");
+        rows.push(
+          `cursor ${term.cursorLine},${term.cursorColumn}  ` +
+            `DECCKM ${term.applicationCursor ? "on" : "off"}  ` +
+            `snapshot ${term.packedSnapshot().length} words`,
+        );
+        gridEl.textContent = rows.join("\n");
+      }
+
+      function feed(text) {
+        term.feed(new TextEncoder().encode(text));
+        render();
+      }
+
+      document.getElementById("feed-text").onclick = () =>
+        feed("hello from terminal-core\r\n");
+      document.getElementById("feed-sgr").onclick = () =>
+        feed("\x1b[5;10H\x1b[1;38;2;18;52;86mcolored + positioned\x1b[0m");
+      document.getElementById("feed-clear").onclick = () =>
+        feed("\x1b[2J\x1b[H");
+
+      gridEl.addEventListener("keydown", (event) => {
+        event.preventDefault();
+        const bytes = encodeKey(
+          event.key,
+          event.ctrlKey,
+          event.altKey,
+          event.shiftKey,
+          event.metaKey,
+          term.applicationCursor,
+        );
+        encodedEl.textContent =
+          bytes === undefined
+            ? `${event.key} → (no terminal input)`
+            : `${event.key} → ${[...bytes].map((b) => "0x" + b.toString(16).padStart(2, "0")).join(" ")}`;
+      });
+
+      render();
+      gridEl.focus();
+    </script>
+  </body>
+</html>
