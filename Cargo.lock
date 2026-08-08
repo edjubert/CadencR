@@ -750,6 +750,7 @@ dependencies = [
  "regex-lite",
  "reqwest",
  "rmcp",
+ "rmpv",
  "rustls",
  "serde",
  "serde_json",

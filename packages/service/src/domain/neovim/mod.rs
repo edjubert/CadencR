@@ -1,3 +1,4 @@
+pub mod handler;
 pub mod protocol;
 pub mod routes;
 pub mod service;
