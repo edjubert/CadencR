@@ -19,6 +19,7 @@ use crate::domain::git::routes::git_router;
 use crate::domain::imports::routes::imports_router;
 use crate::domain::lsp::lsp_router;
 use crate::domain::ports::routes::ports_router;
+use crate::domain::neovim;
 use crate::domain::projects::routes::projects_router;
 use crate::domain::schedules::routes::schedules_router;
 use crate::domain::sessions::routes::sessions_router;
@@ -111,6 +112,7 @@ pub fn build_api_routes() -> Router<AppState> {
         .merge(sessions_router())
         .merge(schedules_router())
         .merge(terminal_router())
+        .merge(neovim::routes())
         .merge(editor_router())
         .merge(format_router())
         .merge(image_router())

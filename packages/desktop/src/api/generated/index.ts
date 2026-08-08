@@ -1693,6 +1693,10 @@ export interface MovePathResponse {
   new_path: string;
 }
 
+export interface NeovimStartResponse {
+  version: string;
+}
+
 export type NewProjectBranchPayloadBase = string | null;
 
 /**
@@ -7517,6 +7521,151 @@ export function useGetMessagePreview<
 
   return query;
 }
+
+/**
+ * Spawns a headless Neovim instance for the given feature (session).
+Returns the spawn status and process info once the handshake completes.
+ * @summary POST /api/features/{feature_id}/neovim/start
+ */
+export const startRoute = (featureId: string, signal?: AbortSignal) => {
+  return customInstance<NeovimStartResponse>({
+    url: `/api/features/${featureId}/neovim/start`,
+    method: "POST",
+    signal,
+  });
+};
+
+export const getStartRouteMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof startRoute>>,
+    TError,
+    { featureId: string },
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof startRoute>>,
+  TError,
+  { featureId: string },
+  TContext
+> => {
+  const mutationKey = ["startRoute"];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof startRoute>>,
+    { featureId: string }
+  > = (props) => {
+    const { featureId } = props ?? {};
+
+    return startRoute(featureId);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type StartRouteMutationResult = NonNullable<Awaited<ReturnType<typeof startRoute>>>;
+
+export type StartRouteMutationError = ErrorType<unknown>;
+
+/**
+ * @summary POST /api/features/{feature_id}/neovim/start
+ */
+export const useStartRoute = <TError = ErrorType<unknown>, TContext = unknown>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof startRoute>>,
+    TError,
+    { featureId: string },
+    TContext
+  >;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof startRoute>>,
+  TError,
+  { featureId: string },
+  TContext
+> => {
+  const mutationOptions = getStartRouteMutationOptions(options);
+
+  return useMutation(mutationOptions);
+};
+
+/**
+ * Stops the headless Neovim instance for the given feature (session).
+ * @summary POST /api/features/{feature_id}/neovim/stop
+ */
+export const stopRoute = (featureId: string, signal?: AbortSignal) => {
+  return customInstance<void>({
+    url: `/api/features/${featureId}/neovim/stop`,
+    method: "POST",
+    signal,
+  });
+};
+
+export const getStopRouteMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof stopRoute>>,
+    TError,
+    { featureId: string },
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof stopRoute>>,
+  TError,
+  { featureId: string },
+  TContext
+> => {
+  const mutationKey = ["stopRoute"];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof stopRoute>>,
+    { featureId: string }
+  > = (props) => {
+    const { featureId } = props ?? {};
+
+    return stopRoute(featureId);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type StopRouteMutationResult = NonNullable<Awaited<ReturnType<typeof stopRoute>>>;
+
+export type StopRouteMutationError = ErrorType<unknown>;
+
+/**
+ * @summary POST /api/features/{feature_id}/neovim/stop
+ */
+export const useStopRoute = <TError = ErrorType<unknown>, TContext = unknown>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof stopRoute>>,
+    TError,
+    { featureId: string },
+    TContext
+  >;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof stopRoute>>,
+  TError,
+  { featureId: string },
+  TContext
+> => {
+  const mutationOptions = getStopRouteMutationOptions(options);
+
+  return useMutation(mutationOptions);
+};
 
 export const refreshSession = (featureId: number, signal?: AbortSignal) => {
   return customInstance<RefreshSessionResponse>({
