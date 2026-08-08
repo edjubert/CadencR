@@ -20,6 +20,10 @@ pub enum AppError {
     /// LSP host's crash-backoff to signal "retry later", matching the
     /// semantics web clients already understand.
     ServiceUnavailable(String),
+    #[allow(dead_code)]
+    NeovimSpawnError { detail: String },
+    #[allow(dead_code)]
+    NeovimHandshakeTimeout,
 }
 
 impl std::fmt::Display for AppError {
@@ -32,6 +36,12 @@ impl std::fmt::Display for AppError {
             AppError::Internal(msg) => write!(f, "Internal error: {msg}"),
             AppError::Conflict(msg) => write!(f, "Conflict: {msg}"),
             AppError::ServiceUnavailable(msg) => write!(f, "Service unavailable: {msg}"),
+            AppError::NeovimSpawnError { detail } => {
+                write!(f, "failed to spawn neovim process: {detail}")
+            }
+            AppError::NeovimHandshakeTimeout => {
+                write!(f, "neovim process did not complete handshake in time")
+            }
         }
     }
 }
@@ -51,6 +61,12 @@ impl IntoResponse for AppError {
             AppError::Conflict(_) => (StatusCode::CONFLICT, "CONFLICT"),
             AppError::ServiceUnavailable(_) => {
                 (StatusCode::SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE")
+            }
+            AppError::NeovimSpawnError { .. } => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "NEOVIM_NOT_FOUND")
+            }
+            AppError::NeovimHandshakeTimeout => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "NEOVIM_HANDSHAKE_TIMEOUT")
             }
         };
 
@@ -103,6 +119,31 @@ mod tests {
         let err = AppError::Internal("boom".into());
         let response = err.into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn neovim_spawn_error_returns_500_with_correct_code() {
+        let response =
+            AppError::NeovimSpawnError { detail: "nvim: command not found".into() }.into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&body).expect("decode response");
+        assert_eq!(parsed["code"], "NEOVIM_NOT_FOUND");
+    }
+
+    #[tokio::test]
+    async fn neovim_handshake_timeout_returns_500_with_correct_code() {
+        let response = AppError::NeovimHandshakeTimeout.into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&body).expect("decode response");
+        assert_eq!(parsed["code"], "NEOVIM_HANDSHAKE_TIMEOUT");
     }
 
     #[tokio::test]
