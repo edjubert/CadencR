@@ -1,0 +1,35 @@
+{
+  "name": "@cadencr/terminal-core",
+  "private": true,
+  "version": "0.10.0",
+  "description": "WebGPU terminal renderer and its wasm ANSI engine, used by Cadencr's Neovim editor panel.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./renderer/index.ts",
+      "default": "./renderer/index.ts"
+    }
+  },
+  "scripts": {
+    "build": "wasm-pack build --target web --out-dir pkg",
+    "lint": "oxlint renderer/",
+    "lint:fix": "oxlint --fix renderer/",
+    "format": "oxfmt renderer/",
+    "format:check": "oxfmt --check renderer/",
+    "ts-check": "tsc --noEmit",
+    "test": "vitest run",
+    "knip": "knip",
+    "harness": "vite"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@webgpu/types": "^0.1.71",
+    "knip": "^6.22.0",
+    "oxfmt": "^0.56.0",
+    "oxlint": "^1.71.0",
+    "typescript": "^5.7.0",
+    "vite": "6.4.3",
+    "vitest": "4.1.9"
+  }
+}

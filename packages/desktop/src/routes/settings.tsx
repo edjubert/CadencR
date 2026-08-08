@@ -1,14 +1,7 @@
 import { useEffect, useRef } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useShortcut } from "@/hooks/useShortcut";
-import {
-  ArrowLeft,
-  ChevronRight,
-  Files,
-  History,
-  Save,
-  Settings2,
-} from "lucide-react";
+import { ArrowLeft, ChevronRight, Files, History, Save, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -38,11 +31,7 @@ import { IconTile } from "@/components/settings/IconTile";
 import { useDebouncedSetting } from "@/hooks/useDebouncedSetting";
 import { APP_VERSION } from "@/lib/app-version";
 import { RuntimeSettingsSection } from "@/components/settings/RuntimeSettingsSection";
-import { useDetectRoute } from "@/api/generated";
-import {
-  RadioCardGroup,
-  type RadioCardOption,
-} from "@/components/settings/RadioCardGroup";
+import { RadioCardGroup, type RadioCardOption } from "@/components/settings/RadioCardGroup";
 import { parseVimModeLevel, type VimModeLevel } from "@/lib/vim-mode-level";
 
 export const Route = createFileRoute("/settings")({
@@ -91,9 +80,7 @@ function SettingsPage() {
           <header className="flex items-start justify-between gap-4">
             <div className="space-y-1">
               <Breadcrumbs />
-              <h1 className="text-2xl font-semibold tracking-tight">
-                Settings
-              </h1>
+              <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
               <p className="text-sm text-muted-foreground">
                 Configure how Cadencr looks, runs, and orchestrates agents.
               </p>
@@ -141,9 +128,7 @@ function SidebarHeader(): React.JSX.Element {
       </div>
       <div className="min-w-0">
         <div className="text-sm font-semibold">Settings</div>
-        <div className="truncate text-[11px] text-muted-foreground">
-          Cadencr v{APP_VERSION}
-        </div>
+        <div className="truncate text-[11px] text-muted-foreground">Cadencr v{APP_VERSION}</div>
       </div>
     </div>
   );
@@ -180,11 +165,7 @@ function Breadcrumbs(): React.JSX.Element {
 
 function AppearanceSection(): React.JSX.Element {
   return (
-    <SettingsSection
-      id="appearance"
-      title="Appearance"
-      subtitle="Theme · Animations · Verbosity"
-    >
+    <SettingsSection id="appearance" title="Appearance" subtitle="Theme · Animations · Verbosity">
       <SettingsCard>
         <SettingsSubsection padded={false}>
           <ThemeSelector />
@@ -230,9 +211,7 @@ function MaxOpenTabsControl(): React.JSX.Element {
         max={50}
         disabled={!isLimited}
         value={maxTabsNum}
-        onChange={(event) =>
-          setMaxTabsNum(parseInt(event.target.value, 10) || 1)
-        }
+        onChange={(event) => setMaxTabsNum(parseInt(event.target.value, 10) || 1)}
         className="h-7 w-14 text-center disabled:opacity-50"
       />
       <button
@@ -260,13 +239,7 @@ function MaxOpenTabsControl(): React.JSX.Element {
   );
 }
 
-/** Machine-wide fact, not feature-scoped — the `feature_id` path segment is unused server-side. */
-const VIM_MODE_DETECT_FEATURE_ID = "0";
-
 function useVimModeLevelOptions(): RadioCardOption<VimModeLevel>[] {
-  const detection = useDetectRoute(VIM_MODE_DETECT_FEATURE_ID);
-  const nvimAvailable = detection.data?.available ?? false;
-
   return [
     {
       value: "0",
@@ -281,10 +254,10 @@ function useVimModeLevelOptions(): RadioCardOption<VimModeLevel>[] {
     {
       value: "2",
       label: "Integrated Neovim",
-      description: nvimAvailable
-        ? "Keystrokes forward to a real headless Neovim process."
-        : "nvim was not found on your PATH.",
-      disabled: !nvimAvailable,
+      // The RPC-driven backend surface (and its /neovim/detect route) was
+      // removed pending a PTY-backed replacement — disable until it lands.
+      description: "Not available yet — backend migration in progress.",
+      disabled: true,
     },
     {
       value: "3",
@@ -306,11 +279,7 @@ function EditorSection(): React.JSX.Element {
   const isGitBlameEnabled = (gitBlame.value ?? "false") === "true";
 
   return (
-    <SettingsSection
-      id="editor"
-      title="Editor"
-      subtitle="CodeMirror · File tree"
-    >
+    <SettingsSection id="editor" title="Editor" subtitle="CodeMirror · File tree">
       <SettingsCard>
         <SettingsSubsection
           title="File tree icons"
@@ -343,9 +312,7 @@ function EditorSection(): React.JSX.Element {
             label="Auto-save"
             description="Automatically save files after a short delay."
             checked={isAutoSaveEnabled}
-            onCheckedChange={(checked) =>
-              autoSave.setValue(checked ? "true" : "false")
-            }
+            onCheckedChange={(checked) => autoSave.setValue(checked ? "true" : "false")}
             divided
           />
           <SettingsSwitchRow
@@ -354,9 +321,7 @@ function EditorSection(): React.JSX.Element {
             label="Git blame"
             description="Show blame annotation on the current line."
             checked={isGitBlameEnabled}
-            onCheckedChange={(checked) =>
-              gitBlame.setValue(checked ? "true" : "false")
-            }
+            onCheckedChange={(checked) => gitBlame.setValue(checked ? "true" : "false")}
             divided
           />
           <SettingsRow

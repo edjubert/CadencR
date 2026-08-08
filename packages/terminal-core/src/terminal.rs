@@ -3,7 +3,7 @@
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point};
-use alacritty_terminal::term::{Config, Term, TermMode};
+use alacritty_terminal::term::{Config, Term, TermDamage, TermMode};
 use vte::ansi::Processor;
 
 use crate::snapshot::{encode_color, WORDS_PER_CELL};
@@ -55,14 +55,22 @@ impl Dimensions for TerminalSize {
 pub struct TerminalCore {
     term: Term<NoopListener>,
     parser: Processor,
+    /// Reused across frames: rewritten in place by `refresh_snapshot` so no
+    /// allocation happens on the render path.
+    packed: Vec<u32>,
+    /// Flat `(line, left, right)` triplets, refilled by `take_damage`.
+    damage: Vec<u32>,
 }
 
 impl TerminalCore {
     pub fn new(size: TerminalSize) -> Self {
         let size = size.clamped();
+        let cells = size.columns * size.screen_lines;
         Self {
             term: Term::new(Config::default(), &size, NoopListener),
             parser: Processor::new(),
+            packed: vec![0; cells * WORDS_PER_CELL],
+            damage: Vec::new(),
         }
     }
 
@@ -73,7 +81,10 @@ impl TerminalCore {
     }
 
     pub fn resize(&mut self, size: TerminalSize) {
-        self.term.resize(size.clamped());
+        let size = size.clamped();
+        self.term.resize(size);
+        self.packed
+            .resize(size.columns * size.screen_lines * WORDS_PER_CELL, 0);
     }
 
     pub fn columns(&self) -> usize {
@@ -101,8 +112,38 @@ impl TerminalCore {
         self.term.mode().contains(TermMode::APP_CURSOR)
     }
 
+    /// Which mouse reports the running application asked for.
+    pub fn mouse_reporting(&self) -> crate::input::MouseReporting {
+        let mode = self.term.mode();
+        if mode.contains(TermMode::MOUSE_MOTION) {
+            crate::input::MouseReporting::Motion
+        } else if mode.contains(TermMode::MOUSE_DRAG) {
+            crate::input::MouseReporting::Drag
+        } else if mode.contains(TermMode::MOUSE_REPORT_CLICK) {
+            crate::input::MouseReporting::Click
+        } else {
+            crate::input::MouseReporting::None
+        }
+    }
+
+    /// Whether SGR (1006) mouse encoding is enabled.
+    pub fn sgr_mouse(&self) -> bool {
+        self.term.mode().contains(TermMode::SGR_MOUSE)
+    }
+
+    /// Whether alternate scroll is enabled — the wheel then drives the
+    /// alternate screen's pager with arrow keys instead of mouse reports.
+    pub fn alternate_scroll(&self) -> bool {
+        self.term.mode().contains(TermMode::ALTERNATE_SCROLL)
+    }
+
+    /// Whether the alternate screen is active.
+    pub fn alt_screen(&self) -> bool {
+        self.term.mode().contains(TermMode::ALT_SCREEN)
+    }
+
     /// One viewport row as text, trailing blanks trimmed. Reading aid for
-    /// tests and debugging — the renderer uses `packed_snapshot`.
+    /// tests and debugging — the renderer uses `refresh_snapshot` + `snapshot`.
     pub fn row_text(&self, line: usize) -> String {
         let grid = self.term.grid();
         let line = Line(line as i32);
@@ -113,25 +154,67 @@ impl TerminalCore {
         text.trim_end().to_string()
     }
 
-    /// The whole viewport packed for transfer to JavaScript: four `u32` per
-    /// cell — character, foreground, background, flags — in row-major order.
-    pub fn packed_snapshot(&self) -> Vec<u32> {
+    /// Rewrite the packed buffer from the current grid.
+    ///
+    /// Writes in place — no allocation on the render path. Call once per frame,
+    /// before reading `snapshot`.
+    pub fn refresh_snapshot(&mut self) {
+        let columns = self.term.columns();
+        let lines = self.term.screen_lines();
         let grid = self.term.grid();
-        let columns = self.columns();
-        let lines = self.screen_lines();
-        let mut packed = Vec::with_capacity(columns * lines * WORDS_PER_CELL);
 
+        let mut index = 0;
         for line in 0..lines {
             for column in 0..columns {
                 let cell = &grid[Point::new(Line(line as i32), Column(column))];
-                packed.push(cell.c as u32);
-                packed.push(encode_color(cell.fg));
-                packed.push(encode_color(cell.bg));
-                packed.push(cell.flags.bits() as u32);
+                self.packed[index] = cell.c as u32;
+                self.packed[index + 1] = encode_color(cell.fg);
+                self.packed[index + 2] = encode_color(cell.bg);
+                self.packed[index + 3] = u32::from(cell.flags.bits());
+                index += WORDS_PER_CELL;
+            }
+        }
+    }
+
+    /// The packed viewport: four `u32` per cell — character, foreground,
+    /// background, flags — in row-major order. Valid until the next
+    /// `refresh_snapshot`.
+    pub fn snapshot(&self) -> &[u32] {
+        &self.packed
+    }
+
+    /// Lines changed since the last call, as flat `(line, left, right)`
+    /// triplets with an inclusive right column. Taking the damage clears it.
+    ///
+    /// A fully damaged grid — after a resize, an alternate-screen switch, or
+    /// entering insert mode — is flattened into a single triplet per line
+    /// covering the whole viewport, so callers only ever handle one shape.
+    pub fn take_damage(&mut self) -> &[u32] {
+        self.damage.clear();
+
+        let columns = self.term.columns();
+        let lines = self.term.screen_lines();
+
+        match self.term.damage() {
+            TermDamage::Full => {
+                let last_column = columns.saturating_sub(1) as u32;
+                for line in 0..lines {
+                    self.damage.push(line as u32);
+                    self.damage.push(0);
+                    self.damage.push(last_column);
+                }
+            }
+            TermDamage::Partial(iterator) => {
+                for bounds in iterator {
+                    self.damage.push(bounds.line as u32);
+                    self.damage.push(bounds.left as u32);
+                    self.damage.push(bounds.right as u32);
+                }
             }
         }
 
-        packed
+        self.term.reset_damage();
+        &self.damage
     }
 }
 
@@ -191,9 +274,9 @@ mod tests {
     #[test]
     fn sgr_attributes_reach_the_packed_snapshot() {
         let mut core = TerminalCore::new(TerminalSize { columns: 4, screen_lines: 1 });
-        // True-color foreground 0x123456 on a bold "A".
         core.feed(b"\x1b[1;38;2;18;52;86mA");
-        let packed = core.packed_snapshot();
+        core.refresh_snapshot();
+        let packed = core.snapshot();
         assert_eq!(packed.len(), 4 * crate::snapshot::WORDS_PER_CELL);
 
         let ch = packed[0];
@@ -211,7 +294,8 @@ mod tests {
         core.resize(TerminalSize { columns: 40, screen_lines: 10 });
         assert_eq!(core.columns(), 40);
         assert_eq!(core.screen_lines(), 10);
-        assert_eq!(core.packed_snapshot().len(), 40 * 10 * crate::snapshot::WORDS_PER_CELL);
+        core.refresh_snapshot();
+        assert_eq!(core.snapshot().len(), 40 * 10 * crate::snapshot::WORDS_PER_CELL);
     }
 
     #[test]
@@ -243,5 +327,117 @@ mod tests {
 
         core.feed(b"\x1b[?1l");
         assert!(!core.application_cursor(), "CSI ? 1 l disables DECCKM");
+    }
+
+    #[test]
+    fn the_snapshot_buffer_is_reused_across_frames() {
+        let mut core = TerminalCore::new(TerminalSize { columns: 10, screen_lines: 3 });
+        core.feed(b"abc");
+        core.refresh_snapshot();
+        let first_ptr = core.snapshot().as_ptr();
+
+        core.feed(b"def");
+        core.refresh_snapshot();
+        let second_ptr = core.snapshot().as_ptr();
+
+        assert_eq!(
+            first_ptr, second_ptr,
+            "refreshing must rewrite the existing buffer, not allocate a new one"
+        );
+    }
+
+    #[test]
+    fn refreshing_updates_the_buffer_contents() {
+        let mut core = TerminalCore::new(TerminalSize { columns: 10, screen_lines: 1 });
+        core.feed(b"a");
+        core.refresh_snapshot();
+        assert_eq!(char::from_u32(core.snapshot()[0]), Some('a'));
+
+        core.feed(b"\x1b[1;1Hb");
+        core.refresh_snapshot();
+        assert_eq!(char::from_u32(core.snapshot()[0]), Some('b'));
+    }
+
+    #[test]
+    fn the_snapshot_is_sized_for_the_whole_viewport() {
+        let mut core = TerminalCore::new(TerminalSize { columns: 10, screen_lines: 3 });
+        core.refresh_snapshot();
+        assert_eq!(core.snapshot().len(), 10 * 3 * crate::snapshot::WORDS_PER_CELL);
+    }
+
+    #[test]
+    fn resizing_resizes_the_snapshot_buffer() {
+        let mut core = TerminalCore::new(TerminalSize { columns: 10, screen_lines: 3 });
+        core.refresh_snapshot();
+        core.resize(TerminalSize { columns: 20, screen_lines: 5 });
+        core.refresh_snapshot();
+        assert_eq!(core.snapshot().len(), 20 * 5 * crate::snapshot::WORDS_PER_CELL);
+    }
+
+    #[test]
+    fn writing_one_line_reports_only_that_line_as_damaged() {
+        let mut core = TerminalCore::new(TerminalSize { columns: 20, screen_lines: 5 });
+        let _ = core.take_damage();
+
+        core.feed(b"\x1b[3;1Hxyz");
+        let damage = core.take_damage();
+
+        assert_eq!(damage.len() % 3, 0, "damage is a flat list of triplets");
+        let lines: Vec<u32> = damage.chunks(3).map(|triplet| triplet[0]).collect();
+        assert!(
+            lines.contains(&2),
+            "line 3 (0-indexed 2) should be damaged, got lines {lines:?}"
+        );
+    }
+
+    #[test]
+    fn damage_is_cleared_once_taken() {
+        let mut core = TerminalCore::new(TerminalSize { columns: 20, screen_lines: 5 });
+        let _ = core.take_damage();
+
+        core.feed(b"hello");
+        assert!(!core.take_damage().is_empty(), "the write should be damaged");
+
+        // Term::damage() always marks the cursor position as damaged (alacritty
+        // behavior). The third call returns exactly one triplet — the cursor at
+        // (line 0, col 5) — proving no stale damage from the feed remains.
+        let remaining = core.take_damage();
+        assert_eq!(remaining.len(), 3, "third call returns exactly cursor damage");
+        assert_eq!(remaining[0], 0, "cursor line");
+        assert_eq!(remaining[1], 5, "cursor column");
+        assert_eq!(remaining[2], 5, "cursor column (inclusive)");
+    }
+
+    #[test]
+    fn a_resize_reports_the_whole_grid_as_damaged() {
+        let mut core = TerminalCore::new(TerminalSize { columns: 20, screen_lines: 5 });
+        let _ = core.take_damage();
+
+        core.resize(TerminalSize { columns: 30, screen_lines: 8 });
+        let damage = core.take_damage();
+
+        assert_eq!(damage.len(), 8 * 3);
+        assert_eq!(damage[0], 0);
+        assert_eq!(damage[1], 0);
+        assert_eq!(damage[2], 29, "right column is inclusive");
+    }
+
+    #[test]
+    fn mouse_modes_follow_the_escape_sequences_that_set_them() {
+        use crate::input::MouseReporting;
+
+        let mut core = TerminalCore::new(TerminalSize { columns: 20, screen_lines: 5 });
+        assert_eq!(core.mouse_reporting(), MouseReporting::None);
+        assert!(!core.sgr_mouse());
+
+        core.feed(b"\x1b[?1000h\x1b[?1006h");
+        assert_eq!(core.mouse_reporting(), MouseReporting::Click);
+        assert!(core.sgr_mouse());
+
+        core.feed(b"\x1b[?1002h");
+        assert_eq!(core.mouse_reporting(), MouseReporting::Drag);
+
+        core.feed(b"\x1b[?1000l\x1b[?1002l");
+        assert_eq!(core.mouse_reporting(), MouseReporting::None);
     }
 }

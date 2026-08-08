@@ -20,9 +20,13 @@ pub enum AppError {
     /// LSP host's crash-backoff to signal "retry later", matching the
     /// semantics web clients already understand.
     ServiceUnavailable(String),
-    NeovimSpawnError { detail: String },
+    NeovimSpawnError {
+        detail: String,
+    },
     NeovimHandshakeTimeout,
-    NeovimNotRunning { feature_id: String },
+    NeovimNotRunning {
+        feature_id: String,
+    },
     NeovimProcessNotRunning,
     NeovimFileNotFound {
         path: String,
@@ -73,18 +77,15 @@ impl IntoResponse for AppError {
             AppError::NeovimSpawnError { .. } => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "NEOVIM_SPAWN_ERROR")
             }
-            AppError::NeovimHandshakeTimeout => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "NEOVIM_HANDSHAKE_TIMEOUT")
-            }
-            AppError::NeovimNotRunning { .. } => {
-                (StatusCode::NOT_FOUND, "NEOVIM_NOT_RUNNING")
-            }
+            AppError::NeovimHandshakeTimeout => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "NEOVIM_HANDSHAKE_TIMEOUT",
+            ),
+            AppError::NeovimNotRunning { .. } => (StatusCode::NOT_FOUND, "NEOVIM_NOT_RUNNING"),
             AppError::NeovimProcessNotRunning => {
                 (StatusCode::NOT_FOUND, "NEOVIM_PROCESS_NOT_RUNNING")
             }
-            AppError::NeovimFileNotFound { .. } => {
-                (StatusCode::NOT_FOUND, "NEOVIM_FILE_NOT_FOUND")
-            }
+            AppError::NeovimFileNotFound { .. } => (StatusCode::NOT_FOUND, "NEOVIM_FILE_NOT_FOUND"),
         };
 
         if status.is_server_error() {

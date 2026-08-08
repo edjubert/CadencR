@@ -26,6 +26,10 @@ export function neovimKeydownExtension(featureId: string, filePath: string) {
   return EditorView.domEventHandlers({
     keydown(event) {
       const keys = toNeovimKeyNotation(event);
+      // Standalone modifier keydowns (e.g. Shift, fired before the letter it
+      // modifies) have no key-notation form — let the browser handle them
+      // normally instead of forwarding/consuming the event.
+      if (keys === null) return false;
       sendNeovimKeyInput(featureId, filePath, keys);
       event.preventDefault();
       return true;
@@ -33,13 +37,32 @@ export function neovimKeydownExtension(featureId: string, filePath: string) {
   });
 }
 
+/**
+ * Neovim's own cursor shape (block outside insert mode, thin caret inside
+ * it) has no equivalent in plain CodeMirror, which always draws a thin
+ * caret. Toggling this class (styled in `editor-theme.ts`) is the only
+ * visual cue distinguishing normal/visual from insert mode in level 2.
+ */
+function applyModeChanged(view: EditorView, mode: string): void {
+  view.dom.classList.toggle("cm-neovim-block-cursor", !mode.startsWith("i"));
+}
+
+/** `col` is Neovim's 1-indexed `col('.')` — subtract 1 for CodeMirror's 0-indexed column offset. */
 function applyCursorMoved(view: EditorView, line: number, col: number): void {
   const clampedLine = Math.min(Math.max(line, 1), view.state.doc.lines);
   const lineInfo = view.state.doc.line(clampedLine);
-  const anchor = Math.min(lineInfo.from + col, lineInfo.to);
+  const anchor = Math.min(lineInfo.from + Math.max(col - 1, 0), lineInfo.to);
   view.dispatch({ selection: { anchor } });
 }
 
+/**
+ * `firstline`/`lastline` come straight from `nvim_buf_lines_event`: 0-indexed,
+ * `lastline` exclusive. The old range's last replaced line (0-indexed
+ * `lastline - 1`) is CM's 1-indexed line `lastline` — using `to = line(lastline).to`
+ * (not `line(lastline + 1).from`) keeps the following line's newline intact;
+ * the previous off-by-one swallowed that newline into every edit, merging the
+ * next line into the one just typed.
+ */
 function applyBufferLinesChanged(
   view: EditorView,
   firstline: number,
@@ -47,8 +70,13 @@ function applyBufferLinesChanged(
   lines: string[],
 ): void {
   const doc = view.state.doc;
-  const from = doc.line(Math.min(firstline + 1, doc.lines)).from;
-  const to = lastline === -1 ? doc.length : doc.line(Math.min(lastline + 1, doc.lines)).from;
+  const from = firstline >= doc.lines ? doc.length : doc.line(firstline + 1).from;
+  const to =
+    lastline === -1
+      ? doc.length
+      : lastline <= firstline
+        ? from
+        : doc.line(Math.min(lastline, doc.lines)).to;
   view.dispatch({ changes: { from, to, insert: lines.join("\n") } });
 }
 
@@ -89,18 +117,30 @@ function useNeovimEventSubscription(
   useEffect(() => {
     if (!isNeovimIntegrated || !featureId || !filePath) return;
 
+    // Neovim always starts a fresh buffer in normal mode, so assume the
+    // block cursor until the first `mode_changed` event says otherwise.
+    viewRef.current?.dom.classList.add("cm-neovim-block-cursor");
+
     const sessionId = wsSessionIdFromFeature(Number(featureId));
-    return subscribeToNeovimEvents(sessionId, filePath, {
+    const unsubscribe = subscribeToNeovimEvents(sessionId, filePath, {
       onCursorMoved: (line, col) => {
         const view = viewRef.current;
         if (view) applyCursorMoved(view, line, col);
       },
-      onModeChanged: (mode) => onModeChanged?.(mode),
+      onModeChanged: (mode) => {
+        const view = viewRef.current;
+        if (view) applyModeChanged(view, mode);
+        onModeChanged?.(mode);
+      },
       onBufferLinesChanged: (firstline, lastline, lines) => {
         const view = viewRef.current;
         if (view) applyBufferLinesChanged(view, firstline, lastline, lines);
       },
     });
+    return () => {
+      unsubscribe();
+      viewRef.current?.dom.classList.remove("cm-neovim-block-cursor");
+    };
   }, [featureId, filePath, isNeovimIntegrated, onModeChanged, viewRef]);
 }
 

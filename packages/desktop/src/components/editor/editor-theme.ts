@@ -128,6 +128,14 @@ const cadencrChromeTheme = EditorView.theme(
         "var(--editor-search-match-active-bg, color-mix(in srgb, var(--editor-orange) 60%, transparent))",
       boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--editor-orange) 100%, transparent)",
     },
+    // Integrated Neovim (vim mode level 2): block cursor for every mode but
+    // insert, so normal/visual/replace are visually distinguishable from the
+    // default thin caret CodeMirror already draws for insert mode.
+    "&.cm-neovim-block-cursor .cm-cursorLayer .cm-cursor": {
+      borderLeft: "none",
+      width: "0.6em",
+      backgroundColor: "color-mix(in srgb, var(--editor-cursor) 50%, transparent)",
+    },
   },
   { dark: true },
 );
