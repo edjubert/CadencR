@@ -47,6 +47,7 @@ import {
 } from "./ws-envelope-turn-handlers";
 import { SESSION_ACTION, type SessionActionName } from "./ws-session-action-names";
 import { discardStreamDeltas } from "./ws-delta-coalescer";
+import { dispatchNeovimEnvelope } from "./ws-neovim-store";
 
 export type { StoreAccessors } from "./ws-envelope-types";
 
@@ -95,6 +96,11 @@ export function handleEnvelope(
       }
     }
     handleWorktreeEvent(ctx, sessionId, envelope.action, envelope.payload);
+    return;
+  }
+
+  if (envelope.domain === "neovim") {
+    dispatchNeovimEnvelope(sessionId, envelope);
     return;
   }
 
