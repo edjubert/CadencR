@@ -132,17 +132,13 @@ function FileReferenceLink({
   openInEditor: ReturnType<typeof useOpenDiffInEditor>;
   children: React.ReactNode;
 }): ReactElement {
-  // Column is parsed and carried in the href already (task 1), but not sent
-  // to `openInEditor` yet — its signature gains an optional column parameter
-  // in task 3, once the CodeMirror-vs-Neovim routing that actually consumes
-  // it exists. Wiring the click before that would silently drop the column.
   return (
     <a
       href="#"
       className="rounded-sm font-semibold text-[var(--acc-cyan)] underline decoration-[var(--acc-cyan)]/50 underline-offset-2 hover:bg-[var(--acc-cyan)]/10"
       onClick={(event) => {
         event.preventDefault();
-        openInEditor?.(reference.path, reference.line);
+        openInEditor?.(reference.path, reference.line, reference.col);
       }}
     >
       {children}

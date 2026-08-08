@@ -243,7 +243,7 @@ describe("Markdown", () => {
       vi.mocked(useOpenDiffInEditor).mockReturnValue(openInEditor);
       render(<Markdown content="see src/main.rs:42 for details" />);
       fireEvent.click(screen.getByText("src/main.rs:42"));
-      expect(openInEditor).toHaveBeenCalledWith("src/main.rs", 42);
+      expect(openInEditor).toHaveBeenCalledWith("src/main.rs", 42, undefined);
     });
 
     it("does nothing when rendered outside an editor context", () => {
