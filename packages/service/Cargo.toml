@@ -69,6 +69,7 @@ web-push = { version = "0.11", default-features = false, features = ["hyper-clie
 jwt-simple = { version = "0.12", default-features = false, features = ["pure-rust"] }
 chrono-tz = { version = "0.10.4", features = ["serde"] }
 nvim-rs = { version = "0.6", features = ["use_tokio"] }
+rmpv = "1"
 
 [[bin]]
 name = "dump-openapi"

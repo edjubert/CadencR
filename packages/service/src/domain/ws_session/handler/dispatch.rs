@@ -10,8 +10,8 @@ use crate::domain::ws_session::protocol::{SessionErrorPayload, WsEnvelope};
 
 use super::types::{SdkSessions, WsSender};
 use super::{
-    app, commands, session_branch, session_compact, session_control, session_data, session_gate,
-    session_init, session_prompt,
+    app, commands, neovim, session_branch, session_compact, session_control, session_data,
+    session_gate, session_init, session_prompt,
 };
 
 /// Dispatch an envelope to the appropriate domain handler.
@@ -31,6 +31,9 @@ pub(super) async fn dispatch_envelope(
         }
         "app" => {
             app::handle_app_action(envelope, sender, app_state).await;
+        }
+        "neovim" => {
+            neovim::handle_neovim_action(envelope, sender, app_state).await;
         }
         unknown => {
             let err = WsEnvelope::reply(
