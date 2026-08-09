@@ -9,6 +9,8 @@ pub mod snapshot;
 pub mod terminal;
 pub mod wasm;
 
-pub use input::{encode_key, KeyInput};
+pub use input::{
+    encode_key, encode_mouse, KeyInput, MouseButton, MouseEventKind, MouseInput, MouseReporting,
+};
 pub use snapshot::WORDS_PER_CELL;
 pub use terminal::{TerminalCore, TerminalSize};

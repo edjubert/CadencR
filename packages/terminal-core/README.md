@@ -29,13 +29,43 @@ workspace (note the empty `[workspace]` table in its `Cargo.toml`). Run its
 commands from this directory — `pnpm rust -- …` targets the service workspace
 and does not apply here.
 
+## Renderer (TypeScript)
+
+The WebGPU renderer lives in `renderer/` and is written in TypeScript, not
+Rust. The GPU work is identical either way — same WGSL shaders, same buffers,
+same performance — and Rust's value here is the terminal emulation, which the
+wasm crate already provides. TypeScript gets direct access to `navigator.gpu`,
+Canvas2D, `devicePixelRatio` and `ResizeObserver` without crossing a binding
+layer.
+
+- `renderer/atlas-layout.ts` — pure geometry: which glyph occupies which slot,
+  texture coordinates, growth. Testable without a browser.
+- `renderer/atlas.ts` — Canvas2D rasterizer built on that layout. Glyphs are
+  stored as coverage only; color is applied per cell in the shader, so changing
+  theme never rebuilds the atlas — only changing font does.
+
+Run `pnpm test` for the TypeScript tests and `cargo test` for the Rust ones.
+
 ## Commands
 
 ```bash
-cargo test                                  # native tests — all logic is covered here
+cargo test                                  # Rust tests — the ANSI engine and input encoding
 cargo build --target wasm32-unknown-unknown # compile check for the browser target
-wasm-pack build --target web --out-dir pkg  # build the loadable module
-python3 -m http.server 8123                 # then open /harness/index.html
+pnpm test                                   # TypeScript tests — atlas layout, palette, instance data, metrics
+pnpm build                                  # build the wasm module into pkg/
+pnpm harness                                # build the wasm module, then serve the harness on :8123
 ```
 
-`pkg/` and `target/` are build artifacts and are gitignored.
+`pkg/`, `target/` and `node_modules/` are build artifacts and are gitignored.
+
+## Harness
+
+`harness/` is a standalone browser page that wires the engine, the atlas and
+the WebGPU renderer into an interactive terminal. Input loops back on itself —
+there is no PTY — which is enough to exercise keyboard → bytes → parser → grid
+→ GPU. It is the only way to verify the GPU path, since vitest has no WebGPU
+context.
+
+Switching theme in the harness recolors instantly without rebuilding the atlas;
+switching font rebuilds it. That difference is the visible proof that the atlas
+stores glyph coverage only, with color applied per cell in the shader.
