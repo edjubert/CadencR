@@ -41,12 +41,17 @@ export interface UseNeovimWebSocketReturn {
   resize: (cols: number, rows: number) => void;
   detach: () => void;
   isConnected: boolean;
+  lastError: string | null;
 }
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-function handleMessage(raw: string, optionsRef: { current: UseNeovimWebSocketOptions }): void {
+function handleMessage(
+  raw: string,
+  optionsRef: { current: UseNeovimWebSocketOptions },
+  lastErrorSetter: React.Dispatch<React.SetStateAction<string | null>>,
+): void {
   let message: ServerMessage;
   try {
     message = JSON.parse(raw) as ServerMessage;
@@ -62,6 +67,7 @@ function handleMessage(raw: string, optionsRef: { current: UseNeovimWebSocketOpt
       optionsRef.current.onAttached(encoder.encode(message.scrollback));
       break;
     case "error":
+      lastErrorSetter(message.message);
       optionsRef.current.onError(message.message);
       break;
   }
@@ -77,6 +83,7 @@ function handleMessage(raw: string, optionsRef: { current: UseNeovimWebSocketOpt
  */
 export function useNeovimWebSocket(options: UseNeovimWebSocketOptions): UseNeovimWebSocketReturn {
   const [isConnected, setIsConnected] = useState(false);
+  const [lastError, setLastError] = useState<string | null>(null);
   const optionsRef = useRef(options);
   optionsRef.current = options;
   const connRef = useRef<WsConnection | null>(null);
@@ -92,10 +99,11 @@ export function useNeovimWebSocket(options: UseNeovimWebSocketOptions): UseNeovi
       protocols: getWsProtocols(),
       onOpen: () => {
         setIsConnected(true);
+        setLastError(null);
         resetReconnectState(reconnectKey);
         useConnectionStatusStore.getState().reportSource(reconnectKey, "connected");
       },
-      onMessage: (data) => handleMessage(data, optionsRef),
+      onMessage: (data) => handleMessage(data, optionsRef, setLastError),
       onError: (intentional) => {
         if (intentional) return;
         useConnectionStatusStore
@@ -105,7 +113,9 @@ export function useNeovimWebSocket(options: UseNeovimWebSocketOptions): UseNeovi
       onClose: (intentional) => {
         setIsConnected(false);
         if (intentional) return;
-        optionsRef.current.onError("Connection lost. Reconnecting…");
+        // Do not overwrite a server-sent error with a generic reconnect message.
+        // The server sends an explicit error before closing when the process
+        // could not be started; the user should see that, not "Reconnecting…".
         useConnectionStatusStore
           .getState()
           .reportSource(reconnectKey, "reconnecting", "Neovim WebSocket dropped");
@@ -154,7 +164,7 @@ export function useNeovimWebSocket(options: UseNeovimWebSocketOptions): UseNeovi
   }, []);
 
   return useMemo(
-    () => ({ connect, write, resize, detach, isConnected }),
-    [connect, write, resize, detach, isConnected],
+    () => ({ connect, write, resize, detach, isConnected, lastError }),
+    [connect, write, resize, detach, isConnected, lastError],
   );
 }

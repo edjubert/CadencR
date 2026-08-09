@@ -3,8 +3,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use portable_pty::CommandBuilder;
+use sqlx::SqlitePool;
 use tokio::sync::Mutex;
 
+use crate::domain::terminal::cwd::resolve_cwd;
 use crate::domain::terminal::service::PtyManager;
 use crate::error::AppError;
 
@@ -38,14 +40,20 @@ pub struct NeovimManager {
     /// plugin directory.
     spawn_lock: Arc<Mutex<()>>,
     pty_manager: PtyManager,
+    /// Resolves each feature's worktree path before spawning, so plugins that
+    /// assume a real project directory (network installs, path-relative
+    /// config) don't get stuck behind a hit-enter error prompt from running
+    /// out of a bare temp directory.
+    read_pool: SqlitePool,
 }
 
 impl NeovimManager {
-    pub fn new(pty_manager: PtyManager) -> Self {
+    pub fn new(pty_manager: PtyManager, read_pool: SqlitePool) -> Self {
         Self {
             processes: Arc::new(Mutex::new(HashMap::new())),
             spawn_lock: Arc::new(Mutex::new(())),
             pty_manager,
+            read_pool,
         }
     }
 
@@ -83,7 +91,8 @@ impl NeovimManager {
             cmd.env("PATH", login_path);
         }
 
-        let cwd = std::env::temp_dir().to_string_lossy().into_owned();
+        let project_id = project_id_for_feature(&self.read_pool, feature_id).await?;
+        let cwd = resolve_cwd(&self.read_pool, feature_id, project_id).await?;
         let (pty_id, _handle) = self
             .pty_manager
             .create_pty_with_command(feature_id, cmd, &cwd, 120, 40)
@@ -232,8 +241,19 @@ impl Clone for NeovimManager {
             processes: self.processes.clone(),
             spawn_lock: self.spawn_lock.clone(),
             pty_manager: self.pty_manager.clone(),
+            read_pool: self.read_pool.clone(),
         }
     }
+}
+
+/// Looks up a feature's owning project, so `start` can resolve its worktree
+/// path instead of spawning nvim into a bare temp directory.
+async fn project_id_for_feature(pool: &SqlitePool, feature_id: i64) -> Result<i64, AppError> {
+    sqlx::query_scalar("SELECT project_id FROM features WHERE id = ?")
+        .bind(feature_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("feature {feature_id}")))
 }
 
 /// Poll until `nvim --listen` has created its socket, or the spawn ceiling
@@ -303,8 +323,48 @@ pub(crate) mod tests {
             .is_ok()
     }
 
-    fn test_manager() -> NeovimManager {
-        NeovimManager::new(PtyManager::new())
+    /// Seeds an in-memory project + feature rows for every id the tests in
+    /// this module use, so `start`'s `resolve_cwd` call has something to
+    /// resolve. All features share one project pointing at a real temp dir
+    /// (there's no worktree row, so `resolve_cwd` falls back to it).
+    async fn test_manager() -> NeovimManager {
+        use sqlx::sqlite::SqlitePoolOptions;
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT, path TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE feature_settings (feature_id INTEGER, key TEXT, value TEXT, PRIMARY KEY (feature_id, key))",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("CREATE TABLE features (id INTEGER PRIMARY KEY, project_id INTEGER)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let project_path = std::env::temp_dir().to_string_lossy().into_owned();
+        sqlx::query("INSERT INTO projects (id, name, path) VALUES (1, 'test', ?)")
+            .bind(project_path)
+            .execute(&pool)
+            .await
+            .unwrap();
+        for feature_id in [1, 2, 3, 4, 10, 11, 12, 13, 901, 902] {
+            sqlx::query("INSERT INTO features (id, project_id) VALUES (?, 1)")
+                .bind(feature_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        NeovimManager::new(PtyManager::new(), pool)
     }
 
     #[tokio::test]
@@ -313,7 +373,7 @@ pub(crate) mod tests {
             eprintln!("SKIP: nvim binary not found in test environment");
             return;
         }
-        let manager = test_manager();
+        let manager = test_manager().await;
         let info = manager.start(1).await.expect("start should succeed");
         assert!(!info.version.is_empty(), "version should be reported");
         assert!(manager.is_running(1).await);
@@ -326,7 +386,7 @@ pub(crate) mod tests {
             eprintln!("SKIP: nvim binary not found");
             return;
         }
-        let manager = test_manager();
+        let manager = test_manager().await;
         manager.start(2).await.unwrap();
         let pty_id_first = manager.pty_id(2).await.expect("pty id after first start");
         manager.start(2).await.unwrap();
@@ -344,7 +404,7 @@ pub(crate) mod tests {
             eprintln!("SKIP: nvim binary not found");
             return;
         }
-        let manager = test_manager();
+        let manager = test_manager().await;
         manager.start(3).await.unwrap();
         manager.stop(3).await.unwrap();
         assert!(!manager.is_running(3).await);
@@ -360,7 +420,7 @@ pub(crate) mod tests {
             eprintln!("SKIP: nvim binary not found");
             return;
         }
-        let manager = test_manager();
+        let manager = test_manager().await;
         manager.start(4).await.unwrap();
         let socket = manager
             .control_socket_path(4)
@@ -376,7 +436,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn stopping_an_unknown_feature_errors() {
-        let manager = test_manager();
+        let manager = test_manager().await;
         assert!(matches!(
             manager.stop(999).await,
             Err(AppError::NeovimNotRunning { .. })
@@ -391,7 +451,7 @@ pub(crate) mod tests {
         }
         let events: Arc<Mutex<Vec<(i64, &'static str, std::time::Instant)>>> =
             Arc::new(Mutex::new(Vec::new()));
-        let manager = test_manager();
+        let manager = test_manager().await;
 
         let events_a = events.clone();
         let manager_a = manager.clone();
@@ -455,7 +515,7 @@ pub(crate) mod tests {
         let file = dir.path().join("sample.txt");
         std::fs::write(&file, "alpha\nbravo\ncharlie\ndelta\n").unwrap();
 
-        let manager = test_manager();
+        let manager = test_manager().await;
         manager.start(10).await.unwrap();
         manager
             .open_file(10, file.to_str().unwrap(), Some(3), Some(2))
@@ -481,7 +541,7 @@ pub(crate) mod tests {
         let file = dir.path().join("sample.txt");
         std::fs::write(&file, "alpha\nbravo\n").unwrap();
 
-        let manager = test_manager();
+        let manager = test_manager().await;
         manager.start(11).await.unwrap();
         manager
             .open_file(11, file.to_str().unwrap(), None, None)
@@ -499,7 +559,7 @@ pub(crate) mod tests {
             eprintln!("SKIP: nvim binary not found");
             return;
         }
-        let manager = test_manager();
+        let manager = test_manager().await;
         manager.start(12).await.unwrap();
         let result = manager
             .open_file(12, "/definitely/does/not/exist.txt", Some(1), None)
@@ -510,7 +570,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn open_file_without_a_running_process_errors() {
-        let manager = test_manager();
+        let manager = test_manager().await;
         let result = manager.open_file(13, "/tmp/whatever.txt", None, None).await;
         assert!(matches!(result, Err(AppError::NeovimProcessNotRunning)));
     }

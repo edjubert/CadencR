@@ -39,6 +39,7 @@
   "devDependencies": {
     "@cadencr/brand": "workspace:*",
     "@cadencr/terminal-core": "workspace:*",
+    "@webgpu/types": "^0.1.71",
     "@codemirror/autocomplete": "^6.20.3",
     "@codemirror/commands": "^6.10.4",
     "@codemirror/lang-css": "^6.3.1",
