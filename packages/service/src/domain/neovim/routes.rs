@@ -68,9 +68,9 @@ pub async fn open_file_route(
     Path(feature_id): Path<String>,
     axum::Json(request): axum::Json<OpenFileRequest>,
 ) -> Result<StatusCode, AppError> {
-    let feature_id: i64 = feature_id.parse().map_err(|e: ParseIntError| {
-        AppError::BadRequest(format!("Invalid feature_id: {e}"))
-    })?;
+    let feature_id: i64 = feature_id
+        .parse()
+        .map_err(|e: ParseIntError| AppError::BadRequest(format!("Invalid feature_id: {e}")))?;
     app_state
         .neovim_manager
         .open_file(feature_id, &request.path, request.line, request.col)
@@ -83,5 +83,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/neovim/start", axum::routing::post(start_route))
         .route("/api/neovim/stop", axum::routing::post(stop_route))
         .route("/api/neovim/detect", axum::routing::get(detect_route))
-        .route("/api/features/{feature_id}/neovim/open", post(open_file_route))
+        .route(
+            "/api/features/{feature_id}/neovim/open",
+            post(open_file_route),
+        )
 }

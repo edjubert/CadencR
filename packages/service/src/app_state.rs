@@ -20,8 +20,8 @@ use crate::domain::imports::jobs::ImportJobRegistry;
 use crate::domain::lsp::lifecycle::CrashTracker;
 use crate::domain::lsp::LspRegistry;
 use crate::domain::mcp::loopback::is_loopback_host;
-use crate::domain::ports::cache::PortScanCache;
 use crate::domain::neovim::NeovimManager;
+use crate::domain::ports::cache::PortScanCache;
 use crate::domain::push::PushNotifier;
 use crate::domain::schedules::models::ScheduleRanEvent;
 use crate::domain::session_status::SessionStatusBroadcaster;
@@ -108,7 +108,7 @@ pub struct AppState {
     pub schedule_events_tx: broadcast::Sender<ScheduleRanEvent>,
     /// PTY lifecycle manager for terminal sessions.
     pub pty_manager: PtyManager,
-    /// Neovim process manager for headless editor sessions.
+    /// Neovim RPC manager (stub — RPC surface removed; awaiting PTY migration).
     pub neovim_manager: NeovimManager,
     /// Broadcast channel for file-system change events.
     pub file_change_tx: broadcast::Sender<FileChangeEvent>,
@@ -268,7 +268,7 @@ impl AppState {
             feature_events_tx: FeatureEventBroadcaster::new(feature_events_tx),
             schedule_events_tx,
             pty_manager: PtyManager::new(),
-            neovim_manager: NeovimManager::new(),
+            neovim_manager: NeovimManager::new(PtyManager::new()),
             file_change_tx,
             settings_events_tx,
             remote_events_tx,
@@ -333,7 +333,7 @@ impl AppState {
             feature_events_tx: FeatureEventBroadcaster::new(feature_events_tx),
             schedule_events_tx,
             pty_manager: PtyManager::new(),
-            neovim_manager: NeovimManager::new(),
+            neovim_manager: NeovimManager::new(PtyManager::new()),
             file_change_tx,
             settings_events_tx,
             remote_events_tx,

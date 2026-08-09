@@ -109,11 +109,14 @@ impl NeovimManager {
 
     /// Kill the feature's Neovim process and forget it.
     pub async fn stop(&self, feature_id: i64) -> Result<(), AppError> {
-        let handle = self.processes.lock().await.remove(&feature_id).ok_or(
-            AppError::NeovimNotRunning {
-                feature_id: feature_id.to_string(),
-            },
-        )?;
+        let handle =
+            self.processes
+                .lock()
+                .await
+                .remove(&feature_id)
+                .ok_or(AppError::NeovimNotRunning {
+                    feature_id: feature_id.to_string(),
+                })?;
         self.pty_manager
             .kill_pty(&handle.pty_id)
             .map_err(|e| AppError::NeovimSpawnError {
@@ -165,14 +168,11 @@ impl NeovimManager {
             .await
             .ok_or(AppError::NeovimProcessNotRunning)?;
 
-        let (nvim, _io) = nvim_rs::create::tokio::new_path(
-            &socket,
-            Dummy::new(),
-        )
-        .await
-        .map_err(|e| AppError::NeovimSpawnError {
-            detail: format!("control socket unavailable: {e}"),
-        })?;
+        let (nvim, _io) = nvim_rs::create::tokio::new_path(&socket, Dummy::new())
+            .await
+            .map_err(|e| AppError::NeovimSpawnError {
+                detail: format!("control socket unavailable: {e}"),
+            })?;
 
         nvim.command(&format!("edit {}", escape_for_ex(path)))
             .await
@@ -182,11 +182,12 @@ impl NeovimManager {
 
         let target_line = line.unwrap_or(1).max(1) as i64;
         let target_col = col.unwrap_or(1).max(1) as i64 - 1;
-        let window = nvim.get_current_win().await.map_err(|e| {
-            AppError::NeovimSpawnError {
+        let window = nvim
+            .get_current_win()
+            .await
+            .map_err(|e| AppError::NeovimSpawnError {
                 detail: e.to_string(),
-            }
-        })?;
+            })?;
         window
             .set_cursor((target_line, target_col))
             .await
@@ -205,22 +206,23 @@ impl NeovimManager {
             .control_socket_path(feature_id)
             .await
             .ok_or(AppError::NeovimProcessNotRunning)?;
-        let (nvim, _io) = nvim_rs::create::tokio::new_path(
-            &socket,
-            Dummy::new(),
-        )
-        .await
-        .map_err(|e| AppError::NeovimSpawnError {
-            detail: e.to_string(),
-        })?;
-        let window = nvim.get_current_win().await.map_err(|e| {
-            AppError::NeovimSpawnError {
+        let (nvim, _io) = nvim_rs::create::tokio::new_path(&socket, Dummy::new())
+            .await
+            .map_err(|e| AppError::NeovimSpawnError {
                 detail: e.to_string(),
-            }
-        })?;
-        window.get_cursor().await.map_err(|e| AppError::NeovimSpawnError {
-            detail: e.to_string(),
-        })
+            })?;
+        let window = nvim
+            .get_current_win()
+            .await
+            .map_err(|e| AppError::NeovimSpawnError {
+                detail: e.to_string(),
+            })?;
+        window
+            .get_cursor()
+            .await
+            .map_err(|e| AppError::NeovimSpawnError {
+                detail: e.to_string(),
+            })
     }
 }
 
@@ -394,17 +396,29 @@ pub(crate) mod tests {
         let events_a = events.clone();
         let manager_a = manager.clone();
         let handle_a = tokio::spawn(async move {
-            events_a.lock().await.push((901, "start", std::time::Instant::now()));
+            events_a
+                .lock()
+                .await
+                .push((901, "start", std::time::Instant::now()));
             manager_a.start(901).await.unwrap();
-            events_a.lock().await.push((901, "end", std::time::Instant::now()));
+            events_a
+                .lock()
+                .await
+                .push((901, "end", std::time::Instant::now()));
         });
 
         let events_b = events.clone();
         let manager_b = manager.clone();
         let handle_b = tokio::spawn(async move {
-            events_b.lock().await.push((902, "start", std::time::Instant::now()));
+            events_b
+                .lock()
+                .await
+                .push((902, "start", std::time::Instant::now()));
             manager_b.start(902).await.unwrap();
-            events_b.lock().await.push((902, "end", std::time::Instant::now()));
+            events_b
+                .lock()
+                .await
+                .push((902, "end", std::time::Instant::now()));
         });
 
         let _ = tokio::join!(handle_a, handle_b);

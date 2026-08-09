@@ -234,7 +234,9 @@ describe("BaseCodeMirrorEditor", () => {
       mockDispatch.mockClear();
       handlers.onCursorMoved(3, 0);
       expect(mockDispatch).toHaveBeenCalledWith(
-        expect.objectContaining({ selection: expect.objectContaining({ anchor: expect.any(Number) }) }),
+        expect.objectContaining({
+          selection: expect.objectContaining({ anchor: expect.any(Number) }),
+        }),
       );
 
       mockDispatch.mockClear();
