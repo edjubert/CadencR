@@ -222,6 +222,9 @@ importers:
       '@vitest/coverage-v8':
         specifier: 4.1.9
         version: 4.1.9(vitest@4.1.9)
+      '@webgpu/types':
+        specifier: ^0.1.71
+        version: 0.1.71
       '@xterm/addon-fit':
         specifier: ^0.11.0
         version: 0.11.0
