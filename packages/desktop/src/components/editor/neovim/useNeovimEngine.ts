@@ -267,6 +267,10 @@ function encodePointerBytes(
     reporting,
     terminal.alternateScroll,
     terminal.altScreen,
+    // Neovim enables DECCKM, which moves the wheel-to-arrow translation from
+    // CSI to SS3. Without this the alternate-scroll bytes are not read as
+    // arrow keys at all.
+    terminal.applicationCursor,
   );
 }
 
