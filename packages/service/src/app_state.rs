@@ -20,6 +20,7 @@ use crate::domain::imports::jobs::ImportJobRegistry;
 use crate::domain::lsp::lifecycle::CrashTracker;
 use crate::domain::lsp::LspRegistry;
 use crate::domain::mcp::loopback::is_loopback_host;
+use crate::domain::neovim::NeovimManager;
 use crate::domain::ports::cache::PortScanCache;
 use crate::domain::push::PushNotifier;
 use crate::domain::schedules::models::ScheduleRanEvent;
@@ -107,6 +108,8 @@ pub struct AppState {
     pub schedule_events_tx: broadcast::Sender<ScheduleRanEvent>,
     /// PTY lifecycle manager for terminal sessions.
     pub pty_manager: PtyManager,
+    /// Neovim RPC manager (stub — RPC surface removed; awaiting PTY migration).
+    pub neovim_manager: NeovimManager,
     /// Broadcast channel for file-system change events.
     pub file_change_tx: broadcast::Sender<FileChangeEvent>,
     /// Broadcast when a settings JSON file changes on disk (our own writes or an
@@ -251,8 +254,9 @@ impl AppState {
                 PushNotifier::ephemeral()
             }),
         );
+        let pty_manager = PtyManager::new();
         Self {
-            read_pool,
+            read_pool: read_pool.clone(),
             write_pool,
             db_path,
             browser_bridge: Arc::new(RwLock::new(BrowserBridgeConfig::from_env())),
@@ -264,7 +268,8 @@ impl AppState {
             ),
             feature_events_tx: FeatureEventBroadcaster::new(feature_events_tx),
             schedule_events_tx,
-            pty_manager: PtyManager::new(),
+            pty_manager: pty_manager.clone(),
+            neovim_manager: NeovimManager::new(pty_manager, read_pool),
             file_change_tx,
             settings_events_tx,
             remote_events_tx,
@@ -312,9 +317,10 @@ impl AppState {
         let (settings_events_tx, _) = broadcast::channel(16);
         let (remote_events_tx, _) = broadcast::channel(16);
         let (forge_events_tx, _) = broadcast::channel(64);
+        let pty_manager = PtyManager::new();
         Self {
             read_pool: pool.clone(),
-            write_pool: pool,
+            write_pool: pool.clone(),
             db_path: std::env::temp_dir()
                 .join("cadencr-test.db")
                 .to_string_lossy()
@@ -328,7 +334,8 @@ impl AppState {
             ),
             feature_events_tx: FeatureEventBroadcaster::new(feature_events_tx),
             schedule_events_tx,
-            pty_manager: PtyManager::new(),
+            pty_manager: pty_manager.clone(),
+            neovim_manager: NeovimManager::new(pty_manager, pool),
             file_change_tx,
             settings_events_tx,
             remote_events_tx,

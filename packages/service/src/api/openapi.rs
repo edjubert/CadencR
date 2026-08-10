@@ -20,6 +20,8 @@ use crate::domain::features::routes as features_routes;
 use crate::domain::imports::models as imports_models;
 use crate::domain::imports::routes as imports_routes;
 use crate::domain::lsp::routes as lsp_routes;
+use crate::domain::neovim::protocol as neovim_protocol;
+use crate::domain::neovim::routes as neovim_routes;
 use crate::domain::ports::models as ports_models;
 use crate::domain::ports::routes as ports_routes;
 use crate::domain::projects::icon as projects_icon;
@@ -185,6 +187,10 @@ use crate::domain::ws_session::routes as ws_routes;
         push_routes::vapid_key_handler,
         push_routes::subscribe_handler,
         push_routes::unsubscribe_handler,
+        neovim_routes::start_route,
+        neovim_routes::stop_route,
+        neovim_routes::detect_route,
+        neovim_routes::open_file_route,
     ),
     components(schemas(
         HealthResponse,
@@ -365,6 +371,9 @@ use crate::domain::ws_session::routes as ws_routes;
         push_models::PushUnsubscribeRequest,
         push_models::PushSubscriptionKeys,
         push_models::PushSubscriptionResponse,
+        neovim_protocol::NeovimStartResponse,
+        neovim_protocol::NeovimDetectResponse,
+        neovim_protocol::OpenFileRequest,
         ws_protocol::WsSessionAction,
         ws_protocol::PermissionDecision,
         ws_protocol::SessionInitPayload,
