@@ -159,6 +159,12 @@ async function main(): Promise<void> {
       `cursor ${terminal.cursorLine},${terminal.cursorColumn} · ` +
       `DECCKM ${terminal.applicationCursor ? "on" : "off"} · dpr ${devicePixelRatio}`;
 
+    // The atlas renders overflow glyphs blank rather than dying. Say so, or the
+    // missing characters look like an engine bug.
+    errorEl.textContent = atlas.isFull
+      ? "Glyph atlas is full — some cells render blank. Try a smaller font size."
+      : "";
+
     requestAnimationFrame(draw);
   }
 

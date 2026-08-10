@@ -11,6 +11,7 @@ function snapshot(cells: Array<[number, number, number, number]>): Uint32Array {
 
 const atlas = {
   glyph: () => ({ u0: 0, v0: 0, u1: 0.5, v1: 0.5 }),
+  isFull: false,
   reset: () => {},
 };
 
@@ -70,14 +71,35 @@ describe("buildInstanceData", () => {
 });
 
 describe("ensureGlyphs", () => {
-  /** A layout-backed atlas, so growth really does renormalize coordinates. */
+  /** Space: always allocated first, so the fallback lookup cannot itself fail. */
+  const BLANK = 32;
+
+  /**
+   * A layout-backed atlas, so growth really does renormalize coordinates.
+   * Mirrors `GlyphAtlas`: `glyph` never throws, it falls back to a blank slot
+   * and records that it ran out of room.
+   */
   function growingAtlas(cell = { width: 8, height: 17 }, width = 16) {
     const layout = new AtlasLayout(cell, width);
-    return {
+    const atlas = {
       layout,
-      glyph: (codePoint: number) => layout.uvFor(layout.slotFor(codePoint)),
-      reset: () => layout.reset(),
+      isFull: false,
+      glyph: (codePoint: number) => {
+        try {
+          return layout.uvFor(layout.slotFor(codePoint));
+        } catch {
+          atlas.isFull = true;
+          return layout.uvFor(layout.slotFor(BLANK));
+        }
+      },
+      reset: () => {
+        layout.reset();
+        atlas.isFull = false;
+        layout.slotFor(BLANK);
+      },
     };
+    layout.slotFor(BLANK);
+    return atlas;
   }
 
   /** A cell carrying a valid palette foreground and background. */
@@ -115,5 +137,38 @@ describe("ensureGlyphs", () => {
 
     expect(() => ensureGlyphs(packed, atlas)).not.toThrow();
     expect(() => buildInstanceData(packed, cells.length, 1, atlas)).not.toThrow();
+    expect(atlas.isFull).toBe(false);
+  });
+
+  it("degrades to blank cells when the grid itself exceeds atlas capacity", () => {
+    // 8px-wide atlas holds one glyph per row: 481 slots at a 17px cell. A grid
+    // asking for more distinct code points than that cannot ever fit, so the
+    // retry must not throw — freezing the render loop is worse than a blank.
+    const atlas = growingAtlas({ width: 8, height: 17 }, 8);
+    const cells: Array<[number, number, number, number]> = [];
+    for (let code = 0; code < 900; code += 1) cells.push(cellFor(code));
+    const packed = snapshot(cells);
+
+    expect(() => ensureGlyphs(packed, atlas)).not.toThrow();
+    expect(() => buildInstanceData(packed, cells.length, 1, atlas)).not.toThrow();
+    expect(atlas.isFull).toBe(true);
+  });
+
+  it("does not rebuild the atlas every frame once the grid is over capacity", () => {
+    const atlas = growingAtlas({ width: 8, height: 17 }, 8);
+    const cells: Array<[number, number, number, number]> = [];
+    for (let code = 0; code < 900; code += 1) cells.push(cellFor(code));
+    const packed = snapshot(cells);
+
+    ensureGlyphs(packed, atlas);
+    const resets: number[] = [];
+    const realReset = atlas.reset;
+    atlas.reset = () => {
+      resets.push(1);
+      realReset();
+    };
+
+    ensureGlyphs(packed, atlas);
+    expect(resets).toHaveLength(0);
   });
 });

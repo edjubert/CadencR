@@ -9,7 +9,7 @@
  * does.
  */
 
-import { AtlasLayout, type CellMetrics, type TextureRect } from "./atlas-layout";
+import { AtlasFullError, AtlasLayout, type CellMetrics, type TextureRect } from "./atlas-layout";
 
 export interface FontSpec {
   /** CSS font-family list, e.g. "'Fira Code', Menlo, monospace". */
@@ -31,6 +31,13 @@ const ATLAS_WIDTH = 1024;
 /** Printable ASCII, pre-rasterized because it covers almost any code screen. */
 const PRERASTERIZED = { first: 32, last: 126 };
 
+/**
+ * The glyph a cell falls back to when the atlas is out of room. Space is always
+ * present — it opens the pre-rasterized range — so this lookup cannot itself
+ * fail, and it renders as nothing rather than as a wrong character.
+ */
+const BLANK_CODE_POINT = 32;
+
 export class GlyphAtlas {
   readonly layout: AtlasLayout;
   readonly font: FontSpec;
@@ -39,6 +46,7 @@ export class GlyphAtlas {
   #canvas: OffscreenCanvas;
   #context: OffscreenCanvasRenderingContext2D;
   #dirty = true;
+  #full = false;
 
   constructor(font: FontSpec, devicePixelRatio: number) {
     this.font = font;
@@ -69,6 +77,7 @@ export class GlyphAtlas {
    */
   reset(): void {
     this.layout.reset();
+    this.#full = false;
     this.#canvas = new OffscreenCanvas(ATLAS_WIDTH, this.layout.height);
     const context = this.#canvas.getContext("2d");
     if (context === null) {
@@ -95,6 +104,14 @@ export class GlyphAtlas {
     return this.#dirty;
   }
 
+  /**
+   * True once a glyph had to be dropped for lack of room, meaning some cells
+   * are rendering blank. Cleared by `reset`.
+   */
+  get isFull(): boolean {
+    return this.#full;
+  }
+
   markUploaded(): void {
     this.#dirty = false;
   }
@@ -108,7 +125,19 @@ export class GlyphAtlas {
    * Texture coordinates for `codePoint`, rasterizing it on first sight.
    */
   glyph(codePoint: number): TextureRect {
-    const slot = this.layout.slotFor(codePoint);
+    let slot;
+    try {
+      slot = this.layout.slotFor(codePoint);
+    } catch (error) {
+      if (!(error instanceof AtlasFullError)) {
+        throw error;
+      }
+      // Out of room. Render this cell blank rather than taking the render loop
+      // down with it — `isFull` is how the caller learns it happened.
+      this.#full = true;
+      return this.layout.uvFor(this.layout.slotFor(BLANK_CODE_POINT));
+    }
+
     if (!slot.isNew) {
       return this.layout.uvFor(slot);
     }

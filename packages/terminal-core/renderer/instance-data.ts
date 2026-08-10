@@ -6,7 +6,7 @@
  */
 
 import { decodeColor } from "./palette";
-import { AtlasFullError, type TextureRect } from "./atlas-layout";
+import type { TextureRect } from "./atlas-layout";
 
 /** Words per cell in the engine snapshot: char, foreground, background, flags. */
 export const WORDS_PER_CELL = 4;
@@ -23,7 +23,14 @@ export const FLOATS_PER_INSTANCE = 15;
 
 /** The part of the atlas this module needs — kept narrow so tests can fake it. */
 export interface GlyphSource {
+  /**
+   * Texture coordinates for a code point. Never throws: once the atlas is out
+   * of room this returns a blank rect, because a missing glyph must not take
+   * the render loop down with it.
+   */
   glyph(codePoint: number): TextureRect;
+  /** True once a glyph had to be dropped for lack of room. */
+  readonly isFull: boolean;
   /** Drop every cached glyph. Called only when the atlas runs out of room. */
   reset(): void;
 }
@@ -37,17 +44,19 @@ export interface GlyphSource {
  * means `buildInstanceData` only ever hits cached slots, and every rect it
  * returns is normalized against the same, final height.
  *
- * If the atlas fills up, it is reset once and the pass restarts: one screen
- * holds far fewer distinct code points than the atlas can hold, so the second
- * pass always completes.
+ * An atlas that fills up mid-pass is reset once and the pass restarts, which
+ * clears out glyphs from earlier screens that are no longer on this one. The
+ * reset is skipped when the atlas was *already* full going in: that means the
+ * previous frame already reset it and the grid genuinely holds more distinct
+ * code points than the atlas can — resetting again every frame would rebuild
+ * the whole atlas on every frame and fix nothing. In that case the overflow
+ * renders blank and `isFull` stays set for the caller to surface.
  */
 export function ensureGlyphs(packed: Uint32Array, atlas: GlyphSource): void {
-  try {
-    rasterizeAll(packed, atlas);
-  } catch (error) {
-    if (!(error instanceof AtlasFullError)) {
-      throw error;
-    }
+  const wasFullBefore = atlas.isFull;
+  rasterizeAll(packed, atlas);
+
+  if (atlas.isFull && !wasFullBefore) {
     atlas.reset();
     rasterizeAll(packed, atlas);
   }
