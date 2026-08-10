@@ -25,7 +25,8 @@ path free of per-frame IPC.
 
 This crate targets `wasm32-unknown-unknown` and depends on a vendored
 `alacritty_terminal`, so it is deliberately excluded from the repo's root Cargo
-workspace (note the empty `[workspace]` table in its `Cargo.toml`). Run its
+workspace (note the `[workspace]` table in its `Cargo.toml`, which also
+excludes `vendor/alacritty_terminal` from this crate's own workspace). Run its
 commands from this directory — `pnpm rust -- …` targets the service workspace
 and does not apply here.
 

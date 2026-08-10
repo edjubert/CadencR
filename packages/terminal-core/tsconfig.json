@@ -12,5 +12,5 @@
     "skipLibCheck": true,
     "types": ["@types/node", "@webgpu/types"]
   },
-  "include": ["renderer/**/*.ts"]
+  "include": ["renderer/**/*.ts", "harness/**/*.ts", "*.config.ts"]
 }

@@ -97,6 +97,12 @@
       ],
       "outputs": []
     },
+    "@cadencr/terminal-core#ts-check": {
+      "dependsOn": [
+        "build"
+      ],
+      "outputs": []
+    },
     "knip": {
       "outputs": []
     },

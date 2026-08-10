@@ -1,7 +1,8 @@
 # Standalone crate: deliberately NOT a member of the repo's root Cargo
 # workspace. It targets wasm32-unknown-unknown and depends on a vendored,
 # patched alacritty_terminal, neither of which belongs in the native service
-# workspace. The empty [workspace] table below is what declares that.
+# workspace. The [workspace] table below is what declares that; its `exclude`
+# keeps the vendored crate out of this crate's own workspace too.
 [workspace]
 exclude = ["vendor/alacritty_terminal"]
 
