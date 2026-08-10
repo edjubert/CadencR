@@ -96,15 +96,15 @@ pub async fn is_branch_merged(
     Ok(output.status.success())
 }
 
-/// Delete a local branch. Safe mode uses -d; force mode uses -D after explicit
-/// user confirmation from the archive cleanup flow.
-pub async fn delete_branch(
+/// Delete a local branch after the service layer has applied the target-branch
+/// safety policy. `git branch -d` cannot enforce that policy: it checks the
+/// branch's configured upstream (or the current `HEAD`) instead of the feature's
+/// selected target branch.
+pub async fn force_delete_branch(
     repo_path: &Path,
     branch_name: &str,
-    force: bool,
 ) -> Result<MergeResult, AppError> {
-    let flag = if force { "-D" } else { "-d" };
-    match run_git_safe_refs(&["branch"], &[flag], &[branch_name], repo_path).await {
+    match run_git_safe_refs(&["branch"], &["-D"], &[branch_name], repo_path).await {
         Ok(_) => Ok(MergeResult {
             success: true,
             error: None,

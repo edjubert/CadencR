@@ -7,6 +7,7 @@ import { ImageAttachmentPreview } from "./ImageAttachmentPreview";
 import { PlanApprovalBar } from "./PlanApprovalBar";
 import { PromptBarActions } from "./PromptBarActions";
 import { PromptEditor } from "./prompt-editor/PromptEditor";
+import { ReferencedWorktreeTip } from "./ReferencedWorktreeTip";
 import { ShellCommandModeMarker } from "./ShellCommandModeMarker";
 import { SplitSendActions } from "./SplitSendActions";
 import { ToolPermissionPrompt } from "./ToolPermissionPrompt";
@@ -124,6 +125,15 @@ function PromptComposer({
           className="mb-2"
         />
       )}
+      {props.referencedWorktreeSelection && props.projectId != null ? (
+        <ReferencedWorktreeTip
+          prompt={state.text}
+          projectId={props.projectId}
+          selection={props.referencedWorktreeSelection}
+          agentTabActive={props.agentTabActive ?? true}
+          shortcutsDisabled={props.disableShortcuts ?? false}
+        />
+      ) : null}
       <PromptSurface props={props} controller={controller} />
       {props.splitSendActions && !controller.isRunning && !controller.isShellCommandMode && (
         <SplitSendActions

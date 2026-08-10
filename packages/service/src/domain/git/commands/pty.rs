@@ -10,6 +10,7 @@
 
 use std::path::Path;
 
+use crate::domain::git::models::PushForceMode;
 use crate::error::AppError;
 use crate::shared::git_cli::run_git_capture;
 
@@ -64,12 +65,29 @@ pub async fn commit_streaming(
 /// newline by the caller — the PTY doesn't echo a `\r` for us). When the
 /// receiver drops, the writer task exits cleanly; the push itself still
 /// completes if ssh didn't actually need stdin.
+///
+/// `force` appends `--force` / `--force-with-lease` to the argv. The flag
+/// goes *before* the refspec so `git` parses it as an option in every
+/// supported version.
 pub async fn push_streaming(
     repo: &Path,
     tx: tokio::sync::mpsc::UnboundedSender<(String, String)>,
     stdin_rx: tokio::sync::mpsc::UnboundedReceiver<SensitiveInput>,
+    force: PushForceMode,
 ) -> Result<(), AppError> {
-    spawn_pty_git(&["push", "-u", "origin", "HEAD"], repo, tx, Some(stdin_rx)).await
+    spawn_pty_git(&push_args(force), repo, tx, Some(stdin_rx)).await
+}
+
+/// Full argv (minus the leading `git`) for a push in the given force mode.
+/// Shared with the caller's echoed header line so the terminal pane always
+/// shows exactly the command we ran.
+pub fn push_args(force: PushForceMode) -> Vec<&'static str> {
+    let mut args = vec!["push", "-u"];
+    if let Some(flag) = force.flag() {
+        args.push(flag);
+    }
+    args.extend_from_slice(&["origin", "HEAD"]);
+    args
 }
 
 #[cfg(test)]
@@ -163,10 +181,100 @@ mod tests {
         let dir = init_test_repo().await;
         let (output_tx, _output_rx) = tokio::sync::mpsc::unbounded_channel();
         let (_stdin_tx, stdin_rx) = tokio::sync::mpsc::unbounded_channel();
-        let err = push_streaming(dir.path(), output_tx, stdin_rx)
+        let err = push_streaming(dir.path(), output_tx, stdin_rx, PushForceMode::None)
             .await
             .unwrap_err();
         let msg = err.to_string();
         assert!(!msg.is_empty(), "{msg}");
+    }
+
+    /// End-to-end through a real PTY and a real `git push`, against a bare
+    /// repo on disk (no network). Proves the flag position in
+    /// [`push_args`] is one git actually accepts, and that a diverged
+    /// history is rewritten only by the modes that are supposed to.
+    #[tokio::test]
+    async fn push_streaming_force_modes_overwrite_a_diverged_remote() {
+        async fn push_once(repo: &Path, force: PushForceMode) -> Result<(), AppError> {
+            let (output_tx, _output_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (_stdin_tx, stdin_rx) = tokio::sync::mpsc::unbounded_channel();
+            push_streaming(repo, output_tx, stdin_rx, force).await
+        }
+
+        let remote = tempfile::tempdir().unwrap();
+        run_git(&["init", "-q", "--bare"], remote.path())
+            .await
+            .unwrap();
+        let dir = init_test_repo().await;
+        let path = dir.path();
+        run_git(
+            &["remote", "add", "origin", remote.path().to_str().unwrap()],
+            path,
+        )
+        .await
+        .unwrap();
+
+        // Plain push publishes the branch.
+        push_once(path, PushForceMode::None).await.unwrap();
+
+        // Rewrite history so the local tip is no longer a descendant of the
+        // remote tip — exactly the state a plain push must refuse.
+        run_git(&["commit", "--allow-empty", "-m", "second"], path)
+            .await
+            .unwrap();
+        push_once(path, PushForceMode::None).await.unwrap();
+        run_git(&["reset", "--hard", "HEAD~1"], path).await.unwrap();
+        run_git(&["commit", "--allow-empty", "-m", "rewritten"], path)
+            .await
+            .unwrap();
+
+        assert!(
+            push_once(path, PushForceMode::None).await.is_err(),
+            "a non-fast-forward push must fail without a force flag"
+        );
+        // The lease is intact here (we fetched the remote tip when we pushed
+        // it), so --force-with-lease is allowed to rewrite it.
+        push_once(path, PushForceMode::ForceWithLease)
+            .await
+            .unwrap();
+
+        let local = run_git(&["rev-parse", "HEAD"], path).await.unwrap();
+        let published = run_git(&["rev-parse", "HEAD"], remote.path())
+            .await
+            .unwrap();
+        assert_eq!(
+            local.trim(),
+            published.trim(),
+            "lease push must publish HEAD"
+        );
+
+        run_git(&["commit", "--allow-empty", "-m", "third"], path)
+            .await
+            .unwrap();
+        push_once(path, PushForceMode::Force).await.unwrap();
+        let local = run_git(&["rev-parse", "HEAD"], path).await.unwrap();
+        let published = run_git(&["rev-parse", "HEAD"], remote.path())
+            .await
+            .unwrap();
+        assert_eq!(
+            local.trim(),
+            published.trim(),
+            "force push must publish HEAD"
+        );
+    }
+
+    #[test]
+    fn push_args_appends_the_force_flag_before_the_refspec() {
+        assert_eq!(
+            push_args(PushForceMode::None),
+            ["push", "-u", "origin", "HEAD"]
+        );
+        assert_eq!(
+            push_args(PushForceMode::Force),
+            ["push", "-u", "--force", "origin", "HEAD"]
+        );
+        assert_eq!(
+            push_args(PushForceMode::ForceWithLease),
+            ["push", "-u", "--force-with-lease", "origin", "HEAD"]
+        );
     }
 }

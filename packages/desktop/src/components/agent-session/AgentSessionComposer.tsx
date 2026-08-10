@@ -1,13 +1,12 @@
-import { memo, type RefObject, type ReactElement } from "react";
+import { memo, useCallback, useMemo, type RefObject, type ReactElement } from "react";
 import { parseThinkingEffort } from "@/shared/thinking-effort";
 import { normalizeContextWindow } from "@/types/agent";
 import { AgentPromptBar, type AgentPromptBarHandle } from "../AgentPromptBar";
 import { ContextUsageBar } from "../ContextUsageBar";
-import { useScheduledMessage } from "@/hooks/useScheduledMessage";
 import type { AgentSessionProps } from "./types";
 import { MetaBar, type MetaBarHandle } from "./MetaBar";
 import { MetaBarSecondary } from "./MetaBarSecondary";
-import { SessionScheduledCard } from "./SessionScheduledCard";
+import { useSessionSchedules } from "./SessionSchedules";
 
 export interface AgentSessionComposerProps {
   sessionProps: AgentSessionProps;
@@ -30,6 +29,9 @@ export interface AgentSessionComposerProps {
   providers: AgentSessionMetaProps["providers"];
   canChangeProvider: boolean;
   supportedThinkingEfforts: AgentSessionMetaProps["supportedThinkingEfforts"];
+  supportsFastMode: boolean;
+  isFastModePending: boolean;
+  onFastModeChange: (enabled: boolean) => Promise<void>;
   projectPath: string | undefined;
   isAgentWorking: boolean;
   agentTabActive: boolean;
@@ -68,18 +70,12 @@ const COLLAPSIBLE_ROOT_CLASS = "shrink-0";
 // reachable, but only if you thought to scroll the composer. That scroll stays
 // as a backstop for chrome that can't shrink at all; it should no longer engage.
 //
-// `-mt-6 pt-6` is layout-neutral (the negative margin cancels the padding) and
-// exists only to keep the scroll container from clipping `MetaBar`'s own
-// `-mt-6`, the overhang that fades the chip row into the transcript above.
-// Without the extra 24px of padding box, `overflow-y-auto` shears the top off
-// the chips.
-//
 // The home-indicator clearance sits on this root so it applies whichever
 // optional row happens to be last. It used to hang off `ComposerContextUsage`,
 // which returns null until a session reports context usage — so before the
 // first prompt the bottom chips sat flush against the screen edge.
 const FULL_PAGE_ROOT_CLASS =
-  "-mt-6 flex min-h-0 flex-col overflow-y-auto pt-6 pb-[env(safe-area-inset-bottom)]";
+  "flex min-h-0 flex-col overflow-y-auto pb-[env(safe-area-inset-bottom)]";
 
 // Bottom safe-area clearance lives on the composer root (see above), so this row
 // only owns its own spacing — the same in both layouts.
@@ -89,17 +85,15 @@ export const AgentSessionComposer = memo(function AgentSessionComposer(
   props: AgentSessionComposerProps,
 ): ReactElement {
   const { contextUsage } = props.sessionProps;
-  const schedule = useScheduledMessage(props.sessionProps.featureId);
-  // When the scheduled-message banner sits above the chips, the meta bar's
-  // "blend into the conversation" fade (negative margin + gradient) would
-  // overpaint the banner. Drop it to a standalone bar so the banner reads as a
-  // clean row above the chips.
-  const scheduledActive = props.shouldShowPromptBar && schedule.scheduled != null;
+  const schedules = useSessionSchedules(props.sessionProps.featureId, props.sessionProps.projectId);
+  // A schedule banner above the chips reads better with the tighter row, so the
+  // bar drops to its standalone padding.
+  const scheduledActive = props.shouldShowPromptBar && schedules.armed.length > 0;
   const metaBar = props.hasMeta ? (
     <AgentSessionMeta {...props} metaVariant={scheduledActive ? "standalone" : "session"} />
   ) : null;
   const promptBar = props.shouldShowPromptBar ? (
-    <AgentSessionPrompt {...props} onSchedule={schedule.schedule} />
+    <AgentSessionPrompt {...props} onScheduleRequest={schedules.requestSchedule} />
   ) : null;
   const secondaryBar =
     props.isNarrow && props.hasSecondaryMeta && props.shouldShowPromptBar ? (
@@ -108,10 +102,7 @@ export const AgentSessionComposer = memo(function AgentSessionComposer(
 
   return (
     <div className={props.collapsible ? COLLAPSIBLE_ROOT_CLASS : FULL_PAGE_ROOT_CLASS}>
-      {props.collapsible && !props.hasMeta && <ComposerFade />}
-      {props.shouldShowPromptBar && (
-        <SessionScheduledCard schedule={schedule} onSend={props.onSend} />
-      )}
+      {props.shouldShowPromptBar && schedules.element}
       {metaBar}
       {promptBar}
       {secondaryBar}
@@ -159,6 +150,10 @@ function AgentSessionMeta(
       currentThinkingEffort={parseThinkingEffort(session.currentThinkingEffort)}
       supportedThinkingEfforts={props.supportedThinkingEfforts}
       onThinkingEffortChange={session.onThinkingEffortChange}
+      supportsFastMode={props.supportsFastMode}
+      fastMode={session.fastMode ?? false}
+      isFastModePending={props.isFastModePending}
+      onFastModeChange={props.onFastModeChange}
       showClaudeProfileSelector={props.showClaudeProfileSelector}
       claudeProfile={props.claudeProfile}
       claudeProfiles={props.claudeProfiles}
@@ -188,15 +183,43 @@ function AgentSessionMeta(
 
 function AgentSessionPrompt(
   props: AgentSessionComposerProps & {
-    onSchedule?: (message: string, scheduledAt: Date) => Promise<void>;
+    onScheduleRequest?: (prompt: string, onSaved: () => void) => void;
   },
 ): ReactElement {
   const session = props.sessionProps;
+  const selectReferencedWorktree = useCallback(
+    (branch: string): void => {
+      session.onWorktreeBranchChange?.(branch);
+      session.onWorktreeModeChange?.("branch_worktree");
+    },
+    [session.onWorktreeBranchChange, session.onWorktreeModeChange],
+  );
+  const referencedWorktreeSelection = useMemo(
+    () =>
+      session.blocks.length === 0 &&
+      session.worktreeMode != null &&
+      session.onWorktreeBranchChange &&
+      session.onWorktreeModeChange
+        ? {
+            mode: session.worktreeMode,
+            selectedBranch: session.worktreeSelectedBranch ?? null,
+            onSelect: selectReferencedWorktree,
+          }
+        : undefined,
+    [
+      selectReferencedWorktree,
+      session.blocks.length,
+      session.onWorktreeBranchChange,
+      session.onWorktreeModeChange,
+      session.worktreeMode,
+      session.worktreeSelectedBranch,
+    ],
+  );
   return (
     <AgentPromptBar
       ref={props.promptBarRef}
       onSend={props.onSend}
-      onSchedule={props.onSchedule}
+      onScheduleRequest={props.onScheduleRequest}
       onStop={session.onStop}
       status={session.status}
       disabled={session.disabled}
@@ -228,6 +251,7 @@ function AgentSessionPrompt(
       slashCommandsLoading={session.slashCommandsLoading}
       promptCommandPolicy={session.promptCommandPolicy}
       pendingPermission={session.pendingPermission}
+      referencedWorktreeSelection={referencedWorktreeSelection}
       onPermissionDecision={session.onPermissionDecision}
       isSubmittingPermission={session.isSubmittingPermission}
     />
@@ -263,22 +287,6 @@ function AgentSessionSecondary(props: AgentSessionComposerProps): ReactElement {
       claudeProfilesError={props.claudeProfilesError}
       activeClaudeProfile={props.activeClaudeProfile}
       onClaudeProfileChange={props.onClaudeProfileChange}
-    />
-  );
-}
-
-function ComposerFade(): ReactElement {
-  return (
-    <div
-      className="pointer-events-none h-16 -mt-16"
-      style={{
-        background:
-          "linear-gradient(to bottom, transparent 0%, hsl(var(--background) / 0.7) 8%, hsl(var(--background) / 0.9) 20%, hsl(var(--background)) 40%)",
-        backdropFilter: "blur(6px)",
-        WebkitBackdropFilter: "blur(6px)",
-        maskImage: "linear-gradient(to bottom, transparent 0%, black 25%)",
-        WebkitMaskImage: "linear-gradient(to bottom, transparent 0%, black 25%)",
-      }}
     />
   );
 }

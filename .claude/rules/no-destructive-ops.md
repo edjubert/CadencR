@@ -1,0 +1,3 @@
+**Never remove any database.** Never delete, truncate, overwrite, replace, or `rm` a Cadencr database file — not the dev DB (`packages/service/cadencr.local.db`), not the production DB (`~/.cadencr/database/cadencr.db`), not any custom `CADENCR_DB_PATH` / `--db-path` target. There is no exception for "just resetting local state" or "it's only the dev DB."
+
+**Never roll back changes without explicit user approval.** Do not `git reset`, `git revert`, `git checkout --` / `git restore`, or otherwise undo committed or uncommitted work unless the user has replied with exactly this phrase: `I approve this rollback`. Paraphrases, implied consent, "go ahead", or approving a related plan do not count.

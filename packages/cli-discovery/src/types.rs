@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 /// Per-provider configuration describing what to discover.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, bon::Builder)]
 pub struct DiscoverySpec {
     /// Bare binary name, e.g. `"claude"` or `"opencode"`.
     pub bin_name: &'static str,
@@ -82,5 +82,18 @@ mod tests {
         assert!(CandidateSource::Override > CandidateSource::LoginShellPath);
         assert!(CandidateSource::LoginShellPath > CandidateSource::EnvPath);
         assert!(CandidateSource::EnvPath > CandidateSource::WellKnown);
+    }
+
+    #[test]
+    fn discovery_spec_builder_defaults_version_filter_to_none() {
+        let spec = DiscoverySpec::builder()
+            .bin_name("thing")
+            .well_known_relative_to_home(vec![".thing/bin"])
+            .well_known_absolute(Vec::new())
+            .version_args(&["--version"])
+            .build();
+
+        assert_eq!(spec.bin_name, "thing");
+        assert_eq!(spec.version_must_contain, None);
     }
 }

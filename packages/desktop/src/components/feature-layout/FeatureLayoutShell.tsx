@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { DndContext, DragOverlay } from "@dnd-kit/core";
 
 import { useFeatureLayoutHotkeys } from "@/hooks/useFeatureLayoutHotkeys";
@@ -9,11 +9,7 @@ import {
   selectFeatureLayout,
   useFeatureLayoutStore,
 } from "@/stores/feature-layout-store";
-import {
-  ALL_TAB_KINDS,
-  ROOT_LEAF_ID,
-  type FeatureLayoutState,
-} from "@/stores/feature-layout-schema";
+import { flatLayoutState } from "@/stores/feature-layout-schema";
 
 import { DragChip } from "./DragChip";
 import { SplitTreeRenderer } from "./SplitTreeRenderer";
@@ -37,20 +33,6 @@ interface FeatureLayoutShellProps extends FeatureTabActivationHandlers {
  *   - Keyboard shortcuts (preserves Mod+Shift+A/T/G/E).
  *   - The split-tree renderer.
  */
-function flatVisibleLayout(state: FeatureLayoutState): FeatureLayoutState {
-  return {
-    version: 1,
-    splitRoot: {
-      type: "leaf",
-      id: ROOT_LEAF_ID,
-      tabIds: [...ALL_TAB_KINDS],
-      activeTabId: getFocusedTab(state) ?? "agent",
-    },
-    focusedPaneId: ROOT_LEAF_ID,
-    appliedLayoutId: null,
-  };
-}
-
 export function FeatureLayoutShell({
   featureId,
   tabs,
@@ -69,7 +51,16 @@ export function FeatureLayoutShell({
   });
 
   const layoutState = useFeatureLayoutStore(selectFeatureLayout(featureId));
-  const effectiveLayout = splitsEnabled ? layoutState : flatVisibleLayout(layoutState);
+  // Wherever splits are off (mobile, embedded cards) we substitute a flat
+  // single-pane layout. That must be memoized: `selectFeatureLayout` returns a
+  // referentially stable value (see its CAUTION note), but a fresh flat layout
+  // per render would re-run `TabContentRegistry`'s pre-paint move effect and
+  // re-arm its `setVisitedTabs` effect every render — which is what drove the
+  // mobile "Maximum update depth exceeded" (#185) crash. See that component.
+  const effectiveLayout = useMemo(
+    () => (splitsEnabled ? layoutState : flatLayoutState(getFocusedTab(layoutState) ?? "agent")),
+    [layoutState, splitsEnabled],
+  );
   const splitRoot = effectiveLayout.splitRoot;
 
   const [activeSource, setActiveSource] = useState<DragSource | null>(null);

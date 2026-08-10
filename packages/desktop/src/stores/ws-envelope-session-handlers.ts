@@ -22,8 +22,6 @@ import { upsertPendingPermission } from "@/lib/pending-permission-queue";
 import { appendErrorBlockPatch } from "./ws-session-store-helpers";
 import { markPromptDeliveryFailed, markPromptReceived } from "./ws-pending-prompts";
 import type { StoreAccessors } from "./ws-envelope-types";
-import { queryClient } from "@/lib/queryClient";
-import { getGetScheduledMessageQueryKey } from "@/api/generated";
 // Re-exported so the envelope dispatch table keeps importing `handleMessage`
 // from here; the implementation moved to `ws-message-envelope-handler.ts`.
 export { handleMessage } from "./ws-message-envelope-handler";
@@ -77,6 +75,7 @@ export function handleInitialized(ctx: StoreAccessors, sessionId: string, payloa
     updates.accessMode = parseAccessMode(accessMode);
   }
   updates.currentThinkingEffort = p.thinking_effort;
+  updates.fastMode = p.fast_mode ?? false;
   if (p.input_tokens != null || p.output_tokens != null) {
     // Same rule as `session.usage_update`: this payload is a complete snapshot
     // read from the session row, so an absent window means unknown. Falling
@@ -216,16 +215,6 @@ export function handleCanonicalUserMessage(
     ctx.set(
       updateSession(ctx.get(), sessionId, blocksPatchWithDerived(session.streamingState, blocks)),
     );
-  }
-  // A fired scheduled message arrives as this canonical event; its row is already marked
-  // `sent` server-side, so refetch clears the pending card in lockstep with the
-  // bubble appearing (instead of waiting for the next poll). Only refetch when a
-  // pending row is actually cached — most user messages aren't scheduled.
-  if (session.featureId != null) {
-    const queryKey = getGetScheduledMessageQueryKey(session.featureId);
-    if (queryClient.getQueryData(queryKey) != null) {
-      void queryClient.invalidateQueries({ queryKey });
-    }
   }
 }
 

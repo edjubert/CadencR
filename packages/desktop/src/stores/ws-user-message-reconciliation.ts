@@ -1,4 +1,5 @@
 import type { AgentBlockData } from "@/components/AgentBlock";
+import { applyBlockContentBudget } from "@/lib/block-content-budget";
 import { normalizeMessageUuid } from "@/lib/message-uuid";
 import { movePendingPromptBlocksToTail } from "./ws-pending-prompts";
 
@@ -14,7 +15,11 @@ export interface CanonicalUserMessage {
 }
 
 export function canonicalUserMessageBlock(message: CanonicalUserMessage): AgentBlockData {
-  return {
+  // This is the *only* producer of live `user_message` blocks — `processSdkMessage`
+  // never emits one — so the budget has to be applied here too. Without it a
+  // just-sent screenshot prompt stays inline in the store for the rest of the
+  // session and is only off-loaded on the next hydration. See `block-content-budget`.
+  return applyBlockContentBudget({
     id: `msg-${message.messageId}`,
     type: "user_message",
     content: message.text,
@@ -24,7 +29,7 @@ export function canonicalUserMessageBlock(message: CanonicalUserMessage): AgentB
     createdAt: message.createdAt,
     ...(message.origin ? { origin: message.origin } : {}),
     ...(message.promptDeliveryState ? { promptDeliveryState: message.promptDeliveryState } : {}),
-  };
+  });
 }
 
 /** Numeric SQLite cursor carried explicitly or encoded in `msg-<id>`. */

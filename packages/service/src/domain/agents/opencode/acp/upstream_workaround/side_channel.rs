@@ -62,6 +62,7 @@ pub(in crate::domain::agents::opencode::acp) fn spawn_side_channel_listeners(
             if poll_usage {
                 match root_usage_listener::poll_once(
                     &client,
+                    &directory,
                     &root_session_id,
                     context_window,
                     &mut usage_state,
@@ -81,7 +82,7 @@ pub(in crate::domain::agents::opencode::acp) fn spawn_side_channel_listeners(
             let subagent_active = pending_tasks
                 .lock()
                 .ok()
-                .map(|queue| !queue.is_empty())
+                .map(|pending| !pending.is_empty())
                 .unwrap_or(false)
                 || !subagent_state.is_empty();
             if subagent_active

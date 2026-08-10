@@ -118,6 +118,7 @@ export function parseInitializedPayload(payload: unknown): {
   provider?: string;
   model?: string;
   thinking_effort?: string;
+  fast_mode?: boolean;
   profile?: string;
   codex_permission_mode?: string;
   access_mode?: string;
@@ -136,6 +137,7 @@ export function parseInitializedPayload(payload: unknown): {
     provider: optionalString(record, "provider"),
     model: optionalString(record, "model"),
     thinking_effort: optionalString(record, "thinking_effort"),
+    fast_mode: optionalBoolean(record, "fast_mode"),
     profile: optionalString(record, "profile"),
     codex_permission_mode: optionalString(record, "codex_permission_mode"),
     access_mode: optionalString(record, "access_mode"),
@@ -202,6 +204,13 @@ export function parseEffortPayload(payload: unknown): { thinking_effort?: string
   const record = asRecord(payload);
   if (!record) return null;
   return { thinking_effort: optionalString(record, "thinking_effort") };
+}
+
+export function parseFastModePayload(payload: unknown): { enabled: boolean } | null {
+  const record = asRecord(payload);
+  if (!record) return null;
+  const enabled = optionalBoolean(record, "enabled");
+  return enabled == null ? null : { enabled };
 }
 
 export function parseFeatureUpdatedPayload(

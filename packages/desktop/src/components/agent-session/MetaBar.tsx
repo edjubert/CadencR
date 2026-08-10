@@ -1,15 +1,13 @@
 import { forwardRef, useImperativeHandle, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
-import { SlidingText } from "@/components/SlidingText";
-import { ShortcutTooltip } from "../ShortcutTooltip";
 import { AgentTodoList } from "../AgentTodoList";
 import { AutoScrollChip } from "./AutoScrollChip";
+import { PermissionModeChip } from "./PermissionModeChip";
 import { SessionInfoChip } from "./SessionInfoChip";
 import { WorktreeChip } from "./WorktreeChip";
 import type { WorktreeMode } from "@/lib/worktree-mode";
 import type { TodoItem } from "@/types/agent";
 import type { ThinkingEffortLevel } from "@/shared/thinking-effort";
-import { findProviderMode, getVisibleModes } from "@/lib/provider-modes";
 import type { PermissionMode } from "@/types/permission-mode";
 import type { AccessMode } from "@/types/access-mode";
 import type {
@@ -20,7 +18,6 @@ import type { ClaudeCodeProfile } from "@/api/agentRuntime";
 import { ModelMetaChip, type Model, type Provider } from "./ModelMetaChip";
 import { META_BAR_CHIP } from "./meta-bar-chip-styles";
 import { AccessModePopover } from "./AccessModePopover";
-import { getDisplayMode } from "./meta-bar-codex-modes";
 import { ClaudeProfileCombobox } from "./ClaudeProfileCombobox";
 import type { ModelSelectionStatus } from "./useAgentSessionModelState";
 
@@ -70,6 +67,10 @@ export interface MetaBarProps {
   currentThinkingEffort?: ThinkingEffortLevel;
   supportedThinkingEfforts?: ThinkingEffortLevel[];
   onThinkingEffortChange?: (thinkingEffort?: ThinkingEffortLevel) => void;
+  supportsFastMode?: boolean;
+  fastMode?: boolean;
+  isFastModePending?: boolean;
+  onFastModeChange?: (enabled: boolean) => void;
   showClaudeProfileSelector?: boolean;
   claudeProfile?: string;
   claudeProfiles?: ClaudeCodeProfile[];
@@ -96,9 +97,9 @@ export interface MetaBarProps {
   onPause?: () => void;
   onModelSelected?: () => void;
   /**
-   * Layout variant. `"session"` (default) fades into the agent stream above
-   * via a negative margin + background gradient. `"standalone"` drops that
-   * styling so the bar can sit on its own inside a bordered container.
+   * Vertical density. `"session"` (default) is the roomier row that hangs under
+   * the agent stream; `"standalone"` tightens it for a container that already
+   * frames the bar — a bordered card, or a schedule banner sitting right above.
    */
   variant?: "session" | "standalone";
   /**
@@ -138,37 +139,15 @@ function useMetaBarState(props: MetaBarProps, ref: React.ForwardedRef<MetaBarHan
       },
     ];
   }, [displayProviderId, props.models, props.providers]);
-  const activeMode = useMemo(() => {
-    if (isSelectionPending || !props.onPermissionModeToggle || !props.permissionMode) return null;
-    const visibleModes = getVisibleModes(
-      displayProviderId,
-      props.enabledOptInModes ?? [],
-      props.providerModes ?? [],
-    );
-    if (visibleModes.length < 2) return null;
-    return (
-      findProviderMode(displayProviderId, props.permissionMode, props.providerModes ?? []) ??
-      visibleModes[0]
-    );
-  }, [
-    displayProviderId,
-    isSelectionPending,
-    props.enabledOptInModes,
-    props.onPermissionModeToggle,
-    props.permissionMode,
-    props.providerModes,
-  ]);
-  const displayMode = getDisplayMode(activeMode, displayProviderId, props.permissionMode);
   return useMemo(
     () => ({
-      displayMode,
       displayProviderId,
       isSelectionPending,
       modelPickerOpen,
       pickerProviders,
       setModelPickerOpen,
     }),
-    [displayMode, displayProviderId, isSelectionPending, modelPickerOpen, pickerProviders],
+    [displayProviderId, isSelectionPending, modelPickerOpen, pickerProviders],
   );
 }
 
@@ -176,23 +155,20 @@ type MetaBarState = ReturnType<typeof useMetaBarState>;
 
 export const MetaBar = forwardRef<MetaBarHandle, MetaBarProps>(function MetaBar(props, ref) {
   const state = useMetaBarState(props, ref);
-  const isStandalone = props.variant === "standalone";
+  // No fade and no overhang of its own: the transcript dissolves at its own
+  // bottom edge (`STREAM_DISSOLVE_STYLE`), so this row always sits on plain page.
   return (
     <div
       className={cn(
-        "flex items-center gap-1.5",
-        isStandalone ? "px-3 py-2" : "relative -mt-6 px-3 py-3 backdrop-blur-sm",
+        "flex items-center gap-1.5 px-3",
+        props.variant === "standalone" ? "py-2" : "py-3",
       )}
-      style={isStandalone ? undefined : { background: META_BAR_GRADIENT }}
     >
       <MetaBarPrimary props={props} state={state} />
       <MetaBarTrailing props={props} state={state} />
     </div>
   );
 });
-
-const META_BAR_GRADIENT =
-  "linear-gradient(to bottom, transparent 0%, hsl(var(--background) / 0.05) 10%, hsl(var(--background) / 0.12) 20%, hsl(var(--background) / 0.25) 35%, hsl(var(--background) / 0.45) 50%, hsl(var(--background) / 0.65) 65%, hsl(var(--background) / 0.82) 80%, hsl(var(--background) / 0.93) 90%, hsl(var(--background)) 100%)";
 
 function MetaBarPrimary({ props, state }: { props: MetaBarProps; state: MetaBarState }) {
   const showModel = !!props.onModelChange || props.showReadOnlyModel;
@@ -201,19 +177,16 @@ function MetaBarPrimary({ props, state }: { props: MetaBarProps; state: MetaBarS
       {props.showAutoScrollChip && !props.secondaryBelow && (
         <AutoScrollChip enabled={props.autoScrollEnabled} onToggle={props.onToggleAutoScroll} />
       )}
-      {state.displayMode && (
-        <ShortcutTooltip label={`${state.displayMode.label} mode`} keys={["shift", "Tab"]}>
-          <button
-            type="button"
-            onClick={props.onPermissionModeToggle}
-            title={`${state.displayMode.description} (Shift+Tab to cycle)`}
-            aria-label={state.displayMode.ariaLabel}
-            className={cn(META_BAR_CHIP, state.displayMode.chipClass, "min-w-0")}
-          >
-            <state.displayMode.icon className="size-3 shrink-0" />
-            <SlidingText text={state.displayMode.label} className="max-w-[160px]" />
-          </button>
-        </ShortcutTooltip>
+      {/* Hidden mid-selection, as it was inline: the provider is about to change
+          and with it which modes exist. */}
+      {!state.isSelectionPending && (
+        <PermissionModeChip
+          providerId={state.displayProviderId}
+          permissionMode={props.permissionMode}
+          enabledOptInModes={props.enabledOptInModes}
+          providerModes={props.providerModes}
+          onToggle={props.onPermissionModeToggle}
+        />
       )}
       {props.showWorktreeChip && !props.secondaryBelow && (
         <WorktreeChip
@@ -241,6 +214,10 @@ function MetaBarPrimary({ props, state }: { props: MetaBarProps; state: MetaBarS
           currentThinkingEffort={props.currentThinkingEffort}
           supportedThinkingEfforts={props.supportedThinkingEfforts ?? []}
           onThinkingEffortChange={props.onThinkingEffortChange}
+          supportsFastMode={props.supportsFastMode ?? false}
+          fastMode={props.fastMode ?? false}
+          isFastModePending={props.isFastModePending ?? false}
+          onFastModeChange={props.onFastModeChange}
           onModelSelected={props.onModelSelected}
         />
       )}

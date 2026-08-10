@@ -30,8 +30,8 @@ export interface GitTabToolbarProps {
   stats: { isLoading: boolean; isError: boolean; additions?: number; deletions?: number };
 }
 
-/** Width of the file-list toggle, reserved as an empty slot in list views so
- *  the tab strip doesn't shift sideways when you switch view. */
+/** The file-list toggle's box — fixed, so the tab strip beside it never shifts
+ *  sideways when a view switch changes what the toggle can do. */
 const TOGGLE_SLOT = "size-7 shrink-0";
 
 /**
@@ -60,15 +60,12 @@ export function GitTabToolbar({
   // beside the agent stream, and the two have nothing to do with each other.
   return (
     <div className="@container flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-      {isListView ? (
-        <div className={TOGGLE_SLOT} aria-hidden data-slot="file-list-toggle-placeholder" />
-      ) : (
-        <FileListToggle
-          collapsed={fileListCollapsed}
-          loading={isFileListCollapseLoading}
-          onToggle={onToggleFileList}
-        />
-      )}
+      <FileListToggle
+        collapsed={fileListCollapsed}
+        loading={isFileListCollapseLoading}
+        unavailable={isListView}
+        onToggle={onToggleFileList}
+      />
       <GitTabToggle
         value={viewMode}
         onChange={onViewModeChange}
@@ -90,29 +87,52 @@ export function GitTabToolbar({
   );
 }
 
+/**
+ * The file list's collapse control. It stays on screen in the views that have no
+ * file list rather than blanking out: a control that disappears reads as one the
+ * app lost, and the disabled state says what the empty slot could not — that
+ * this view simply has nothing to collapse.
+ */
 function FileListToggle({
   collapsed,
   loading,
+  unavailable,
   onToggle,
 }: {
   collapsed: boolean;
   loading: boolean;
+  /** List views (commits, branches, stashes) render no file list. */
+  unavailable: boolean;
   onToggle: () => void;
 }): ReactElement {
   const { keys } = useResolvedShortcut("diff-toggle-sidebar");
-  const label = collapsed ? "Show file list" : "Hide file list";
+  const label = unavailable
+    ? "No file list in this view"
+    : collapsed
+      ? "Show file list"
+      : "Hide file list";
+  // With no list on screen, the "hide" glyph would name a panel that isn't
+  // there — so the unavailable state shows the same icon as a collapsed one.
+  const Icon = unavailable || collapsed ? PanelLeft : PanelLeftClose;
   return (
-    <ShortcutTooltip label={label} keys={formatCombo(keys)} alignLeft className="shrink-0">
+    <ShortcutTooltip
+      label={label}
+      // The binding is gated with the button, so advertising it here would be
+      // offering a key that does nothing.
+      keys={unavailable ? undefined : formatCombo(keys)}
+      alignLeft
+      className="shrink-0"
+    >
       <Button
         variant="ghost"
         size="icon-sm"
         onClick={onToggle}
-        disabled={loading}
-        aria-pressed={!collapsed}
+        disabled={loading || unavailable}
+        aria-pressed={unavailable ? undefined : !collapsed}
         aria-label={label}
         className={cn(TOGGLE_SLOT, "text-muted-foreground")}
       >
-        {collapsed ? <PanelLeft className="size-4" /> : <PanelLeftClose className="size-4" />}
+        <Icon className="size-4" />
       </Button>
     </ShortcutTooltip>
   );

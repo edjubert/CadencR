@@ -1,10 +1,16 @@
 import { memo, lazy, Suspense, useMemo, useRef, useState, type ReactElement } from "react";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
-import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
-import remarkGfm from "remark-gfm";
+import {
+  Streamdown,
+  defaultUrlTransform,
+  type AnimateOptions,
+  type Components,
+  type StreamdownProps,
+  type UrlTransform,
+} from "streamdown";
+import "streamdown/styles.css";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
-import type { Components } from "react-markdown";
 import { Loader2Icon } from "lucide-react";
 import { createLowlight, common } from "lowlight";
 import ini from "highlight.js/lib/languages/ini";
@@ -16,6 +22,8 @@ import { useCodeBlockActions } from "@/components/CodeBlockActionsContext";
 import { useLinkRouting, type LinkRouting } from "@/components/links/LinkRoutingContext";
 import { parseConversationReferenceHref } from "@/components/prompt-editor/conversation-reference";
 import "./dracula-highlight.css";
+
+type RehypePlugins = NonNullable<StreamdownProps["rehypePlugins"]>;
 
 const LINK_CLASS =
   "text-[var(--acc-cyan)] underline underline-offset-2 hover:text-[var(--acc-purple)]";
@@ -116,7 +124,7 @@ const highlightCache = new Map<string, React.ReactNode>();
 const HIGHLIGHT_CACHE_MAX = 200;
 
 /**
- * Cache for the rendered ReactMarkdown element, keyed on the markdown
+ * Cache for the rendered markdown element, keyed on the markdown
  * content plus the presence of a `sendToTerminal` action (which changes the
  * components mapping). Stable entries are reused across mounts so that
  * scrolling a long conversation through Virtuoso preserves element
@@ -164,7 +172,7 @@ export function cachedHighlight(lang: string, code: string): React.ReactNode {
   }
 }
 
-/** Extract plain text from React children (handles nested elements from react-markdown). */
+/** Extract plain text from React children (handles nested elements from the renderer). */
 function extractText(children: React.ReactNode): string {
   if (typeof children === "string") return children;
   if (typeof children === "number") return String(children);
@@ -291,8 +299,13 @@ function buildComponents(
         {children}
       </blockquote>
     ),
-    ul: ({ children }) => <ul className="my-1 ml-4 list-disc space-y-0.5">{children}</ul>,
-    ol: ({ children }) => <ol className="my-1 ml-4 list-decimal space-y-0.5">{children}</ol>,
+    // Padding, not margin: `list-style-position: outside` paints the marker to
+    // the left of the content box, where the stream's `overflow-x-hidden`
+    // scroller clips it — `9.` fits the overhang, `10.` loses its leading digit.
+    // `em` so the reserve tracks the list's own font size rather than the root,
+    // which the UI font scale moves independently.
+    ul: ({ children }) => <ul className="my-1 ps-[2em] list-disc space-y-0.5">{children}</ul>,
+    ol: ({ children }) => <ol className="my-1 ps-[2em] list-decimal space-y-0.5">{children}</ol>,
     hr: () => <hr className="my-3 border-border" />,
     p: ({ children }) => <p className="my-1">{children}</p>,
   };
@@ -302,21 +315,56 @@ interface MarkdownProps {
   content: string;
   className?: string;
   /**
-   * When set, the rendered ReactMarkdown tree is cached at module level so
-   * repeated mounts (e.g. Virtuoso recycling items as the user scrolls) skip
-   * the parse + AST walk. Leave `undefined` for the actively streaming block
-   * so partial-content states are not cached.
+   * When set, the rendered markdown tree is cached at module level so repeated
+   * mounts (e.g. Virtuoso recycling items as the user scrolls) skip the parse +
+   * AST walk. Leave `undefined` for the actively streaming block so
+   * partial-content states are not cached.
    */
   cacheKey?: string;
+  /**
+   * True only for the block currently receiving tokens. Drives Streamdown's
+   * `mode`, which is what keeps the per-word animation spans off every other
+   * block in the conversation.
+   */
+  isStreaming?: boolean;
 }
+
+/**
+ * Reveal animation for streamed text. `fadeIn` over `blurIn` and `sep: "word"`
+ * over `"char"` are both budget calls: opacity is compositor-only, while a
+ * per-word `filter` is GPU work a low-end machine cannot absorb mid-stream.
+ *
+ * `stagger: 0` is load-bearing, not taste. Streamdown gives each word span
+ * `animation-delay: <nth-new-word> * stagger` with `animation-fill-mode: both`,
+ * so a word is *invisible* until its delay elapses. Which words count as "new"
+ * comes from a `prevContentLength` that Streamdown sets from a render-phase side
+ * effect using a consume-once getter — so StrictMode's double-invoke reads the
+ * real count on the first pass and `0` on the second, and the second is the one
+ * that sticks. Every word then reads as new on every re-parse: at the stock 40ms
+ * that is 8s of hidden text on a 200-word message, growing with the message.
+ * (One plugin instance is also shared across blocks, so two blocks re-rendering
+ * in one commit mis-classify each other's words.)
+ *
+ * With no delay none of that is observable: nothing is held at `opacity: 0`, and
+ * every span's style string stays identical across re-parses, so React leaves
+ * the attribute alone and the animation cannot restart on a word already on
+ * screen. Only genuinely new DOM nodes animate. `streamdown` is pinned to an
+ * exact version because this rests on its internals.
+ */
+const STREAM_ANIMATION: AnimateOptions = {
+  animation: "fadeIn",
+  duration: 120,
+  easing: "ease-out",
+  sep: "word",
+  stagger: 0,
+};
 
 function preprocessContent(raw: string): string {
   return raw.replace(/---PLAN_START---|---PLAN_END---/g, "\n---\n");
 }
 
-function markdownUrlTransform(url: string): string {
-  return parseConversationReferenceHref(url) === null ? defaultUrlTransform(url) : url;
-}
+const markdownUrlTransform: UrlTransform = (url, key, node) =>
+  parseConversationReferenceHref(url) === null ? defaultUrlTransform(url, key, node) : url;
 
 /**
  * Sanitization schema for raw HTML embedded in markdown. Agent output (which
@@ -335,7 +383,27 @@ const sanitizeSchema: typeof defaultSchema = {
   },
 };
 
-export const Markdown = memo(function Markdown({ content, className, cacheKey }: MarkdownProps) {
+/**
+ * Passing `rehypePlugins` *replaces* Streamdown's defaults (`rehype-raw`,
+ * `rehype-sanitize`, `rehype-harden`) rather than extending them, so the raw-HTML
+ * chain has to be spelled out here. Dropping `rehype-harden` costs nothing: its
+ * defaults allow every protocol and prefix, and our own sanitize schema is the
+ * thing actually restricting HTML.
+ *
+ * Both arrays are module constants because Streamdown caches its compiled
+ * processor on plugin-array identity — rebuilding them per render would defeat
+ * the cache on every streaming tick.
+ */
+const RAW_HTML_PLUGINS: RehypePlugins = [rehypeRaw, [rehypeSanitize, sanitizeSchema]];
+/** Prose has no `<`, so it skips the parse5 re-parse and the sanitize walk. */
+const NO_RAW_HTML_PLUGINS: RehypePlugins = [];
+
+export const Markdown = memo(function Markdown({
+  content,
+  className,
+  cacheKey,
+  isStreaming = false,
+}: MarkdownProps) {
   const { sendToTerminal } = useCodeBlockActions();
   // A set `cacheKey` marks a stable (non-streaming) block; only then do we
   // render mermaid as a diagram, so partial source never thrashes the parser.
@@ -350,20 +418,31 @@ export const Markdown = memo(function Markdown({ content, className, cacheKey }:
   );
 
   const tree = useMemo<ReactElement>(() => {
-    // Raw HTML always contains `<`, so skip the (expensive) rehype-raw parse5
-    // re-parse + sanitize walk for plain-prose content — the streaming hot path.
-    const hasHtml = content.includes("<");
+    // Streamdown splits the markdown into blocks and memoizes each one, so a
+    // streaming tick re-parses only the block still being written instead of
+    // the whole message — the difference between O(tokens) and O(message²).
+    // `mode="static"` on settled blocks switches the animation machinery off
+    // entirely, so history never pays for the per-word spans.
     const build = (): ReactElement => (
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={hasHtml ? [rehypeRaw, [rehypeSanitize, sanitizeSchema]] : []}
+      <Streamdown
+        mode={isStreaming ? "streaming" : "static"}
+        // Withholding `animated` is what keeps the per-word spans off settled
+        // blocks; `mode="static"` alone only stops the animation from firing.
+        animated={isStreaming ? STREAM_ANIMATION : false}
+        isAnimating={isStreaming}
+        rehypePlugins={content.includes("<") ? RAW_HTML_PLUGINS : NO_RAW_HTML_PLUGINS}
         components={components}
         urlTransform={markdownUrlTransform}
+        controls={false}
+        lineNumbers={false}
       >
         {preprocessContent(content)}
-      </ReactMarkdown>
+      </Streamdown>
     );
-    if (cacheKey === undefined) return build();
+    // A streaming tree carries per-word animation spans and partial content, so
+    // it must never reach the cache that settled blocks read from. Today callers
+    // never pass both, but that invariant lives in AgentBlock, not here.
+    if (cacheKey === undefined || isStreaming) return build();
     const key = `${sendToTerminal ? "1" : "0"}\0${content}`;
     const cached = markdownTreeCache.get(key);
     if (cached !== undefined) {
@@ -377,7 +456,7 @@ export const Markdown = memo(function Markdown({ content, className, cacheKey }:
     if (markdownTreeCache.size >= MARKDOWN_CACHE_MAX) evictOldestMarkdownEntry();
     markdownTreeCache.set(key, fresh);
     return fresh;
-  }, [cacheKey, content, components, sendToTerminal]);
+  }, [cacheKey, content, components, isStreaming, sendToTerminal]);
 
   return <div className={cn("text-sm leading-relaxed text-foreground", className)}>{tree}</div>;
 });

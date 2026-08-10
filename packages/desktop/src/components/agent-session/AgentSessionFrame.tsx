@@ -7,6 +7,7 @@ import type { AgentSessionProps } from "./types";
 import { CollapsibleHeader } from "./CollapsibleHeader";
 import type { BadgeConfig } from "./CollapsibleHeader";
 import { SessionHint } from "./SessionHint";
+import { STREAM_DISSOLVE_STYLE } from "./stream-fade";
 
 interface AgentSessionFrameProps extends Pick<
   AgentSessionProps,
@@ -78,7 +79,12 @@ export const AgentSessionFrame = memo(function AgentSessionFrame({
             </div>
           </div>
         ) : (
-          <div className="flex-1 min-h-0 px-4 pt-4 pb-8">{streamContent}</div>
+          // No bottom padding: the dissolve is anchored to this box's bottom
+          // edge, which is where the scroller clips. The last message's
+          // breathing room lives inside the scroller — see `STREAM_BOTTOM_GAP_PX`.
+          <div className="flex-1 min-h-0 px-4 pt-4" style={STREAM_DISSOLVE_STYLE}>
+            {streamContent}
+          </div>
         )}
         {bottomContent}
       </div>
@@ -121,7 +127,12 @@ export const AgentSessionFrame = memo(function AgentSessionFrame({
               No output yet
             </div>
           ) : (
-            <div className="flex-1 min-h-0 border-t border-border/30 px-3 pb-6">
+            // Bottom padding omitted for the same reason as the full-page
+            // branch above: the dissolve owns this edge.
+            <div
+              className="flex-1 min-h-0 border-t border-border/30 px-3"
+              style={STREAM_DISSOLVE_STYLE}
+            >
               {streamContent}
             </div>
           )}

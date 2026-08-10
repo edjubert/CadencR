@@ -114,6 +114,7 @@ const mockFeatures = [
 vi.mock("@/api/generated", () => ({
   FeatureStatus: { active: "active", archived: "archived" },
   useListFeatures: vi.fn(() => ({ data: mockFeatures })),
+  useListFeaturePorts: vi.fn(() => ({ data: [], error: null })),
   useListFeatureActivity: vi.fn(() => ({
     data: [
       {

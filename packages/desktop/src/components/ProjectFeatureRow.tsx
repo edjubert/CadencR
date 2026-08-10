@@ -1,6 +1,6 @@
 import { memo, useCallback, useRef, type ReactElement, type ReactNode } from "react";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
-import type { Feature, FeatureWorktreeInfo } from "@/api/generated";
+import type { AllocatedPort, Feature, FeatureWorktreeInfo } from "@/api/generated";
 import { SidebarShortcutBadge } from "@/components/SidebarShortcutBadge";
 import { ProjectFeatureContextMenu } from "@/components/ProjectFeatureContextMenu";
 import {
@@ -11,6 +11,8 @@ import {
 } from "@/components/ProjectFeatureRowParts";
 import { useNavShortcutHint } from "@/hooks/useNavShortcutHints";
 import { useProjectFeatureRowState } from "@/hooks/useProjectFeatureRowState";
+import { portUrl } from "@/lib/feature-ports";
+import { openLink } from "@/lib/link-routing";
 
 const ROW_KEYDOWN_IGNORED_SELECTOR = [
   "input",
@@ -36,6 +38,8 @@ interface ProjectFeatureRowProps {
   worktree: FeatureWorktreeInfo | undefined;
   shellCount: number;
   browserCount: number;
+  /** Ports this conversation's own terminal/agent processes are listening on. */
+  ports: readonly AllocatedPort[];
   isEditingLabel: boolean;
   labelDraft: string;
   labelSuggestions: readonly string[];
@@ -63,12 +67,14 @@ interface FeatureRowDetailsProps {
   props: ProjectFeatureRowProps;
   state: ProjectFeatureRowState;
   onOpenConversation: () => void;
+  onOpenPort: (port: number) => void;
 }
 
 function FeatureRowDetails({
   props,
   state,
   onOpenConversation,
+  onOpenPort,
 }: FeatureRowDetailsProps): ReactElement {
   const {
     feature,
@@ -77,6 +83,7 @@ function FeatureRowDetails({
     hasWorktree,
     shellCount,
     browserCount,
+    ports,
     isEditingLabel,
     labelDraft,
     labelSuggestions,
@@ -110,6 +117,7 @@ function FeatureRowDetails({
           gitStats={state.gitStats}
           shellCount={shellCount}
           browserCount={browserCount}
+          ports={ports}
           isEditingLabel={isEditingLabel}
           labelDraft={labelDraft}
           labelSuggestions={labelSuggestions}
@@ -117,6 +125,7 @@ function FeatureRowDetails({
           onLabelDraftChange={onLabelDraftChange}
           onSaveLabel={onSaveLabel}
           onCancelLabelEdit={onCancelLabelEdit}
+          onOpenPort={onOpenPort}
         />
       </div>
       <FeatureRowActions
@@ -211,6 +220,22 @@ export const ProjectFeatureRow = memo(function ProjectFeatureRow(
     onNavigate(feature);
   }, [feature, onNavigate]);
 
+  // Browser tabs are scoped per feature, so a port opened from another
+  // conversation's row would land in a pane the user isn't looking at.
+  // `openLink` falls back to the system browser off the desktop shell.
+  const handleOpenPort = useCallback(
+    (port: number): void => {
+      onNavigate(feature);
+      void openLink(portUrl(port), {
+        target: "cadencr",
+        scopeId: feature.id,
+        cookieMode: "normal",
+        domains: [],
+      });
+    },
+    [feature, onNavigate],
+  );
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -253,6 +278,7 @@ export const ProjectFeatureRow = memo(function ProjectFeatureRow(
             props={props}
             state={state}
             onOpenConversation={handleOpenConversation}
+            onOpenPort={handleOpenPort}
           />
         </div>
       </ContextMenuTrigger>

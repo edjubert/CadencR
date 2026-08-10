@@ -9,7 +9,8 @@ import {
 import { memo, useCallback, useId, useState, type ReactElement } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import type { CommentThread } from "@/api/generated";
-import { AuthorInitials, PrViewError, relativeTime } from "@/components/FeaturePrViewParts";
+import { PrViewError, relativeTime } from "@/components/FeaturePrViewParts";
+import { ForgeAvatar } from "@/components/ForgeImage";
 import { Markdown } from "@/components/Markdown";
 import { PrCommentsFilterToggle, type PrCommentFilter } from "@/components/PrCommentsFilter";
 import { Button } from "@/components/ui/button";
@@ -79,29 +80,36 @@ export const PrCommentThread = memo(function PrCommentThread({
         "scroll-mt-2",
       )}
     >
-      <ThreadLocationRow
-        thread={thread}
-        selected={selected}
-        onSelectedChange={selectable ? handleSelectedChange : undefined}
-      />
+      <ThreadStatusPills thread={thread} />
       {/*
-        The fade for a settled thread sits on the conversation, not the card.
-        On the card it also dimmed the status pill that says *why* the thread is
-        settled — which took the "resolved" marker down to 2.5:1, i.e. the one
-        word carrying the state became the hardest thing on it to read.
+        Fade the conversation only: putting opacity on the card also dimmed the
+        status pill that says *why* the thread is settled (resolved → 2.5:1).
       */}
-      <div className={cn("mt-1.5 space-y-2.5", thread.resolved && "opacity-70")}>
+      <div
+        className={cn(
+          "space-y-2.5",
+          (thread.outdated || thread.resolved != null) && "mt-1.5",
+          thread.resolved && "opacity-70",
+        )}
+      >
         {thread.comments.map((comment, index) => (
           <div
             key={`${comment.created_at}:${index}`}
             className={cn(index > 0 && "border-t border-border/60 pt-2.5")}
           >
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-              <AuthorInitials name={comment.author.display_name ?? comment.author.username} />
+              <ForgeAvatar user={comment.author} />
               <span className="truncate font-medium text-foreground">
                 {comment.author.display_name ?? comment.author.username}
               </span>
               <span className="shrink-0 tabular-nums">{relativeTime(comment.created_at)}</span>
+              {index === 0 && (
+                <ThreadPickControl
+                  thread={thread}
+                  selected={selected}
+                  onSelectedChange={selectable ? handleSelectedChange : undefined}
+                />
+              )}
             </div>
             <Markdown
               content={comment.body_markdown}
@@ -116,12 +124,46 @@ export const PrCommentThread = memo(function PrCommentThread({
   );
 });
 
-/**
- * Where the thread points, whether it still counts, and the box that picks it.
- * The checkbox leads the row because picking is the action this pane exists
- * for — the location reads as its label.
- */
-function ThreadLocationRow({
+/** Outdated / open / resolved markers — kept off the author line so the pick control stays trailing. */
+function ThreadStatusPills({ thread }: { thread: CommentThread }): ReactElement | null {
+  if (!thread.outdated && thread.resolved == null) return null;
+  return (
+    <div className="flex items-center gap-1 text-[10.5px] font-medium">
+      {/*
+        Neutral pill, coloured dot — not coloured text on a tinted pill.
+        A tint at these opacities pulls the surface *toward* the text's own hue,
+        so it costs contrast rather than buying it: `--acc-orange` measures 4.45
+        as a bare word on the light card and only 3.66 once tinted behind. The
+        word rides `--muted`, where it clears 5:1 in every theme, and the dot
+        carries the meaning — which is what the design system says colour is for
+        anyway, and a dot is non-text, so 3:1 is the bar it has to clear.
+      */}
+      {thread.outdated && (
+        <span
+          className="rounded bg-muted px-1.5 py-0.5 text-muted-foreground"
+          title="The diff moved since this comment was written, so its line no longer points at the current code"
+        >
+          outdated
+        </span>
+      )}
+      {thread.resolved != null && (
+        <span className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-muted-foreground">
+          <span
+            className={cn(
+              "size-1.5 rounded-full",
+              thread.resolved ? "bg-[var(--acc-green)]" : "bg-[var(--acc-orange)]",
+            )}
+            aria-hidden
+          />
+          {thread.resolved ? "resolved" : "open"}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** Checkbox + location at the trailing end of the first comment's author line. */
+function ThreadPickControl({
   thread,
   selected,
   onSelectedChange,
@@ -135,65 +177,30 @@ function ThreadLocationRow({
   const context = location && thread.side === "old" ? `${location} (removed side)` : location;
   const label = (
     <span
-      // Mono is for what it describes — a path and a line number. The fallback
-      // is a plain English label, and mono made it read as another identifier.
+      // Mono is for path:line; the "General comment" fallback stays proportional.
       className={cn("min-w-0 truncate text-[11px] text-muted-foreground", context && "font-mono")}
       title={context ?? undefined}
     >
       {context ?? "General comment"}
     </span>
   );
+  if (!onSelectedChange) {
+    return <span className="ml-auto min-w-0">{label}</span>;
+  }
   return (
-    <div className="flex items-center justify-between gap-2">
-      {onSelectedChange ? (
-        <label
-          htmlFor={selectionId}
-          className="-my-1 flex min-w-0 flex-1 cursor-pointer items-center gap-2 py-1"
-          title="Pick this thread for the agent"
-        >
-          <Checkbox
-            id={selectionId}
-            checked={selected}
-            onCheckedChange={(checked) => onSelectedChange(checked === true)}
-            aria-label={`Pick ${context ?? "this general comment"} for the agent`}
-          />
-          {label}
-        </label>
-      ) : (
-        label
-      )}
-      {/*
-        Neutral pill, coloured dot — not coloured text on a tinted pill.
-        A tint at these opacities pulls the surface *toward* the text's own hue,
-        so it costs contrast rather than buying it: `--acc-orange` measures 4.45
-        as a bare word on the light card and only 3.66 once tinted behind. The
-        word rides `--muted`, where it clears 5:1 in every theme, and the dot
-        carries the meaning — which is what the design system says colour is for
-        anyway, and a dot is non-text, so 3:1 is the bar it has to clear.
-      */}
-      <span className="flex shrink-0 items-center gap-1 text-[10.5px] font-medium">
-        {thread.outdated && (
-          <span
-            className="rounded bg-muted px-1.5 py-0.5 text-muted-foreground"
-            title="The diff moved since this comment was written, so its line no longer points at the current code"
-          >
-            outdated
-          </span>
-        )}
-        {thread.resolved != null && (
-          <span className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-muted-foreground">
-            <span
-              className={cn(
-                "size-1.5 rounded-full",
-                thread.resolved ? "bg-[var(--acc-green)]" : "bg-[var(--acc-orange)]",
-              )}
-              aria-hidden
-            />
-            {thread.resolved ? "resolved" : "open"}
-          </span>
-        )}
-      </span>
-    </div>
+    <label
+      htmlFor={selectionId}
+      className="-my-1 ml-auto flex min-w-0 cursor-pointer items-center gap-2 py-1"
+      title="Pick this thread for the agent"
+    >
+      <Checkbox
+        id={selectionId}
+        checked={selected}
+        onCheckedChange={(checked) => onSelectedChange(checked === true)}
+        aria-label={`Pick ${context ?? "this general comment"} for the agent`}
+      />
+      {label}
+    </label>
   );
 }
 

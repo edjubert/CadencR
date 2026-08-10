@@ -1,6 +1,7 @@
 use super::events_stream_blocks::EventIndexer;
 use super::events_tool_call::{other_event, MappedUpdate};
 use super::events_tool_call_input::synthesize_input_delta_event;
+use super::events_tool_call_name::{recover_tool_name_from_update, resolve_tool_name};
 use super::events_tool_call_parent::parent_tool_use_id;
 use super::events_tool_call_update_result::push_tool_result;
 use super::provider_hooks::AcpProviderHooks;
@@ -26,10 +27,20 @@ pub fn map_tool_call_update(
     if indexer.is_tool_call_suppressed(tool_call_id) {
         return MappedUpdate { events: vec![] };
     }
+    // OpenCode can first surface Task as kind=think (empty input), then fill
+    // rawInput with subagent_type. Re-resolve so pairing/suppression catch up.
+    recover_tool_name_from_update(tool_call_id, body, indexer, hooks);
+    let tool_name = indexer
+        .tool_name_for(tool_call_id)
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| resolve_tool_name(body, hooks));
+    if tool_name.eq_ignore_ascii_case("task") || tool_name.eq_ignore_ascii_case("agent") {
+        hooks.observe_tool_call_update(tool_call_id, &tool_name, body);
+    }
     let mut events = Vec::new();
     let index = indexer.index_for_tool(tool_call_id);
     let parent = parent_tool_use_id(body);
-    if indexer.tool_name_for(tool_call_id) == Some("AskUserQuestion") {
+    if tool_name == "AskUserQuestion" {
         if let Some(event) = hooks.tool_call_update_override(
             tool_call_id,
             body,
@@ -391,5 +402,29 @@ mod tests {
         for event in &result.events {
             assert_eq!(event.parent_tool_use_id(), Some("task-parent"));
         }
+    }
+
+    #[test]
+    fn update_recovers_task_name_when_first_sight_was_think() {
+        let mut idx = EventIndexer::default();
+        idx.record_tool_name("t-task", "Think");
+        let _ = idx.index_for_tool("t-task");
+        let _ = map_tool_call_update(
+            &json!({
+                "toolCallId": "t-task",
+                "title": "Audit auth",
+                "kind": "think",
+                "status": "in_progress",
+                "rawInput": {
+                    "description": "Audit auth",
+                    "subagent_type": "general",
+                    "task_id": "ses_child"
+                }
+            }),
+            &mut idx,
+            metadata(),
+            &PlainHooks,
+        );
+        assert_eq!(idx.tool_name_for("t-task"), Some("task"));
     }
 }

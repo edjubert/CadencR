@@ -6,8 +6,8 @@
  * For "Copy" actions we want to preserve those, so we walk the cloned
  * `Range` fragment and re-emit markdown for each tag we recognize.
  *
- * Coverage matches the tag set produced by `<Markdown>` (react-markdown +
- * remark-gfm): headings, paragraphs, lists, blockquote, code (inline +
+ * Coverage matches the tag set produced by `<Markdown>` (Streamdown's
+ * GFM pipeline): headings, paragraphs, lists, blockquote, code (inline +
  * fenced), links, emphasis, strong, strikethrough, horizontal rule, line
  * break. Tables collapse to a tab-separated approximation. Anything not
  * recognized falls through to its inner text.

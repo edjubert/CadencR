@@ -7,7 +7,7 @@ use super::prompt_usage::prompt_response_usage;
 use super::question_sidecar::QuestionSidecar;
 use super::tool_result_flatten::flatten_tool_result_content;
 use super::upstream_workaround::{
-    spawn_side_channel_listeners, PendingSubagentTasks, PermissionRegistry,
+    spawn_side_channel_listeners, PendingSubagentState, PendingSubagentTasks, PermissionRegistry,
 };
 use crate::domain::agents::acp::runtime::events_stream_blocks::EventIndexer;
 use crate::domain::agents::acp::runtime::provider_hooks::{
@@ -26,7 +26,7 @@ use crate::domain::agents::opencode::tool_names::{
 use async_trait::async_trait;
 use opencode_sdk_rs::OpenCodeClient;
 use serde_json::Value;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{mpsc, RwLock};
@@ -48,7 +48,7 @@ impl OpenCodeAcpAdapter {
             question_sidecar,
             http: OpenCodeClient::new(opencode_http_port),
             cwd: cwd.to_string_lossy().into_owned(),
-            pending_subagent_calls: Arc::new(StdMutex::new(VecDeque::new())),
+            pending_subagent_calls: Arc::new(StdMutex::new(PendingSubagentState::default())),
             permissions: Arc::new(RwLock::new(HashMap::new())),
             mcp_tool_names: McpToolNameResolver::default(),
         }
@@ -63,7 +63,12 @@ impl AcpProviderHooks for OpenCodeAcpAdapter {
         command: &str,
     ) -> Result<(), RuntimeError> {
         self.http
-            .shell_command(session_id, agent, command, Some(&self.cwd))
+            .shell_command()
+            .session_id(session_id)
+            .agent(agent)
+            .command(command)
+            .directory(&self.cwd)
+            .call()
             .await
             .map(|_| ())
             .map_err(|error| RuntimeError::new(format!("OpenCode shell command failed: {error}")))
@@ -195,9 +200,21 @@ impl AcpProviderHooks for OpenCodeAcpAdapter {
     }
     fn record_tool_call_start(&self, tool_call_id: &str, tool_name: &str) {
         if matches!(tool_name, "Task" | "Agent") {
-            if let Ok(mut queue) = self.pending_subagent_calls.lock() {
-                queue.push_back(tool_call_id.to_string());
+            if let Ok(mut pending) = self.pending_subagent_calls.lock() {
+                pending.push_tool_call(tool_call_id.to_string());
             }
+        }
+    }
+
+    fn observe_tool_call_update(&self, tool_call_id: &str, tool_name: &str, body: &Value) {
+        if !(tool_name.eq_ignore_ascii_case("task") || tool_name.eq_ignore_ascii_case("agent")) {
+            return;
+        }
+        let Some(child_session_id) = child_session_id_from_task_body(body) else {
+            return;
+        };
+        if let Ok(mut pending) = self.pending_subagent_calls.lock() {
+            pending.bind_child_session(child_session_id, tool_call_id);
         }
     }
     fn start_side_channel(
@@ -257,6 +274,27 @@ impl AcpProviderHooks for OpenCodeAcpAdapter {
             .await?;
         Ok(PermissionFallbackOutcome::Handled)
     }
+}
+
+/// Child session id carried on OpenCode Task tool updates/completions.
+fn child_session_id_from_task_body(body: &Value) -> Option<&str> {
+    body.get("rawInput")
+        .or_else(|| body.get("toolInput"))
+        .and_then(|input| {
+            input
+                .get("task_id")
+                .or_else(|| input.get("sessionId"))
+                .or_else(|| input.get("session_id"))
+        })
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .or_else(|| {
+            body.get("rawOutput")
+                .and_then(|output| output.get("metadata"))
+                .and_then(|metadata| metadata.get("sessionId"))
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+        })
 }
 
 #[cfg(test)]
@@ -362,7 +400,7 @@ mod tests {
             "toolCallId": "call_TASK_PARENT",
             "status": "completed",
             "rawOutput": {
-                "output": "task_id: ses_child\n\n<task_result>\nfindings line 1\nfindings line 2\n</task_result>",
+                "output": "<task id=\"ses_child\" state=\"completed\">\n<task_result>\nfindings line 1\nfindings line 2\n</task_result>\n</task>",
                 "metadata": { "sessionId": "ses_child" }
             }
         });

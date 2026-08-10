@@ -8,12 +8,13 @@ use tokio::sync::mpsc;
 
 pub(super) async fn poll_once(
     client: &OpenCodeClient,
+    directory: &str,
     root_session_id: &str,
     context_window: Option<u64>,
     state: &mut RootUsageState,
     runtime_tx: &mpsc::Sender<Result<RuntimeEvent, RuntimeError>>,
 ) -> Result<bool, ()> {
-    match client.list_messages(root_session_id).await {
+    match client.list_messages(root_session_id, Some(directory)).await {
         Ok(messages) => {
             if let Some(event) = state.handle_messages(root_session_id, context_window, &messages) {
                 runtime_tx.send(Ok(event)).await.map_err(|_| ())?;

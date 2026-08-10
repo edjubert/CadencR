@@ -151,6 +151,10 @@ export interface AgentSessionProps {
   showReadOnlyModel?: boolean;
   /** Called when the user changes live thinking effort */
   onThinkingEffortChange?: (thinkingEffort?: ThinkingEffortLevel) => void;
+  /** Backend-confirmed Codex fast-mode state for this conversation. */
+  fastMode?: boolean;
+  /** Toggle Codex fast mode for subsequent turns. */
+  onFastModeChange?: (enabled: boolean) => void | Promise<void>;
   /** Feature ID for file mention and slash command support in the prompt bar */
   featureId?: number;
   /** Project ID for slash command support and prompt history in the prompt bar */

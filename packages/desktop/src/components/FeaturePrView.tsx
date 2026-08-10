@@ -24,6 +24,7 @@ import {
   PrViewError,
   PrViewLoading,
 } from "@/components/FeaturePrViewParts";
+import { ForgeImageScope } from "@/components/ForgeImage";
 import { PrStatusBand } from "@/components/PrStatusBand";
 import {
   TIMELINE_COMPONENTS,
@@ -74,25 +75,31 @@ export const FeaturePrView = memo(function FeaturePrView({
   if (status?.error && !status.pr) return <PrViewError message={status.error} />;
   if (!status?.pr) return <NoPrEmptyState />;
 
+  // Everything below here — the description, every comment body, every author's
+  // face — reaches its images through this feature's forge. Scoped once at the
+  // top rather than per card, because a thread's markdown is rendered several
+  // layers down inside Virtuoso and would otherwise have to carry the id.
   return (
-    <PrTimeline
-      status={status}
-      threads={filter === "unresolved" ? reviews.unresolved : reviews.threads}
-      unresolvedCount={reviews.unresolvedCount}
-      totalCount={reviews.threads.length}
-      filter={filter}
-      onFilterChange={setFilter}
-      commentsLoading={reviews.isLoading}
-      commentsRefreshing={reviews.isRefreshing}
-      commentsError={reviews.errorMessage}
-      onCommentsRetry={reviews.retry}
-      selectedThreadIds={selectedThreadIds}
-      onThreadSelectedChange={onThreadSelectedChange}
-      onAllThreadsSelectedChange={onAllThreadsSelectedChange}
-      onViewThread={onViewThread}
-      onSendThread={onSendThread}
-      registerNavigationAdapter={registerNavigationAdapter}
-    />
+    <ForgeImageScope featureId={featureId}>
+      <PrTimeline
+        status={status}
+        threads={filter === "unresolved" ? reviews.unresolved : reviews.threads}
+        unresolvedCount={reviews.unresolvedCount}
+        totalCount={reviews.threads.length}
+        filter={filter}
+        onFilterChange={setFilter}
+        commentsLoading={reviews.isLoading}
+        commentsRefreshing={reviews.isRefreshing}
+        commentsError={reviews.errorMessage}
+        onCommentsRetry={reviews.retry}
+        selectedThreadIds={selectedThreadIds}
+        onThreadSelectedChange={onThreadSelectedChange}
+        onAllThreadsSelectedChange={onAllThreadsSelectedChange}
+        onViewThread={onViewThread}
+        onSendThread={onSendThread}
+        registerNavigationAdapter={registerNavigationAdapter}
+      />
+    </ForgeImageScope>
   );
 });
 

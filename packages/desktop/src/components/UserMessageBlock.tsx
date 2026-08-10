@@ -1,6 +1,7 @@
 import { PaperclipIcon } from "lucide-react";
-import type { ReactElement, ReactNode } from "react";
+import { useMemo, type ReactElement, type ReactNode } from "react";
 import { Markdown } from "@/components/Markdown";
+import { UserMessageImages } from "@/components/UserMessageImages";
 import { GeneratedBySessionBadge } from "@/components/GeneratedBySessionBadge";
 import { CollapsibleSection } from "@/components/ui/collapsible-section";
 import { cn } from "@/lib/utils";
@@ -29,7 +30,11 @@ export function UserMessageBlock({
   origin,
   actions,
 }: UserMessageBlockProps): ReactElement {
-  const { text: textContent, images, attachments } = parseUserMessageContent(content);
+  const {
+    text: textContent,
+    images,
+    attachments,
+  } = useMemo(() => parseUserMessageContent(content), [content]);
   const isPendingDelivery = deliveryState === "pending_agent";
   const isUnknownDelivery = deliveryState === "delivery_unknown";
   const isFailedDelivery = deliveryState === "delivery_failed";
@@ -46,18 +51,7 @@ export function UserMessageBlock({
         )}
       >
         <Markdown content={textContent} className="user-message-markdown" />
-        {images.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-2">
-            {images.map((img, i) => (
-              <img
-                key={i}
-                src={`data:${img.mediaType};base64,${img.data}`}
-                alt={`Attachment ${i + 1}`}
-                className="max-h-48 max-w-full rounded border border-border"
-              />
-            ))}
-          </div>
-        )}
+        {images.length > 0 && <UserMessageImages images={images} />}
         {attachments.length > 0 && <AttachmentFileList attachments={attachments} />}
         {isGenerated && <GeneratedBySessionBadge origin={origin} />}
       </div>

@@ -103,7 +103,7 @@ describe("buildUserMessageContent", () => {
 
     expect(parseUserMessageContent(content)).toEqual({
       text: "Describe this screenshot",
-      images: [{ mediaType: "image/png", data: "abc" }],
+      images: [{ mediaType: "image/png", base64: "abc" }],
       attachments: [],
     });
     expect(extractUserMessageText(content)).toBe("Describe this screenshot");

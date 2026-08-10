@@ -6,6 +6,7 @@
  * keep each file within the size budget.
  */
 
+import { applyBlockContentBudget } from "@/lib/block-content-budget";
 import { parseMessageBlocksPayload } from "./ws-envelope-payload";
 import { appendErrorBlockPatch } from "./ws-session-store-helpers";
 import {
@@ -101,7 +102,15 @@ function processMessageBlocks(
   for (const rawBlock of blocks) {
     if (!isRecord(rawBlock)) continue;
     const result = processSdkMessage(rawBlock, state);
-    allMutations.push(...result.mutations);
+    // Every streamed block reaches the store through here, so this is the only
+    // place that can bound an *append* — `applyMutations` inserts those blocks
+    // verbatim, and `mergeToolContent` only caps the accumulation on updates.
+    // A block that arrives whole (a large tool_result) would otherwise be
+    // retained at full size for the session.
+    for (const mutation of result.mutations) {
+      const budgeted = applyBlockContentBudget(mutation.block);
+      allMutations.push(budgeted === mutation.block ? mutation : { ...mutation, block: budgeted });
+    }
     enterPlanModeRequested ||= result.signals.enterPlanModeRequested;
     compactBoundaryObserved ||= result.signals.compactBoundaryObserved;
     // Older persisted/runtime boundaries may not include metadata. Treat that

@@ -69,14 +69,15 @@ export interface FeatureLayoutState {
 // Defaults
 // ---------------------------------------------------------------------------
 
-export function flatLayoutState(): FeatureLayoutState {
+/** The default single-pane layout: every tab in one root leaf. */
+export function flatLayoutState(activeTabId: TabKind = "agent"): FeatureLayoutState {
   return {
     version: 1,
     splitRoot: {
       type: "leaf",
       id: ROOT_LEAF_ID,
       tabIds: [...ALL_TAB_KINDS],
-      activeTabId: "agent",
+      activeTabId,
     },
     focusedPaneId: ROOT_LEAF_ID,
     appliedLayoutId: null,

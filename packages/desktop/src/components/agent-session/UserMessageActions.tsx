@@ -1,6 +1,9 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CopyIcon, CheckIcon, RotateCcwIcon, GitBranchIcon, RefreshCwIcon } from "lucide-react";
+import { toast } from "sonner";
+import { apiErrorMessage } from "@/lib/api-errors";
 import { copyAs } from "@/lib/markdown-export";
+import { readPromptBlobBase64 } from "@/lib/prompt-image-cache";
 import { parseUserMessageContent, type PromptAttachmentPayload } from "@/types/agent-types";
 import { cn } from "@/lib/utils";
 import type { AgentBlockData } from "../AgentBlock";
@@ -100,8 +103,9 @@ function useUserMessageRetry(
 ) {
   const [retryingMessageUuid, setRetryingMessageUuid] = useState<string | null>(null);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const attachments = useMemo(() => retryAttachments(content), [content]);
-  const available = content.attachments.every((attachment) => attachment.base64 !== undefined);
+  const available = [...content.images, ...content.attachments].every(
+    (payload) => payload.base64 !== undefined || payload.ref !== undefined,
+  );
   const visible =
     wsSessionId != null &&
     block.messageUuid != null &&
@@ -116,40 +120,62 @@ function useUserMessageRetry(
   );
   const send = useCallback(() => {
     if (!wsSessionId || !block.messageUuid || !available || retrying) return;
-    setRetryingMessageUuid(block.messageUuid);
+    const messageUuid = block.messageUuid;
+    setRetryingMessageUuid(messageUuid);
     if (retryTimer.current) clearTimeout(retryTimer.current);
     retryTimer.current = setTimeout(() => setRetryingMessageUuid(null), 15_000);
-    sendPrompt(wsSessionId, content.text, {
-      messageUuid: block.messageUuid,
-      ...(attachments.length > 0 ? { attachments } : {}),
-    });
-  }, [attachments, available, block.messageUuid, content.text, retrying, sendPrompt, wsSessionId]);
+    // Payloads live in the blob cache rather than in the block, so rebuilding
+    // the original prompt means re-encoding them — hence the async hop.
+    void buildRetryAttachments(content).then(
+      (payloads) => {
+        sendPrompt(wsSessionId, content.text, {
+          messageUuid,
+          ...(payloads.length > 0 ? { attachments: payloads } : {}),
+        });
+      },
+      (error: unknown) => {
+        setRetryingMessageUuid(null);
+        toast.error("Couldn't resend this message", {
+          description: `${apiErrorMessage(error, "An attachment could not be rebuilt")}. Reload the conversation and try again.`,
+        });
+      },
+    );
+  }, [available, block.messageUuid, content, retrying, sendPrompt, wsSessionId]);
   return useMemo(
     () => ({ available, retrying, send, visible }),
     [available, retrying, send, visible],
   );
 }
 
-function retryAttachments(content: ParsedMessage): PromptAttachmentPayload[] {
-  const images: PromptAttachmentPayload[] = content.images.map((image) => ({
-    base64: image.data,
+/**
+ * Resolve an inline payload, or pull it back out of the blob cache. Throws
+ * rather than resolving `undefined` for an evicted ref: re-sending the prompt
+ * with its screenshot quietly missing is worse than not re-sending it.
+ */
+async function payloadBase64(
+  source: { base64?: string; ref?: string },
+  label: string,
+): Promise<string> {
+  if (source.base64 !== undefined) return source.base64;
+  const restored = source.ref ? await readPromptBlobBase64(source.ref) : undefined;
+  if (restored === undefined) throw new Error(`${label} is no longer held in memory`);
+  return restored;
+}
+
+async function buildRetryAttachments(content: ParsedMessage): Promise<PromptAttachmentPayload[]> {
+  const images = content.images.map(async (image, index) => ({
+    base64: await payloadBase64(image, `Image ${index + 1}`),
     fileName: "image",
-    kind: "image",
+    kind: "image" as const,
     mimeType: image.mediaType,
   }));
-  const files = content.attachments.flatMap((attachment) =>
-    attachment.base64
-      ? [
-          {
-            base64: attachment.base64,
-            fileName: attachment.fileName,
-            kind: attachment.kind,
-            mimeType: attachment.mimeType,
-          },
-        ]
-      : [],
-  );
-  return [...images, ...files];
+  const files = content.attachments.map(async (attachment) => ({
+    base64: await payloadBase64(attachment, attachment.fileName),
+    fileName: attachment.fileName,
+    kind: attachment.kind,
+    mimeType: attachment.mimeType,
+  }));
+  return await Promise.all([...images, ...files]);
 }
 
 function ActionButton({

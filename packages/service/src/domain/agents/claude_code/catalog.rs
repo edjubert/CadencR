@@ -27,7 +27,10 @@ pub(super) fn sdk_model_to_catalog_entry(
         supported_effort_levels: model.supported_effort_levels,
         default_effort_level: None,
         supports_adaptive_thinking: model.supports_adaptive_thinking,
-        supports_fast_mode: model.supports_fast_mode,
+        // Model capability metadata must describe controls Cadencr can
+        // actually apply. Claude's transport does not expose a live fast-mode
+        // setter yet, so do not surface the shared toggle for Claude models.
+        supports_fast_mode: None,
         supports_auto_mode: model.supports_auto_mode,
     }
 }
@@ -254,7 +257,7 @@ mod tests {
             supports_effort: Some(true),
             supported_effort_levels: Some(vec!["low".to_string(), "max".to_string()]),
             supports_adaptive_thinking: Some(true),
-            supports_fast_mode: None,
+            supports_fast_mode: Some(true),
             supports_auto_mode: Some(true),
         };
         let entry = sdk_model_to_catalog_entry(sdk);

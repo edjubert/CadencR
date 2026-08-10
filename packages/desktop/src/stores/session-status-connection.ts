@@ -10,6 +10,7 @@ import {
   resetReconnectState,
   scheduleReconnect,
   unregisterReconnector,
+  WS_RATE_LIMIT_RETRY_MS,
 } from "@/lib/ws-reconnect";
 import { isBrowserRemote } from "@/lib/remote/device-token";
 import { hydratePrStatuses } from "@/stores/pr-status-hydration";
@@ -56,6 +57,9 @@ function handleAppWsOpen(connection: AppWsConnection): void {
   useConnectionStatusStore.getState().reportSource(APP_WS_SOURCE, "connected");
   ws.send(JSON.stringify(createEnvelope("app", "subscribe.session_status", {})));
   ws.send(JSON.stringify(createEnvelope("app", "subscribe.feature_events", {})));
+  // A schedule fires on the server's clock, into a conversation this client
+  // need not have open, so nothing else tells the sidebar its rules moved.
+  ws.send(JSON.stringify(createEnvelope("app", "subscribe.schedule_events", {})));
   ws.send(JSON.stringify(createEnvelope("app", "subscribe.settings_events", {})));
   connection.unsubscribeForgeVisibility = subscribeForgeStatus(ws);
   void hydratePrStatuses();
@@ -64,7 +68,7 @@ function handleAppWsOpen(connection: AppWsConnection): void {
   }
 }
 
-function handleAppWsClose(connection: AppWsConnection): void {
+function handleAppWsClose(connection: AppWsConnection, event: CloseEvent): void {
   const { ws, set, get, intentionalClose } = connection;
   connection.unsubscribeForgeVisibility();
   if (get().ws === ws) set({ isConnected: false, ws: null });
@@ -75,7 +79,9 @@ function handleAppWsClose(connection: AppWsConnection): void {
   useConnectionStatusStore
     .getState()
     .reportSource(APP_WS_SOURCE, "reconnecting", "App WebSocket dropped");
-  scheduleReconnect(APP_WS_SOURCE, () => get().connect());
+  scheduleReconnect(APP_WS_SOURCE, () => get().connect(), {
+    minimumDelayMs: event.code === 1006 || event.code === 1013 ? WS_RATE_LIMIT_RETRY_MS : undefined,
+  });
 }
 
 function handleAppWsError(connection: AppWsConnection): void {
@@ -108,7 +114,7 @@ function handleAppWsMessage(connection: AppWsConnection, event: MessageEvent): v
 
 function attachAppWsListeners(connection: AppWsConnection): void {
   connection.ws.addEventListener("open", () => handleAppWsOpen(connection));
-  connection.ws.addEventListener("close", () => handleAppWsClose(connection));
+  connection.ws.addEventListener("close", (event) => handleAppWsClose(connection, event));
   connection.ws.addEventListener("error", () => handleAppWsError(connection));
   connection.ws.addEventListener("message", (event) => handleAppWsMessage(connection, event));
 }

@@ -32,6 +32,18 @@ impl StreamReaderTask {
     ) {
         state.last_runtime_activity = tokio::time::Instant::now();
         state.diagnostics.record(runtime_event.raw_json());
+        // Provider-native token reports are recorded before any early return
+        // below. Context-window usage remains on the separate `usage_state`
+        // path and is never mistaken for consumption, except for Cursor's
+        // explicit provider fallback.
+        self.capture_usage_attribution(state, &runtime_event).await;
+        self.capture_provider_usage_event_id(state, &runtime_event);
+        self.record_token_usage(state, &runtime_event).await;
+        if runtime_event.is_result() {
+            state.usage_attribution = None;
+            state.usage_attribution_captured = false;
+            state.provider_usage_event_id = None;
+        }
         let interrupted_generation = if runtime_event.is_result() {
             self.take_interruption().await
         } else {

@@ -80,6 +80,13 @@ pub const PROVIDER_ID: &str = "codex_cli";
 const PROVIDER_LABEL: &str = "Codex CLI";
 const CATALOG_TTL: Duration = Duration::from_secs(30);
 const DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE: &str = "default_mode_request_user_input";
+pub(super) const FAST_SERVICE_TIER: &str = "priority";
+
+pub(super) fn fast_service_tier_value(enabled: bool) -> Value {
+    enabled
+        .then(|| Value::String(FAST_SERVICE_TIER.to_string()))
+        .unwrap_or(Value::Null)
+}
 
 #[derive(Clone)]
 struct CatalogCacheEntry {
@@ -163,6 +170,10 @@ fn model_entry(model: CodexModel) -> ModelCatalogEntry {
             (!effort.is_empty() && seen.insert(effort.clone())).then_some(effort)
         })
         .collect::<Vec<_>>();
+    let supports_fast_mode = model
+        .service_tiers
+        .iter()
+        .any(|tier| tier.id == FAST_SERVICE_TIER);
     ModelCatalogEntry {
         id: model.id,
         label: model.label,
@@ -171,7 +182,7 @@ fn model_entry(model: CodexModel) -> ModelCatalogEntry {
         supported_effort_levels: (!supported_efforts.is_empty()).then_some(supported_efforts),
         default_effort_level,
         supports_adaptive_thinking: None,
-        supports_fast_mode: None,
+        supports_fast_mode: Some(supports_fast_mode),
         supports_auto_mode: None,
     }
 }
@@ -214,11 +225,10 @@ async fn probe_models() -> Result<Vec<CodexModel>, RuntimeError> {
 }
 
 fn app_server_spawn_options(env: Option<HashMap<String, String>>) -> AppServerSpawnOptions {
-    AppServerSpawnOptions {
-        env,
-        enable_features: vec![DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE.to_string()],
-        ..AppServerSpawnOptions::default()
-    }
+    AppServerSpawnOptions::builder()
+        .maybe_env(env)
+        .enable_features(vec![DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE.to_string()])
+        .build()
 }
 
 async fn start_or_resume_thread(
@@ -359,14 +369,17 @@ impl AgentRuntimeAdapter for CodexAdapter {
         let session = CodexSession::new(
             client,
             thread_id,
-            config.model,
-            config.thinking_effort,
-            config.permission_mode,
-            config.access_mode,
-            config.cwd,
             event_rx,
-            mcp_servers,
-            None,
+            session::CodexSessionOptions {
+                model: config.model,
+                effort: config.thinking_effort,
+                fast_mode: config.fast_mode,
+                permission_mode: config.permission_mode,
+                access_mode: config.access_mode,
+                cwd: config.cwd,
+                mcp_servers,
+                context_window: None,
+            },
         );
         session.send_init_event().await;
         if !content.is_null() {
@@ -397,6 +410,11 @@ mod tests {
                 String::new(),
             ],
             default_effort: Some("low".to_string()),
+            service_tiers: vec![codex_app_server_sdk_rs::CodexServiceTier {
+                id: "priority".to_string(),
+                name: "Fast".to_string(),
+                description: Some("1.5x speed, increased usage".to_string()),
+            }],
             context_window: None,
             is_default: true,
         });
@@ -411,6 +429,27 @@ mod tests {
             ])
         );
         assert_eq!(entry.default_effort_level.as_deref(), Some("low"));
+        assert_eq!(entry.supports_fast_mode, Some(true));
+    }
+
+    #[test]
+    fn fast_capability_requires_the_priority_tier_id() {
+        let entry = model_entry(CodexModel {
+            id: "gpt-future".to_string(),
+            label: "GPT Future".to_string(),
+            description: None,
+            supported_efforts: vec![],
+            default_effort: None,
+            service_tiers: vec![codex_app_server_sdk_rs::CodexServiceTier {
+                id: "standard".to_string(),
+                name: "Fast".to_string(),
+                description: None,
+            }],
+            context_window: None,
+            is_default: false,
+        });
+
+        assert_eq!(entry.supports_fast_mode, Some(false));
     }
 
     #[test]

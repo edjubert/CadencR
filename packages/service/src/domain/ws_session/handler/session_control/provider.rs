@@ -18,7 +18,7 @@ async fn persist_provider_selection(
 ) -> Result<(), sqlx::Error> {
     if let Some(codex_mode) = codex_permission_mode {
         sqlx::query(
-            "UPDATE agent_sessions SET runtime_provider = ?, codex_permission_mode = ?, permission_mode = ? WHERE id = ?",
+            "UPDATE agent_sessions SET runtime_provider = ?, codex_permission_mode = ?, permission_mode = ?, fast_mode = 0 WHERE id = ?",
         )
         .bind(provider)
         .bind(codex_mode)
@@ -28,7 +28,7 @@ async fn persist_provider_selection(
         .await?;
     } else {
         sqlx::query(
-            "UPDATE agent_sessions SET runtime_provider = ?, permission_mode = ? WHERE id = ?",
+            "UPDATE agent_sessions SET runtime_provider = ?, permission_mode = ?, fast_mode = 0 WHERE id = ?",
         )
         .bind(provider)
         .bind(permission_mode)
@@ -225,6 +225,8 @@ pub(crate) async fn handle_provider_set(
         handle.desired_access_mode = next_access_mode.clone();
         handle.config.access_mode = next_access_mode.clone();
         options.access_mode = next_access_mode;
+        handle.config.fast_mode = false;
+        options.fast_mode = false;
         handle.feature_id
     };
 

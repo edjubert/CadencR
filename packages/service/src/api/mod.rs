@@ -18,12 +18,15 @@ use crate::domain::features::routes::features_router;
 use crate::domain::git::routes::git_router;
 use crate::domain::imports::routes::imports_router;
 use crate::domain::lsp::lsp_router;
+use crate::domain::ports::routes::ports_router;
 use crate::domain::projects::routes::projects_router;
-use crate::domain::scheduled_messages::routes::scheduled_messages_router;
+use crate::domain::schedules::routes::schedules_router;
 use crate::domain::sessions::routes::sessions_router;
 use crate::domain::terminal::routes::terminal_router;
+use crate::domain::usage_stats::routes::usage_stats_router;
 use crate::domain::workspace::routes::workspace_router;
 use crate::domain::ws_session::handler::ws_handler;
+use crate::domain::ws_session::routes::prompt_commands_router;
 use crate::error::AppError;
 use axum::extract::{Query, State};
 use axum::routing::{any, get, put};
@@ -102,10 +105,11 @@ pub fn build_api_routes() -> Router<AppState> {
         .merge(workspace_router())
         .merge(projects_router())
         .merge(features_router())
+        .merge(ports_router())
         .merge(feature_layouts_router())
         .merge(diff_comments_router())
         .merge(sessions_router())
-        .merge(scheduled_messages_router())
+        .merge(schedules_router())
         .merge(terminal_router())
         .merge(editor_router())
         .merge(format_router())
@@ -116,6 +120,8 @@ pub fn build_api_routes() -> Router<AppState> {
         .merge(discovery_router())
         .merge(imports_router())
         .merge(lsp_router())
+        .merge(usage_stats_router())
+        .merge(prompt_commands_router())
         // VAPID public key — shared, so the frontend can fetch it on either
         // listener. Subscription management (device-keyed) is remote-only and
         // merged separately in `build_remote_router`.
@@ -136,6 +142,10 @@ fn compression_layer() -> tower_http::compression::CompressionLayer {
 /// remote-access control endpoints (enable/disable/status/pairing-code/revoke),
 /// which a remote device can therefore never reach.
 pub fn build_router(state: AppState) -> Router {
+    // Keep a high-ceiling runaway backstop on loopback too: `/ws` is
+    // intentionally upgradeable without the HTTP launch-token middleware.
+    // Credential-bearing requests have an independent allowance so anonymous
+    // local traffic cannot starve the renderer.
     let limiter = std::sync::Arc::new(middleware::RateLimiter::default());
     build_api_routes()
         .route("/api/browser-bridge", put(register_browser_bridge))
@@ -145,7 +155,10 @@ pub fn build_router(state: AppState) -> Router {
             state.clone(),
             middleware::auth_middleware,
         ))
-        .layer(axum::middleware::from_fn(middleware::rate_limit_middleware))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::loopback_rate_limit_middleware,
+        ))
         .layer(axum::Extension(limiter))
         .layer(compression_layer())
         .with_state(state)

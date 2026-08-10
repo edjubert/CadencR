@@ -1,7 +1,9 @@
 use serde_json::Value;
 
 use crate::error::SdkError;
-use crate::types::{CodexModel, ThreadHandle, ThreadSnapshot, ThreadTurn, TurnHandle};
+use crate::types::{
+    CodexModel, CodexServiceTier, ThreadHandle, ThreadSnapshot, ThreadTurn, TurnHandle,
+};
 
 pub(crate) fn parse_model(value: &Value) -> Option<CodexModel> {
     let id = value.get("id").and_then(Value::as_str)?.to_string();
@@ -13,6 +15,22 @@ pub(crate) fn parse_model(value: &Value) -> Option<CodexModel> {
         .filter_map(|item| item.get("reasoningEffort").and_then(Value::as_str))
         .map(ToOwned::to_owned)
         .collect::<Vec<_>>();
+    let service_tiers = value
+        .get("serviceTiers")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            Some(CodexServiceTier {
+                id: item.get("id")?.as_str()?.to_string(),
+                name: item.get("name")?.as_str()?.to_string(),
+                description: item
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+            })
+        })
+        .collect();
     Some(CodexModel {
         id,
         label: value
@@ -30,6 +48,7 @@ pub(crate) fn parse_model(value: &Value) -> Option<CodexModel> {
             .get("defaultReasoningEffort")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
+        service_tiers,
         context_window: None,
         is_default: value
             .get("isDefault")
@@ -120,6 +139,11 @@ mod tests {
                 { "reasoningEffort": "ultra" },
                 { "reasoningEffort": "future" }
             ],
+            "serviceTiers": [{
+                "id": "priority",
+                "name": "Fast",
+                "description": "1.5x speed, increased usage"
+            }],
             "isDefault": true
         }))
         .expect("model");
@@ -131,6 +155,9 @@ mod tests {
             vec!["low", "high", "max", "ultra", "future"]
         );
         assert_eq!(model.default_effort.as_deref(), Some("high"));
+        assert_eq!(model.service_tiers.len(), 1);
+        assert_eq!(model.service_tiers[0].id, "priority");
+        assert_eq!(model.service_tiers[0].name, "Fast");
         assert!(model.is_default);
         assert_eq!(thread.id, "thread_1");
         assert_eq!(turn.id, "turn_1");

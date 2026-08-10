@@ -5,7 +5,7 @@ import { AppEnvironmentBadge } from "@/components/AppEnvironmentBadge";
 import { CadencrLogo } from "@/components/CadencrLogo";
 import { Button } from "@/components/ui/button";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { APP_ENVIRONMENT_KIND } from "@/lib/app-environment";
+import { APP_ENVIRONMENT } from "@/lib/app-environment";
 import { HAS_MAC_WINDOW_CONTROLS } from "@/lib/mac-window-controls";
 import { cn } from "@/lib/utils";
 
@@ -84,7 +84,7 @@ export function SidebarCollapsedChrome({
           <span className="font-brand text-xl font-extrabold uppercase leading-none tracking-widest">
             Cadencr
           </span>
-          <AppEnvironmentBadge className="ml-1 self-start" kind={APP_ENVIRONMENT_KIND} />
+          <AppEnvironmentBadge className="ml-1 self-start" environment={APP_ENVIRONMENT} />
         </div>
       </div>
       <div className="ml-4 mr-1 h-5 w-px self-center bg-border" />

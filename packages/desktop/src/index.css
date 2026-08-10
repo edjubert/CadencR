@@ -1,5 +1,12 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+/*
+ * Streamdown ships its wrappers as Tailwind utility classes (including
+ * arbitrary variants like `[&>*:first-child]:mt-0`). Tailwind skips
+ * node_modules when auto-detecting sources, so its dist has to be named
+ * explicitly or those classes are never generated.
+ */
+@source "../../../node_modules/streamdown/dist";
 @import "@fontsource-variable/inter";
 @import "@fontsource-variable/figtree";
 @import "./theme.css";
@@ -8,6 +15,7 @@
 @import "./theme-frost.css";
 @import "./theme-square.css";
 @import "./pierre-tree.css";
+@import "./agent-stream-perf.css";
 
 /* Reveal-on-hover only where hover actually exists. On touch devices (no hover)
  * `can-hover:` rules never apply, so hover-gated affordances stay fully visible
@@ -238,6 +246,28 @@ body,
 @utility worktree-group {
   background-color: color-mix(in oklab, var(--sidebar-foreground) 5%, transparent);
   border-color: var(--sidebar-border);
+}
+
+/* One-shot confirmation when a referenced (or picker) reuse selection lands on
+ * the MetaBar worktree chip. Outline isn't clipped by the chip's overflow. */
+@keyframes worktree-reuse-flash {
+  0% {
+    outline-color: color-mix(in oklab, var(--chip-worktree-fg) 70%, transparent);
+  }
+  100% {
+    outline-color: transparent;
+  }
+}
+
+@utility worktree-reuse-flash {
+  outline: 2px solid transparent;
+  outline-offset: 1px;
+  animation: worktree-reuse-flash 420ms ease-out 1;
+}
+
+html[data-animations="off"] .worktree-reuse-flash {
+  animation-name: none;
+  outline: none;
 }
 
 /* Sidebar pull/merge-request chip whose checks are still running: a breathing

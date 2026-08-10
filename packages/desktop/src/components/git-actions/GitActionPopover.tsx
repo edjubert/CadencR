@@ -24,7 +24,13 @@ import {
 } from "@/components/ui/command";
 import type { GitOperationKind } from "@/api/generated";
 import { gitUpdateActionLabel } from "./gitUpdateMessages";
-import type { CommitActivity, GitAction, GitActionState } from "./useGitAction";
+import {
+  gitActivityHint,
+  isActivityAction,
+  type GitAction,
+  type GitActionState,
+  type GitActivities,
+} from "./useGitAction";
 
 export interface GitActionRegistration {
   label: string;
@@ -61,16 +67,18 @@ export interface GitUpdateRecoveryControls {
   onAbort: () => void;
 }
 
+export const NO_GIT_ACTIVITIES: GitActivities = { commit: null, push: null };
+
 interface GitActionPopoverProps {
   state: GitActionState;
-  commitActivity?: CommitActivity;
+  activities?: GitActivities;
   onPick: (action: GitAction) => void;
   recoveryControls?: GitUpdateRecoveryControls | null;
 }
 
 export function GitActionPopover({
   state,
-  commitActivity = null,
+  activities = NO_GIT_ACTIVITIES,
   onPick,
   recoveryControls = null,
 }: GitActionPopoverProps): ReactElement {
@@ -86,15 +94,17 @@ export function GitActionPopover({
               icon: Icon,
               searchTerms,
             } = GIT_ACTION_REGISTRATIONS[action];
-            const reason = action === "commit" && commitActivity ? null : state.disabled[action];
+            const activityAction = isActivityAction(action) ? action : null;
+            const activity = activityAction ? activities[activityAction] : null;
+            // A backgrounded run makes its row "view the output": always
+            // selectable, because that run is what the user wants to see.
+            const reason = activity ? null : state.disabled[action];
             const label =
-              action === "commit" && commitActivity === "running"
-                ? "View commit progress"
-                : action === "commit" && commitActivity === "failed"
-                  ? "View commit error"
-                  : action === "pr"
-                    ? state.compareLabel
-                    : registeredLabel;
+              activityAction && activity
+                ? gitActivityHint(activityAction, activity)
+                : action === "pr"
+                  ? state.compareLabel
+                  : registeredLabel;
             return (
               <CommandItem
                 key={action}

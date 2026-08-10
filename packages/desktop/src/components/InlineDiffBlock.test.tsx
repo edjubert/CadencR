@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@/test-utils";
+import { getDiffRenderDiagnostics } from "@/lib/diff-render-diagnostics";
 import { InlineDiffBlock } from "./InlineDiffBlock";
 
 const mocks = vi.hoisted(() => ({
@@ -235,6 +236,88 @@ describe("InlineDiffBlock controlled expand API", () => {
   it("stays expanded when no `expanded` prop is provided (legacy callers)", () => {
     render(<InlineDiffBlock filePath="test.ts" oldContent={"one\n"} newContent={"two\n"} />);
     expect(screen.getByTestId("diff-view")).toBeInTheDocument();
+  });
+});
+
+describe("InlineDiffBlock large diff safety", () => {
+  const oldContent = Array.from({ length: 751 }, (_, index) => `old line ${index}`).join("\n");
+  const newContent = Array.from({ length: 751 }, (_, index) => `new line ${index}`).join("\n");
+
+  it("keeps a large diff collapsed even when transcript verbosity requests expansion", () => {
+    render(
+      <InlineDiffBlock
+        filePath="generated.ts"
+        oldContent={oldContent}
+        newContent={newContent}
+        expanded
+      />,
+    );
+
+    expect(screen.queryByTestId("diff-view")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Expand diff" })).toBeInTheDocument();
+  });
+
+  it("uses a plain-text renderer when the user explicitly expands a large diff", async () => {
+    const onExpandedChange = vi.fn();
+    const { user } = render(
+      <InlineDiffBlock
+        filePath="generated.ts"
+        oldContent={oldContent}
+        newContent={newContent}
+        expanded
+        onExpandedChange={onExpandedChange}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Expand diff" }));
+
+    expect(screen.getByText(/Large diff shown without syntax highlighting/)).toBeInTheDocument();
+    expect(screen.queryByTestId("diff-view")).not.toBeInTheDocument();
+    expect(onExpandedChange).not.toHaveBeenCalled();
+  });
+
+  it("uses UTF-8 bytes to classify and label multibyte content", async () => {
+    const cjkContent = "界".repeat(70_000);
+    const { user } = render(
+      <InlineDiffBlock
+        filePath="translations.txt"
+        oldContent=""
+        newContent={cjkContent}
+        expanded
+      />,
+    );
+
+    expect(screen.queryByTestId("diff-view")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Expand diff" }));
+    expect(screen.getByText(/about 205\.\d KB/)).toBeInTheDocument();
+  });
+
+  it("does not count streamed large-patch updates as remounts", async () => {
+    const before = getDiffRenderDiagnostics();
+    const { user, rerender } = render(
+      <InlineDiffBlock
+        filePath="generated.ts"
+        oldContent={oldContent}
+        newContent={newContent}
+        expanded
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Expand diff" }));
+    const afterMount = getDiffRenderDiagnostics();
+
+    rerender(
+      <InlineDiffBlock
+        filePath="generated.ts"
+        oldContent={oldContent}
+        newContent={`${newContent}\nstreamed tail`}
+        expanded
+      />,
+    );
+    const afterUpdate = getDiffRenderDiagnostics();
+
+    expect(afterMount.heavyInlineMounts - before.heavyInlineMounts).toBe(1);
+    expect(afterUpdate.heavyInlineMounts).toBe(afterMount.heavyInlineMounts);
+    expect(afterUpdate.heavyInlineMounted).toBe(afterMount.heavyInlineMounted);
   });
 });
 

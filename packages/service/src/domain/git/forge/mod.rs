@@ -6,6 +6,7 @@ mod github;
 mod github_repository;
 mod gitlab;
 mod http;
+pub mod image_routes;
 mod poller;
 mod provider;
 mod repository;

@@ -41,13 +41,18 @@ describe("GitTabToolbar", () => {
     );
   });
 
-  it("keeps the toggle's slot in list views so the tab strip does not shift", () => {
-    const { container } = renderToolbar({ isListView: true, viewMode: "branches" });
+  it("keeps the toggle on screen but disabled in list views", () => {
+    renderToolbar({ isListView: true, viewMode: "branches" });
 
-    expect(screen.queryByRole("button", { name: /file list/i })).not.toBeInTheDocument();
+    const toggle = screen.getByRole("button", { name: "No file list in this view" });
+    expect(toggle).toBeDisabled();
+    expect(toggle).not.toHaveAttribute("aria-pressed");
     expect(screen.queryByText("+12")).not.toBeInTheDocument();
-    expect(
-      container.querySelector('[data-slot="file-list-toggle-placeholder"]'),
-    ).toBeInTheDocument();
+  });
+
+  it("disables the toggle while the collapse preference is still loading", () => {
+    renderToolbar({ isFileListCollapseLoading: true });
+
+    expect(screen.getByRole("button", { name: "Hide file list" })).toBeDisabled();
   });
 });

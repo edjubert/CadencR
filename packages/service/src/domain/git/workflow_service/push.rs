@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 use crate::app_state::AppState;
 use crate::domain::git::commands;
 use crate::domain::git::commands::SensitiveInput;
-use crate::domain::git::models::{PushBody, PushInputBody, SuccessResponse};
+use crate::domain::git::models::{PushBody, PushForceMode, PushInputBody, SuccessResponse};
 use crate::error::AppError;
 
 use super::streaming::{broadcast_complete, stream_git_operation, GitStreamOp};
@@ -56,14 +56,15 @@ pub async fn push(state: &AppState, body: PushBody) -> Result<SuccessResponse, A
     // Send-once Option dance: the closure is `FnOnce` so it can take ownership
     // of `stdin_rx` directly — no Mutex needed.
     let mut stdin_rx_slot = Some(stdin_rx);
+    let force = body.force;
     let outcome = stream_git_operation(
         state,
         feature_id,
         GitStreamOp::Push,
-        "$ git push -u origin HEAD\n".to_string(),
+        push_header_line(force),
         |output_tx| async move {
             let stdin_rx = stdin_rx_slot.take().expect("run closure invoked once");
-            commands::push_streaming(&repo, output_tx, stdin_rx).await
+            commands::push_streaming(&repo, output_tx, stdin_rx, force).await
         },
     )
     .await;
@@ -91,6 +92,12 @@ pub async fn push(state: &AppState, body: PushBody) -> Result<SuccessResponse, A
     );
 
     Ok(response)
+}
+
+/// Synthetic first line for the dialog's terminal pane. Echoes the exact
+/// argv we hand to git so a forced push is unmistakable in the output.
+fn push_header_line(force: PushForceMode) -> String {
+    format!("$ git {}\n", commands::push_args(force).join(" "))
 }
 
 /// Handler for `POST /api/git/push-input`. Routes the user-typed text into
@@ -178,6 +185,22 @@ async fn ssh_auth_diagnostic() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn push_header_line_echoes_the_force_flag() {
+        assert_eq!(
+            push_header_line(PushForceMode::None),
+            "$ git push -u origin HEAD\n"
+        );
+        assert_eq!(
+            push_header_line(PushForceMode::ForceWithLease),
+            "$ git push -u --force-with-lease origin HEAD\n"
+        );
+        assert_eq!(
+            push_header_line(PushForceMode::Force),
+            "$ git push -u --force origin HEAD\n"
+        );
+    }
 
     #[test]
     fn looks_like_ssh_auth_failure_matches_canonical_strings() {

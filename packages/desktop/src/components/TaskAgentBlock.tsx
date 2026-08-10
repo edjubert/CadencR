@@ -1,24 +1,36 @@
-import { useMemo, useState } from "react";
-import { Loader2Icon, LayersIcon, ArrowDownIcon } from "lucide-react";
-import { type AgentBlockData, buildToolResultMap } from "@/components/AgentBlock";
-import { AgentStreamItem } from "@/components/agent-session/AgentStreamItem";
+import { useMemo, useState, type ReactElement } from "react";
+import { ChevronRightIcon, Loader2Icon, WrenchIcon } from "lucide-react";
+import { type AgentBlockData } from "@/components/AgentBlock";
+import { SubagentActionRow } from "@/components/SubagentActionRow";
+import {
+  isNestedSubagentBlock,
+  selectSubagentActions,
+  windowSubagentActions,
+} from "@/components/subagent-actions";
 import { extractTaskOutput } from "@/lib/tool-adapter";
 import { parseToolArgsObject, stringArg } from "@/lib/tool-args";
 import { useStickToBottom } from "@/hooks/useStickToBottom";
 import { cn } from "@/lib/utils";
 
-/**
- * While a subagent streams it can emit hundreds of tool calls, but only ~20vh
- * is ever visible. Mounting every child as a full AgentBlock tree per frame is
- * the bottleneck, so cap the live view to the most recent N (a "show all"
- * affordance reveals the rest, and a completed task always renders in full).
- */
-const MAX_STREAMING_CHILDREN = 30;
+/** Left inset for child actions under an agent tile, and per nested depth. */
+const CHILD_INDENT_PX = 24;
+/** Stop nesting TaskAgentBlock past this depth (indent and recursion). */
+const MAX_DEPTH = 4;
 
-export function TaskAgentBlock({ block, basePath }: { block: AgentBlockData; basePath?: string }) {
-  // Note: "running" is derived from `!block.taskComplete`, NOT the parent turn's
-  // streaming flag — that flag reflects the parent agent's own tokens, which
-  // pause during tool execution, so it reads false while a subagent streams.
+interface TaskAgentBlockProps {
+  block: AgentBlockData;
+  basePath?: string;
+  /** Nesting depth for left indent (parent stream = 0). */
+  depth?: number;
+}
+
+/**
+ * Task/Agent sub-agent view: only the carrier is a bordered tool tile.
+ * Child actions float underneath with left indent. Nested Task/Agent children
+ * re-enter this component at depth+1 (capped). Expanding reveals the full
+ * timeline (scrollable) and uncapped prose.
+ */
+export function TaskAgentBlock({ block, basePath, depth = 0 }: TaskAgentBlockProps): ReactElement {
   const children = useMemo(() => {
     const persistedOutput = extractTaskOutput(block.toolArgs);
     if (block.childBlocks?.length || !persistedOutput) return block.childBlocks ?? [];
@@ -30,64 +42,81 @@ export function TaskAgentBlock({ block, basePath }: { block: AgentBlockData; bas
       } satisfies AgentBlockData,
     ];
   }, [block.childBlocks, block.id, block.toolArgs]);
-  // A subagent is live until its own `taskComplete` flips (set on turn_complete
-  // and always true for DB-loaded history). This stays reliably true for the
-  // whole subagent run — unlike the parent turn's `isStreaming` — so the
-  // auto-scroll pin and header indicator persist while children stream in.
+
+  const actions = useMemo(() => selectSubagentActions(children), [children]);
   const isRunning = !block.taskComplete;
+  const [expanded, setExpanded] = useState(false);
+  const { visible, hiddenCount } = windowSubagentActions(actions, expanded);
+  const hasActions = actions.length > 0;
+  const description = useMemo(
+    () => stringArg(parseToolArgsObject(block.toolArgs), "description") ?? "Subtask",
+    [block.toolArgs],
+  );
+  const nestOffset = Math.min(depth, MAX_DEPTH) * CHILD_INDENT_PX;
+  const lastVisibleId = visible[visible.length - 1]?.id;
 
-  const [showAllChildren, setShowAllChildren] = useState(false);
-  const visibleChildren = useMemo(() => {
-    if (showAllChildren || !isRunning || children.length <= MAX_STREAMING_CHILDREN) {
-      return children;
-    }
-    return children.slice(-MAX_STREAMING_CHILDREN);
-  }, [children, isRunning, showAllChildren]);
-  const hiddenCount = children.length - visibleChildren.length;
-  const childResultMap = useMemo(() => buildToolResultMap(visibleChildren), [visibleChildren]);
-  // Only the final child is actively receiving chunks while the task runs, so
-  // scope `isStreaming` to it (drives the thinking glow + markdown throttle).
-  const lastChildId = visibleChildren.at(-1)?.id;
-
-  const description = stringArg(parseToolArgsObject(block.toolArgs), "description") ?? "Subtask";
-
-  // Follow the newest event while the subagent runs. Growth is tracked via a
-  // ResizeObserver (so blocks that keep growing after they appear stay pinned),
-  // and only a real user scroll-up parks it — see the hook.
-  const { scrollRef, contentRef, autoScroll, toggle } = useStickToBottom(isRunning);
+  const { scrollRef, contentRef } = useStickToBottom(isRunning && expanded);
 
   return (
-    <div className="my-1 rounded-md border border-border bg-[var(--block-task-bg)] overflow-hidden">
-      <TaskAgentHeader
-        toolName={block.toolName}
-        description={description}
-        isRunning={isRunning}
-        autoScroll={autoScroll}
-        onToggleAutoScroll={toggle}
-      />
-      <div ref={scrollRef} className="px-3 py-2 max-h-[20vh] overflow-y-auto">
-        <div ref={contentRef}>
-          {hiddenCount > 0 && (
-            <button
-              type="button"
-              onClick={() => setShowAllChildren(true)}
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Show {hiddenCount} earlier step{hiddenCount === 1 ? "" : "s"}
-            </button>
-          )}
-          {visibleChildren.map((child) => (
-            <AgentStreamItem
-              key={child.id}
-              block={child}
-              isStreaming={isRunning && child.id === lastChildId}
-              basePath={basePath}
-              toolResultMap={childResultMap}
-              verbosityMode="collapsed"
-            />
-          ))}
-        </div>
+    <div
+      className="my-1 min-w-0"
+      style={nestOffset > 0 ? { marginLeft: nestOffset } : undefined}
+      data-subagent-depth={depth}
+    >
+      <div
+        data-tool-family="task"
+        className="rounded-md border border-border bg-[var(--block-task-bg)]"
+      >
+        <TaskAgentHeader
+          toolName={block.toolName}
+          description={description}
+          isRunning={isRunning}
+          expanded={expanded}
+          canExpand={hasActions}
+          onToggleExpand={() => setExpanded((prev) => !prev)}
+        />
       </div>
+
+      {hasActions && (
+        <div
+          ref={scrollRef}
+          className={cn("min-w-0", expanded && "max-h-[28vh] overflow-y-auto")}
+          style={{ paddingLeft: CHILD_INDENT_PX }}
+        >
+          <div ref={contentRef} className="flex flex-col gap-0 pt-1">
+            {hiddenCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setExpanded(true)}
+                className="py-0.5 text-left text-[11px] text-muted-foreground/80 hover:text-foreground transition-colors"
+              >
+                {hiddenCount} earlier action{hiddenCount === 1 ? "" : "s"}
+              </button>
+            )}
+            {visible.map((child) => {
+              if (isNestedSubagentBlock(child) && depth < MAX_DEPTH) {
+                return (
+                  <TaskAgentBlock
+                    key={child.id}
+                    block={child}
+                    basePath={basePath}
+                    depth={depth + 1}
+                  />
+                );
+              }
+              return (
+                <SubagentActionRow
+                  key={child.id}
+                  block={child}
+                  basePath={basePath}
+                  expanded={expanded}
+                  isStreaming={isRunning && child.id === lastVisibleId}
+                />
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -96,44 +125,44 @@ function TaskAgentHeader({
   toolName,
   description,
   isRunning,
-  autoScroll,
-  onToggleAutoScroll,
+  expanded,
+  canExpand,
+  onToggleExpand,
 }: {
   toolName?: string;
   description: string;
   isRunning: boolean;
-  autoScroll: boolean;
-  onToggleAutoScroll: () => void;
-}) {
+  expanded: boolean;
+  canExpand: boolean;
+  onToggleExpand: () => void;
+}): ReactElement {
+  const name = toolName ?? "Task";
   return (
-    <div className="flex items-center gap-2 px-3 py-2 text-xs border-b border-border">
-      <LayersIcon className="size-3.5 text-muted-foreground shrink-0" />
-      <span className="font-medium text-foreground shrink-0">{toolName}</span>
-      <span className="min-w-0 flex-1 truncate text-muted-foreground text-xs">{description}</span>
+    <button
+      type="button"
+      disabled={!canExpand}
+      onClick={onToggleExpand}
+      aria-expanded={expanded}
+      aria-label={expanded ? "Collapse sub-agent actions" : "Expand sub-agent actions"}
+      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs disabled:cursor-default"
+    >
+      <WrenchIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+      <span className="shrink-0 font-medium text-foreground">{name}</span>
+      <span className="min-w-0 flex-1 truncate text-muted-foreground">{description}</span>
       {isRunning && (
-        <>
-          <button
-            type="button"
-            onClick={onToggleAutoScroll}
-            aria-pressed={autoScroll}
-            aria-label="Auto-scroll"
-            title={
-              autoScroll
-                ? "Auto-scroll: on — following latest"
-                : "Auto-scroll: off — click to follow latest"
-            }
-            className={cn(
-              "shrink-0 rounded p-0.5 transition-colors",
-              autoScroll
-                ? "text-[var(--acc-green)]"
-                : "text-muted-foreground/40 hover:text-muted-foreground",
-            )}
-          >
-            <ArrowDownIcon className="size-3" />
-          </button>
-          <Loader2Icon className="size-3 animate-spin text-muted-foreground shrink-0" />
-        </>
+        <Loader2Icon
+          className="size-3 shrink-0 animate-spin text-muted-foreground"
+          aria-label="Running"
+        />
       )}
-    </div>
+      {canExpand && (
+        <ChevronRightIcon
+          className={cn(
+            "ml-auto size-3 shrink-0 text-muted-foreground transition-transform duration-150 motion-reduce:transition-none",
+            expanded && "rotate-90",
+          )}
+        />
+      )}
+    </button>
   );
 }

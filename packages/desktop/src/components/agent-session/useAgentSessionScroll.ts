@@ -6,7 +6,7 @@ import { isAutoScrollPinSuppressed } from "@/lib/agent-scroll-suppression";
 import { isIos } from "@/lib/is-ios";
 import { subscribeResize } from "@/lib/resize-coordinator";
 import {
-  canScroll,
+  canScrollStream,
   MAX_VIEWPORT_FILL_PAGES,
   PIN_EPSILON_PX,
   pinToBottom,
@@ -184,7 +184,7 @@ function useHistoryLoader(state: ScrollState, anchors: HistoryAnchors) {
     if (!state.hasMoreRef.current || !state.onLoadOlderRef.current) return;
     if (state.viewportFillPagesRef.current >= MAX_VIEWPORT_FILL_PAGES) return;
     const element = state.scrollerElRef.current;
-    if (!element || canScroll(element)) return;
+    if (!element || canScrollStream(element)) return;
     state.viewportFillPagesRef.current += 1;
     requestOlderHistory();
   }, [requestOlderHistory, state]);

@@ -3,6 +3,7 @@ import { Loader2Icon } from "lucide-react";
 import { useGetFeatureWorkingDir } from "@/api/generated";
 import { useAgentCatalog } from "@/api/agentRuntime";
 import { useDebouncedSetting } from "@/hooks/useDebouncedSetting";
+import { toastError } from "@/lib/api-errors";
 import {
   AGENT_SUMMARY_MODE_SETTING_KEY,
   AGENT_VERBOSITY_SETTING_KEY,
@@ -137,6 +138,21 @@ function useAgentSessionMeta(props: AgentSessionProps, base: AgentSessionBase) {
     wsSessionId: props.wsSessionId,
   });
   const profile = props.claudeProfileSelection ?? localProfile;
+  const [isFastModePending, setIsFastModePending] = useState(false);
+  const handleFastModeChange = useCallback(
+    async (enabled: boolean): Promise<void> => {
+      if (!props.onFastModeChange || isFastModePending) return;
+      setIsFastModePending(true);
+      try {
+        await props.onFastModeChange(enabled);
+      } catch (error) {
+        toastError(error, "Could not update fast mode");
+      } finally {
+        setIsFastModePending(false);
+      }
+    },
+    [isFastModePending, props.onFastModeChange],
+  );
   const handleSend = useCallback(
     (message: string, images?: Parameters<AgentSessionProps["onSend"]>[1]) => {
       base.scroll.scrollToBottom();
@@ -167,9 +183,11 @@ function useAgentSessionMeta(props: AgentSessionProps, base: AgentSessionBase) {
     : model.providerOptions.filter((provider) => provider.id === model.activeProviderId);
   return {
     handleSend,
+    handleFastModeChange,
     hasMeta: hasInlineMeta || (hasSecondaryMeta && !isNarrow),
     hasSecondaryMeta,
     isNarrow,
+    isFastModePending,
     model,
     profile,
     showAutoScrollChip,

@@ -16,6 +16,83 @@ async fn test_health_check() {
     assert_eq!(body["status"], "ok");
 }
 
+/// The loopback limiter must remain outside authentication so an untrusted
+/// local page or process cannot create unbounded auth or WebSocket-upgrade
+/// work. Its anonymous allowance must be isolated from valid renderer traffic.
+#[tokio::test]
+async fn loopback_anonymous_flood_does_not_starve_authenticated_requests() {
+    const GENERAL_LIMIT: usize = 6000;
+
+    let server = start_test_server().await;
+    let unauthenticated_client = reqwest::Client::new();
+    let url = format!("{}/api/health", server.base_url);
+
+    for request_number in 1..=GENERAL_LIMIT {
+        let status = unauthenticated_client
+            .get(&url)
+            .send()
+            .await
+            .expect("loopback request")
+            .status();
+        assert_eq!(
+            status, 401,
+            "request {request_number} should reach authentication"
+        );
+    }
+
+    let response = unauthenticated_client
+        .get(url)
+        .send()
+        .await
+        .expect("rate-limited loopback request");
+    assert_eq!(response.status(), 429);
+    assert!(response
+        .headers()
+        .contains_key(reqwest::header::RETRY_AFTER));
+
+    let authenticated_response = server
+        .client
+        .get(format!("{}/api/health", server.base_url))
+        .send()
+        .await
+        .expect("authenticated loopback request");
+    assert_eq!(
+        authenticated_response.status(),
+        200,
+        "anonymous quota exhaustion must not block the renderer"
+    );
+
+    let tokenless_upgrade = apply_ws_upgrade_headers(
+        unauthenticated_client.get(format!("{}/ws", server.base_url)),
+        "http://localhost:1420",
+    )
+    .send()
+    .await
+    .expect("tokenless WebSocket upgrade");
+    assert_eq!(
+        tokenless_upgrade.status(),
+        429,
+        "tokenless upgrades remain bounded by the anonymous quota"
+    );
+
+    let authenticated_upgrade = apply_ws_upgrade_headers(
+        server.client.get(format!("{}/ws", server.base_url)),
+        "http://localhost:1420",
+    )
+    .header(
+        reqwest::header::SEC_WEBSOCKET_PROTOCOL,
+        "cadencr-token.test-token",
+    )
+    .send()
+    .await
+    .expect("authenticated WebSocket upgrade");
+    assert_eq!(
+        authenticated_upgrade.status(),
+        101,
+        "anonymous quota exhaustion must not block the renderer WebSocket"
+    );
+}
+
 /// The OpenAPI count assertion is brittle: every new endpoint forces an
 /// update. Switch to explicit lookups for the workflow-overhaul paths so a
 /// new endpoint never breaks this test, and a removed one is loud.

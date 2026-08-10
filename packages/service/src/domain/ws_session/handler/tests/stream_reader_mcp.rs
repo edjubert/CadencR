@@ -123,6 +123,7 @@ fn make_refreshing_mcp_handle(feature_id: i64) -> SdkHandle {
             permission_mode: None,
             access_mode: None,
             thinking_effort: None,
+            fast_mode: false,
             system_prompt: None,
             allow_bypass_permissions: false,
             claude_profile: None,

@@ -78,6 +78,11 @@ pub trait AgentRuntimeSession: Send + Sync {
     async fn set_thinking_effort(&self, _effort: Option<String>) -> Result<(), RuntimeError> {
         Ok(())
     }
+    async fn set_fast_mode(&self, _enabled: bool) -> Result<(), RuntimeError> {
+        Err(RuntimeError::new(
+            "fast mode changes are not supported by this runtime",
+        ))
+    }
     async fn respond_permission(
         &self,
         _response: RuntimePermissionResponse,
@@ -89,7 +94,8 @@ pub trait AgentRuntimeSession: Send + Sync {
     fn permission_response_kind(&self, _request_id: &str) -> RuntimePermissionResponseKind {
         RuntimePermissionResponseKind::Normal
     }
-    #[allow(dead_code)]
+    /// Pid of the runtime's own process, when it has one. Port attribution
+    /// walks process ancestry from it to find servers the agent started.
     fn pid(&self) -> Option<u32>;
 }
 

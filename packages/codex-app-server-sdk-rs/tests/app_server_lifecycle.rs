@@ -94,17 +94,17 @@ async fn mock_app_server_lifecycle_supports_handshake_model_list_and_requests() 
     let (_temp, path) = write_mock_codex();
     let _override = BinaryOverrideGuard::set(path);
 
-    let client = CodexAppServerClient::spawn_with_options(AppServerSpawnOptions {
-        client_info: AppServerClientInfo {
+    let options = AppServerSpawnOptions::builder()
+        .client_info(AppServerClientInfo {
             name: "cadencr-test".to_string(),
             title: "Cadencr Test".to_string(),
             version: "0.0.0".to_string(),
-        },
-        request_timeout: Some(Duration::from_secs(2)),
-        ..Default::default()
-    })
-    .await
-    .expect("spawn mock app-server");
+        })
+        .request_timeout(Duration::from_secs(2))
+        .build();
+    let client = CodexAppServerClient::spawn_with_options(options)
+        .await
+        .expect("spawn mock app-server");
 
     assert_eq!(client.initialize().await.unwrap()["server"], "ok");
     let models = client.model_list().await.unwrap();
@@ -159,12 +159,12 @@ async fn request_with_timeout_returns_timeout_for_silent_server() {
     let (_temp, path) = write_silent_codex();
     let _override = BinaryOverrideGuard::set(path);
 
-    let client = CodexAppServerClient::spawn_with_options(AppServerSpawnOptions {
-        request_timeout: Some(Duration::from_millis(25)),
-        ..Default::default()
-    })
-    .await
-    .expect("spawn silent mock app-server");
+    let options = AppServerSpawnOptions::builder()
+        .request_timeout(Duration::from_millis(25))
+        .build();
+    let client = CodexAppServerClient::spawn_with_options(options)
+        .await
+        .expect("spawn silent mock app-server");
 
     let error = client
         .request_with_timeout(

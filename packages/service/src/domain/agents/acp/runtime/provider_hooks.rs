@@ -365,6 +365,12 @@ pub trait AcpProviderHooks: Send + Sync {
     /// event emission); both fire on the same notification.
     fn record_tool_call_start(&self, _tool_call_id: &str, _tool_name: &str) {}
 
+    /// Provider opt-in: observe every `tool_call_update` after the canonical
+    /// tool name is known. OpenCode uses this to bind a Task's
+    /// `task_id` / `metadata.sessionId` onto the pending child-session queue
+    /// so HTTP pairing does not rely on FIFO alone.
+    fn observe_tool_call_update(&self, _tool_call_id: &str, _tool_name: &str, _body: &Value) {}
+
     /// Provider opt-in: persist the latest slash-command catalog the
     /// agent pushed via ACP `available_commands_update`, scoped to the
     /// session's `cwd`. The synchronous WS `commands.get` request the

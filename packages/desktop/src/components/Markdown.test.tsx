@@ -1,7 +1,14 @@
+import { StrictMode } from "react";
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@/test-utils";
 import { LinkRoutingContext, type LinkRouting } from "./links/LinkRoutingContext";
 import { Markdown } from "./Markdown";
+
+const words = (count: number): string =>
+  Array.from({ length: count }, (_, i) => `word${i}`).join(" ");
+
+const animatedSpans = (container: HTMLElement): HTMLElement[] =>
+  Array.from(container.querySelectorAll<HTMLElement>("[data-sd-animate]"));
 
 describe("Markdown", () => {
   it("renders plain text content", () => {
@@ -67,6 +74,20 @@ describe("Markdown", () => {
     render(<Markdown content={"1. first\n2. second"} />);
     expect(screen.getByText("first")).toBeInTheDocument();
     expect(screen.getByText("second")).toBeInTheDocument();
+  });
+
+  // `list-style-position: outside` paints the marker to the LEFT of the content
+  // box. Indenting with a margin leaves it outside the element, where the agent
+  // stream's `overflow-x-hidden` scroller clips it — a `9.` fits in the
+  // overhang but a `10.` loses its leading digit, silently. Padding reserves the
+  // space inside the box. jsdom has no layout, so this guards the rule rather
+  // than the pixels.
+  it.each(["ul", "ol"] as const)("indents %s with padding, not margin", (tag) => {
+    const source = tag === "ol" ? "1. first\n2. second" : "- first\n- second";
+    const { container } = render(<Markdown content={source} />);
+    const list = container.querySelector(tag);
+    expect(list?.className).toMatch(/\bps-\[/);
+    expect(list?.className).not.toMatch(/\bm[lsx]-/);
   });
 
   it("renders inline code", () => {
@@ -137,5 +158,72 @@ describe("Markdown", () => {
   it("renders empty content without crashing", () => {
     const { container } = render(<Markdown content="" />);
     expect(container).toBeInTheDocument();
+  });
+
+  describe("streaming reveal animation", () => {
+    // The per-word reveal splits every text node into its own <span>. That is
+    // affordable for the one block currently receiving tokens and ruinous for
+    // the thousands of settled blocks behind it, so the gating is load-bearing
+    // rather than cosmetic. `mode="static"` alone does NOT prevent the split —
+    // only withholding `animated` does.
+    it("splits words into animated spans for the streaming block", () => {
+      const { container } = render(<Markdown content="alpha beta" isStreaming />);
+      const spans = container.querySelectorAll("[data-sd-animate]");
+      expect(spans.length).toBeGreaterThan(0);
+    });
+
+    it("adds no animation spans to settled blocks", () => {
+      const { container } = render(<Markdown content="alpha beta" />);
+      expect(container.querySelectorAll("[data-sd-animate]")).toHaveLength(0);
+      expect(screen.getByText("alpha beta")).toBeInTheDocument();
+    });
+
+    it("adds no animation spans to cached history blocks", () => {
+      const { container } = render(<Markdown content="gamma delta" cacheKey="history-block" />);
+      expect(container.querySelectorAll("[data-sd-animate]")).toHaveLength(0);
+    });
+
+    // Streamdown's stock `stagger` (40ms) delays word N of a re-parse by
+    // `N * 40ms` with `animation-fill-mode: both` — the word is invisible until
+    // then. Measured against the unconfigured component: a 40-word block hides
+    // its tail for 1560ms, an 80-word block for 3160ms, and it keeps scaling
+    // with the message. That is the "text disappears then reappears" and
+    // "animation is too slow" report. See `STREAM_ANIMATION` for why the
+    // bookkeeping that is supposed to exempt already-shown words does not.
+    it("never holds a word behind an animation delay", () => {
+      const { container } = render(<Markdown content={words(60)} isStreaming />);
+      const spans = animatedSpans(container);
+      expect(spans.length).toBeGreaterThan(20);
+      expect(spans.filter((span) => span.style.getPropertyValue("--sd-delay") !== "")).toEqual([]);
+    });
+
+    // A CSS animation replays when its element is created or its animation
+    // properties change. Words already on screen must keep both stable, or the
+    // whole paragraph re-fades on every streamed chunk.
+    it("reuses the spans of already-visible words when more tokens arrive", () => {
+      const { container, rerender } = render(<Markdown content={words(8)} isStreaming />);
+      const firstWord = animatedSpans(container)[0];
+      rerender(<Markdown content={words(24)} isStreaming />);
+
+      const grown = animatedSpans(container);
+      expect(grown).toHaveLength(24);
+      expect(grown[0]).toBe(firstWord);
+      expect(grown.filter((span) => span.style.getPropertyValue("--sd-delay") !== "")).toEqual([]);
+    });
+
+    // The app mounts in `StrictMode`, whose double-invoke consumes the
+    // render-phase bookkeeping Streamdown uses to tell new words from old, so
+    // every word reads as new on every re-parse. With no stagger that is
+    // invisible; with one it is the worst case above.
+    it("stays delay-free under StrictMode's double render", () => {
+      const { container } = render(
+        <StrictMode>
+          <Markdown content={words(60)} isStreaming />
+        </StrictMode>,
+      );
+      const spans = animatedSpans(container);
+      expect(spans.length).toBeGreaterThan(20);
+      expect(spans.filter((span) => span.style.getPropertyValue("--sd-delay") !== "")).toEqual([]);
+    });
   });
 });

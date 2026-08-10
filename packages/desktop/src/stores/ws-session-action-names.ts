@@ -30,6 +30,7 @@ export const SESSION_ACTION = {
   providerSetOk: "provider.set.ok",
   modelSetOk: "model.set.ok",
   effortSetOk: "effort.set.ok",
+  fastModeSetOk: "fast_mode.set.ok",
   profileChanged: "profile.changed",
   compactStarted: "compact.started",
   compactOk: "compact.ok",

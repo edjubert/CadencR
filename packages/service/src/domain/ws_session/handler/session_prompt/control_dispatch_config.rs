@@ -105,6 +105,7 @@ async fn runtime_options(
         cwd,
         model: row.model.clone(),
         thinking_effort: row.thinking_effort.clone(),
+        fast_mode: row.fast_mode,
         permission_mode: Some(
             row.permission_mode
                 .as_deref()
@@ -190,6 +191,7 @@ mod tests {
             output_tokens: None,
             context_window: None,
             thinking_effort: None,
+            fast_mode: false,
         };
 
         let handle = build_pending_handle(&app_state, 1, row).await.unwrap();

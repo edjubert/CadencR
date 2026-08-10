@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use super::config::RuntimeUsage;
+use super::config::{RuntimeTokenUsage, RuntimeUsage};
 use super::event_types::{
     BackgroundAgentSignal, RuntimeAssistantMessage, RuntimeCompactMetadata, RuntimeEvent,
     RuntimeEventKind, RuntimeEventMetadata, RuntimeInitEvent, RuntimeProviderError,
@@ -16,6 +16,8 @@ impl RuntimeEvent {
             kind,
             background_agent: None,
             result_error: None,
+            token_usage: None,
+            provider_message_id: None,
         }
     }
 
@@ -43,6 +45,24 @@ impl RuntimeEvent {
     /// error. `None` for a successful result and every non-result event.
     pub fn result_error(&self) -> Option<&RuntimeResultError> {
         self.result_error.as_ref()
+    }
+
+    pub fn with_token_usage(mut self, usage: Option<RuntimeTokenUsage>) -> Self {
+        self.token_usage = usage.filter(|usage| !usage.is_noop());
+        self
+    }
+
+    pub fn token_usage(&self) -> Option<&RuntimeTokenUsage> {
+        self.token_usage.as_ref()
+    }
+
+    pub fn with_provider_message_id(mut self, message_id: Option<String>) -> Self {
+        self.provider_message_id = message_id;
+        self
+    }
+
+    pub fn provider_message_id(&self) -> Option<&str> {
+        self.provider_message_id.as_deref()
     }
 
     pub fn session_id(&self) -> Option<&str> {
@@ -247,16 +267,25 @@ impl RuntimeEvent {
     }
 
     pub fn prompt_received_event(client_message_id: String) -> Self {
+        Self::prompt_received_event_with_provider_message_id(client_message_id, None)
+    }
+
+    pub fn prompt_received_event_with_provider_message_id(
+        client_message_id: String,
+        provider_message_id: Option<String>,
+    ) -> Self {
         Self::new(
             RuntimeEventMetadata {
                 raw: serde_json::json!({
                     "type": "prompt_received",
                     "client_message_id": client_message_id,
+                    "provider_message_id": provider_message_id.clone(),
                 }),
                 ..RuntimeEventMetadata::default()
             },
             RuntimeEventKind::PromptReceived { client_message_id },
         )
+        .with_provider_message_id(provider_message_id)
     }
 
     /// Convenience constructor for stream-status events. Emitters don't

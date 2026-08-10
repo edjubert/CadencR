@@ -43,9 +43,12 @@ pub use graph::get_commit_graph;
 pub use index::{reset_file, stage_file};
 pub use log::{get_commit_log, get_recent_commits};
 pub use merge::{get_current_branch, get_original_branch};
-pub use merge_ops::{check_merge_conflicts, delete_branch, is_branch_merged, parse_conflict_files};
-pub use pty::{commit_streaming, push_streaming};
+pub use merge_ops::{
+    check_merge_conflicts, force_delete_branch, is_branch_merged, parse_conflict_files,
+};
+pub use pty::{commit_streaming, push_args, push_streaming};
 pub use pty_input::SensitiveInput;
+pub(crate) use stash::commit_diff::untracked_parent as stash_untracked_parent;
 pub use stash::{apply_stash, drop_stash, list_stashes, pop_stash, push_stash};
 pub use worktree_health::{get_worktree_info, is_live_worktree, worktree_path_matches};
 pub use worktree_ops::{

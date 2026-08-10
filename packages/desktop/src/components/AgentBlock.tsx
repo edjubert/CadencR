@@ -338,7 +338,7 @@ const TextBlock = memo(function TextBlock({
 
   return (
     <div className="group/textblock">
-      <Markdown content={displayContent} cacheKey={cacheKey} />
+      <Markdown content={displayContent} cacheKey={cacheKey} isStreaming={isStreaming} />
       <div className="opacity-0 group-hover/textblock:opacity-100 transition-colors">
         <button
           type="button"

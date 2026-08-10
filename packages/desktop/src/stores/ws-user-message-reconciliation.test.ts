@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { AgentBlockData } from "@/components/AgentBlock";
+import { promptImageSrc, resetPromptBlobCacheForTest } from "@/lib/prompt-image-cache";
+import { buildUserMessageContent, parseUserMessageContent } from "@/types/agent-types";
 import {
   canonicalUserMessageBlock,
   mergeCanonicalBlocks,
@@ -20,6 +22,31 @@ function message(overrides: Partial<CanonicalUserMessage> = {}): CanonicalUserMe
 function block(id: string, type: AgentBlockData["type"] = "text"): AgentBlockData {
   return { id, type, content: id };
 }
+
+describe("canonical user-message content budget", () => {
+  afterEach(() => resetPromptBlobCacheForTest());
+
+  // `processSdkMessage` never emits a `user_message`, so this builder is the
+  // only producer on the live path. Without the budget here a just-sent
+  // screenshot prompt stayed inline in the store for the whole session and was
+  // only off-loaded on the next hydration.
+  it("off-loads an image payload the moment the message is echoed back", () => {
+    const text = buildUserMessageContent("look at this", [
+      { base64: "A".repeat(400_000), fileName: "shot.png", kind: "image", mimeType: "image/png" },
+    ]);
+
+    const built = canonicalUserMessageBlock(message({ text }));
+
+    expect(built.content.length).toBeLessThan(1000);
+    const parsed = parseUserMessageContent(built.content);
+    expect(parsed.text).toBe("look at this");
+    expect(promptImageSrc(parsed.images[0])).toMatch(/^blob:/);
+  });
+
+  it("leaves an ordinary text prompt untouched", () => {
+    expect(canonicalUserMessageBlock(message({ text: "just words" })).content).toBe("just words");
+  });
+});
 
 describe("canonical user-message reconciliation", () => {
   it("upserts a repeated canonical event instead of appending a duplicate", () => {

@@ -2,8 +2,13 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@/test-utils";
 import { PROVIDER_IDS } from "@/lib/providers";
+import { parseThinkingEffort } from "@/shared/thinking-effort";
 import { MetaBar, type MetaBarProps } from "./MetaBar";
 import { MODEL_CATALOG_LOADING_LABEL } from "./useAgentSessionModelState";
+
+const THINKING_LOW = parseThinkingEffort("low")!;
+const THINKING_MEDIUM = parseThinkingEffort("medium")!;
+const THINKING_HIGH = parseThinkingEffort("high")!;
 
 const CODEX_ACCESS_MODES = [
   {
@@ -301,6 +306,76 @@ describe("MetaBar mode chip", () => {
     expect(screen.getByRole("button", { name: "Loading model" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: /Permission mode/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /access mode/i })).toBeNull();
+  });
+
+  it("renders fast mode beside the thinking control and toggles it accessibly", async () => {
+    const user = userEvent.setup();
+    const onFastModeChange = vi.fn();
+    renderChip({
+      currentProviderId: PROVIDER_IDS.CODEX_CLI,
+      currentModelId: "gpt-5.6-sol",
+      currentModelLabel: "GPT-5.6 Sol",
+      models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }],
+      onModelChange: vi.fn(),
+      supportedThinkingEfforts: [THINKING_LOW, THINKING_MEDIUM, THINKING_HIGH],
+      currentThinkingEffort: THINKING_MEDIUM,
+      onThinkingEffortChange: vi.fn(),
+      supportsFastMode: true,
+      fastMode: false,
+      onFastModeChange,
+    });
+
+    const thinking = screen.getByRole("button", { name: "Cycle thinking effort" });
+    const toggle = screen.getByRole("button", { name: "Turn fast mode on" });
+    expect(thinking.compareDocumentPosition(toggle)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(toggle).toHaveAttribute("data-state", "off");
+    expect(toggle.className).not.toMatch(/bg-primary|text-primary/);
+    expect(toggle.className).toMatch(/chip-violet-soft/);
+
+    await user.click(toggle);
+    expect(onFastModeChange).toHaveBeenCalledWith(true);
+  });
+
+  it("styles the pressed fast-mode state with charged violet chip tokens", () => {
+    renderChip({
+      currentProviderId: PROVIDER_IDS.CODEX_CLI,
+      currentModelId: "gpt-5.6-sol",
+      currentModelLabel: "GPT-5.6 Sol",
+      models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }],
+      onModelChange: vi.fn(),
+      supportsFastMode: true,
+      fastMode: true,
+      onFastModeChange: vi.fn(),
+    });
+
+    const toggle = screen.getByRole("button", { name: "Turn fast mode off" });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(toggle).toHaveAttribute("data-state", "on");
+    expect(toggle.className).not.toMatch(/bg-primary|text-primary/);
+    expect(toggle.className).toMatch(/chip-violet-bg/);
+    expect(toggle.className).toMatch(/chip-violet-soft/);
+    expect(toggle.className).toMatch(/font-semibold/);
+  });
+
+  it("shows a disabled loader while fast mode is being confirmed", () => {
+    renderChip({
+      currentProviderId: PROVIDER_IDS.CODEX_CLI,
+      currentModelId: "gpt-5.6-sol",
+      currentModelLabel: "GPT-5.6 Sol",
+      models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }],
+      onModelChange: vi.fn(),
+      supportsFastMode: true,
+      fastMode: true,
+      isFastModePending: true,
+      onFastModeChange: vi.fn(),
+    });
+
+    const toggle = screen.getByRole("button", { name: "Turn fast mode off" });
+    expect(toggle).toBeDisabled();
+    expect(toggle).toHaveAttribute("aria-busy", "true");
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(toggle).toHaveAttribute("data-state", "on");
   });
 
   it("places the pre-first-prompt Claude profile selector at the end of the top line", () => {

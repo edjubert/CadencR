@@ -2,14 +2,14 @@ import { memo, useMemo, type ReactElement } from "react";
 
 import { BranchChip } from "@/components/branch-chip/BranchChip";
 import { GitActionPopover, type GitUpdateRecoveryControls } from "./GitActionPopover";
-import type { CommitActivity, GitAction, GitActionState } from "./useGitAction";
+import type { GitAction, GitActionState, GitActivities } from "./useGitAction";
 import { useGitUpdateRecoveryActions } from "./useGitUpdateRecoveryActions";
 
 interface GitActionPopoverContentProps {
   featureId: number;
   projectId: number;
   state: GitActionState;
-  commitActivity?: CommitActivity;
+  activities?: GitActivities;
   onPick: (action: GitAction) => void;
 }
 
@@ -29,11 +29,7 @@ export const GitActionPopoverContent = memo(function GitActionPopoverContent(
 function RecoveryAwareGitActionPopover(props: GitActionPopoverContentProps): ReactElement {
   if (!props.state.recovery) {
     return (
-      <GitActionPopover
-        state={props.state}
-        commitActivity={props.commitActivity}
-        onPick={props.onPick}
-      />
+      <GitActionPopover state={props.state} activities={props.activities} onPick={props.onPick} />
     );
   }
   return <GitActionRecoveryPopover {...props} recovery={props.state.recovery} />;
@@ -42,7 +38,7 @@ function RecoveryAwareGitActionPopover(props: GitActionPopoverContentProps): Rea
 function GitActionRecoveryPopover({
   featureId,
   state,
-  commitActivity,
+  activities,
   onPick,
   recovery,
 }: GitActionPopoverContentProps & {
@@ -65,7 +61,7 @@ function GitActionRecoveryPopover({
   return (
     <GitActionPopover
       state={state}
-      commitActivity={commitActivity}
+      activities={activities}
       onPick={onPick}
       recoveryControls={recoveryControls}
     />

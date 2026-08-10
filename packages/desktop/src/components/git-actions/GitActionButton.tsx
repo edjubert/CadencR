@@ -1,33 +1,27 @@
 import { memo, useCallback, useMemo, useState, type ReactElement } from "react";
-import { CircleAlert, ChevronDown, GitBranch, GitCommit, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
-import { Button } from "@/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { selectGitStatus, useGitStatusStore } from "@/stores/useGitStatusStore";
 import { getCompareUrl, type GitStatusSnapshot } from "@/api/generated";
-import { ShortcutTooltip } from "@/components/ShortcutTooltip";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { toastError } from "@/lib/api-errors";
 import { openExternalUrl } from "@/lib/open-external";
-import { cn } from "@/lib/utils";
 import {
+  isActivityAction,
   useGitAction,
-  type CommitActivity,
   type GitAction,
   type GitActionState,
+  type GitActivities,
+  type GitActivity,
 } from "./useGitAction";
-import { gitActionIcon } from "./GitActionPopover";
 import { useCommitSubmission } from "./useCommitSubmission";
+import { usePushSubmission } from "./usePushSubmission";
 import { useGitUpdatePending } from "./useGitUpdatePending";
 import { GitActionDialogs, type GitActionDialog } from "./GitActionDialogs";
+import { GitActionControls } from "./GitActionControls";
 import { useGitActionShortcuts } from "./useGitActionShortcuts";
-import { GitActionPopoverContent } from "./GitActionPopoverContent";
 import { useStashMutationCoordinator } from "../diff/useStashMutationCoordinator";
 import { selectPrStatus, usePrStatusStore } from "@/stores/usePrStatusStore";
-
-const GIT_ACTION_BUTTON_CLASS =
-  "border-border/80 bg-muted/20 text-xs text-foreground hover:bg-muted/35 disabled:opacity-100 disabled:bg-muted/20 disabled:text-muted-foreground";
 
 interface GitActionButtonProps {
   featureId: number;
@@ -75,6 +69,12 @@ function useGitActionButtonState(featureId: number): {
   );
 }
 
+/** Submitting ⇒ running; a failed run stays discoverable until dismissed. */
+function toActivity(submitting: boolean, outcome: "success" | "error" | null): GitActivity {
+  if (submitting) return "running";
+  return outcome === "error" ? "failed" : null;
+}
+
 export const GitActionButton = memo(function GitActionButton({
   featureId,
   projectId,
@@ -83,31 +83,48 @@ export const GitActionButton = memo(function GitActionButton({
     useGitActionButtonState(featureId);
   const isMobile = useIsMobile();
   const [activeDialog, setActiveDialog] = useState<GitActionDialog>(null);
-  const commitOpen = activeDialog === "commit";
   const handleDialogOpenChange = useCallback((open: boolean) => {
     if (!open) setActiveDialog(null);
   }, []);
+
+  // Both submissions live here, above the dialogs, so closing a dialog
+  // backgrounds its run instead of cancelling it.
   const commitSubmission = useCommitSubmission({
     featureId,
-    open: commitOpen,
+    open: activeDialog === "commit",
     onOpenChange: handleDialogOpenChange,
   });
-  const commitActivity: CommitActivity = commitSubmission.submitting
-    ? "running"
-    : commitSubmission.outcome === "error"
-      ? "failed"
-      : null;
+  const pushSubmission = usePushSubmission({
+    featureId,
+    open: activeDialog === "push",
+    onOpenChange: handleDialogOpenChange,
+  });
+  const activities: GitActivities = useMemo(
+    () => ({
+      commit: toActivity(commitSubmission.submitting, commitSubmission.outcome),
+      push: toActivity(pushSubmission.submitting, pushSubmission.outcome),
+    }),
+    [
+      commitSubmission.outcome,
+      commitSubmission.submitting,
+      pushSubmission.outcome,
+      pushSubmission.submitting,
+    ],
+  );
+
   const [popoverOpen, setPopoverOpen] = useState(false);
   const openCommit = useCallback(() => setActiveDialog("commit"), []);
-  const openPopover = useCallback(() => setPopoverOpen(true), []);
   const openPush = useCallback(() => setActiveDialog("push"), []);
+  const openPopover = useCallback(() => setPopoverOpen(true), []);
   const runOpenCompare = useOpenCompare(featureId, prUrl ?? snapshot?.compare_url);
 
   const runAction = useCallback(
     (action: GitAction) => {
       setPopoverOpen(false);
-      if (action === "commit" && commitActivity) {
-        openCommit();
+      // A backgrounded run always wins: the row means "show me that run",
+      // even when the snapshot would otherwise disable the action.
+      if (isActivityAction(action) && activities[action]) {
+        setActiveDialog(action);
         return;
       }
       if (state.disabled[action] !== null) return;
@@ -121,12 +138,12 @@ export const GitActionButton = memo(function GitActionButton({
       if (action === "pr") void runOpenCompare();
       else setActiveDialog(action);
     },
-    [commitActivity, getStashMutationBlockedReason, state.disabled, openCommit, runOpenCompare],
+    [activities, getStashMutationBlockedReason, state.disabled, runOpenCompare],
   );
 
   useGitActionShortcuts({
     state,
-    commitActivity,
+    activities,
     openCommit,
     openPush,
     openCompare: runOpenCompare,
@@ -140,10 +157,9 @@ export const GitActionButton = memo(function GitActionButton({
         projectId={projectId}
         isMobile={isMobile}
         state={state}
-        commitActivity={commitActivity}
+        activities={activities}
         popoverOpen={popoverOpen}
         onPopoverOpenChange={setPopoverOpen}
-        onOpenCommit={openCommit}
         onAction={runAction}
       />
       <GitActionDialogs
@@ -152,191 +168,9 @@ export const GitActionButton = memo(function GitActionButton({
         snapshot={snapshot}
         updateDisabledReason={state.disabled.update}
         commitSubmission={commitSubmission}
+        pushSubmission={pushSubmission}
         onOpenChange={handleDialogOpenChange}
       />
     </>
   );
 });
-
-interface GitActionControlsProps {
-  featureId: number;
-  projectId: number;
-  isMobile: boolean;
-  state: GitActionState;
-  commitActivity: CommitActivity;
-  popoverOpen: boolean;
-  onPopoverOpenChange: (open: boolean) => void;
-  onOpenCommit: () => void;
-  onAction: (action: GitAction) => void;
-}
-
-function GitActionControls(props: GitActionControlsProps): ReactElement {
-  if (props.isMobile) return <MobileGitActionControl {...props} />;
-  return <DesktopGitActionControl {...props} />;
-}
-
-function MobileGitActionControl({
-  featureId,
-  projectId,
-  state,
-  commitActivity,
-  popoverOpen,
-  onPopoverOpenChange,
-  onOpenCommit,
-  onAction,
-}: GitActionControlsProps): ReactElement {
-  if (commitActivity) {
-    return (
-      <div className="inline-flex items-center">
-        <CommitActivityButton
-          activity={commitActivity}
-          onClick={onOpenCommit}
-          className="rounded-r-none border-r-0"
-        />
-        <Popover open={popoverOpen} onOpenChange={onPopoverOpenChange}>
-          <PopoverTrigger asChild>
-            <Button
-              variant="outline"
-              size="xs"
-              className={`${GIT_ACTION_BUTTON_CLASS} rounded-l-none px-1.5`}
-              aria-label="More git actions"
-            >
-              <ChevronDown className="size-3.5" />
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent align="end" className="w-80 p-0">
-            <GitActionPopoverContent
-              featureId={featureId}
-              projectId={projectId}
-              state={state}
-              commitActivity={commitActivity}
-              onPick={onAction}
-            />
-          </PopoverContent>
-        </Popover>
-      </div>
-    );
-  }
-  return (
-    <Popover open={popoverOpen} onOpenChange={onPopoverOpenChange}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          size="xs"
-          className={GIT_ACTION_BUTTON_CLASS}
-          aria-label="Git actions"
-        >
-          <GitBranch className="size-3.5" />
-          <span>Git</span>
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 p-0">
-        <GitActionPopoverContent
-          featureId={featureId}
-          projectId={projectId}
-          state={state}
-          onPick={onAction}
-        />
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-function DesktopGitActionControl({
-  featureId,
-  projectId,
-  state,
-  commitActivity,
-  popoverOpen,
-  onPopoverOpenChange,
-  onOpenCommit,
-  onAction,
-}: GitActionControlsProps): ReactElement {
-  const primaryAction = commitActivity ? "commit" : state.primary;
-  const PrimaryIcon = state.updatePending
-    ? Loader2
-    : primaryAction
-      ? gitActionIcon(primaryAction)
-      : GitCommit;
-  const primaryDisabled = primaryAction === null;
-  return (
-    <div className="inline-flex items-center">
-      {commitActivity ? (
-        <CommitActivityButton
-          activity={commitActivity}
-          onClick={onOpenCommit}
-          className="rounded-r-none border-r-0"
-        />
-      ) : (
-        <Button
-          variant="outline"
-          size="xs"
-          className={`${GIT_ACTION_BUTTON_CLASS} rounded-r-none border-r-0`}
-          disabled={primaryDisabled}
-          onClick={() => primaryAction && onAction(primaryAction)}
-          title={primaryDisabled ? (state.disabled.commit ?? state.label) : state.label}
-          aria-live="polite"
-        >
-          <PrimaryIcon className={state.updatePending ? "size-3.5 animate-spin" : "size-3.5"} />
-          <span>{state.label}</span>
-        </Button>
-      )}
-      <Popover open={popoverOpen} onOpenChange={onPopoverOpenChange}>
-        <ShortcutTooltip label="Git actions" keys={["cmd", "G"]}>
-          <PopoverTrigger asChild>
-            <Button
-              variant="outline"
-              size="xs"
-              className={`${GIT_ACTION_BUTTON_CLASS} rounded-l-none px-1.5`}
-              aria-label="More git actions"
-            >
-              <ChevronDown className="size-3.5" />
-            </Button>
-          </PopoverTrigger>
-        </ShortcutTooltip>
-        <PopoverContent align="end" className="w-80 p-0">
-          <GitActionPopoverContent
-            featureId={featureId}
-            projectId={projectId}
-            state={state}
-            commitActivity={commitActivity}
-            onPick={onAction}
-          />
-        </PopoverContent>
-      </Popover>
-    </div>
-  );
-}
-
-interface CommitActivityButtonProps {
-  activity: Exclude<CommitActivity, null>;
-  className?: string;
-  onClick: () => void;
-}
-
-function CommitActivityButton({
-  activity,
-  className,
-  onClick,
-}: CommitActivityButtonProps): ReactElement {
-  const running = activity === "running";
-  return (
-    <Button
-      variant="outline"
-      size="xs"
-      className={cn(GIT_ACTION_BUTTON_CLASS, className)}
-      onClick={onClick}
-      aria-live="polite"
-      title={running ? "View commit progress" : "View commit error"}
-    >
-      {running ? (
-        <Loader2 className="size-3.5 animate-spin" />
-      ) : (
-        <CircleAlert className="size-3.5 text-destructive" />
-      )}
-      <span className={running ? undefined : "text-destructive"}>
-        {running ? "Committing" : "Commit failed"}
-      </span>
-    </Button>
-  );
-}

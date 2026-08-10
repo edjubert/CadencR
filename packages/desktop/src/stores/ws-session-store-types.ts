@@ -89,6 +89,7 @@ export interface WsSessionStore {
   setProvider: (sessionId: string, providerId: string) => void;
   setModel: (sessionId: string, modelId: string, providerId: string) => void;
   setThinkingEffort: (sessionId: string, thinkingEffort?: string) => void;
+  setFastMode: (sessionId: string, enabled: boolean) => Promise<void>;
   setProfile: (sessionId: string, profile: string) => void;
   setPermissionMode: (sessionId: string, mode: PermissionMode) => void;
   setAccessMode: (sessionId: string, mode: AccessMode) => void;

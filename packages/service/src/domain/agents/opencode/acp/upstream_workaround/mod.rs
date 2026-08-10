@@ -51,4 +51,6 @@ mod subagent_permission;
 // the adapter's import path is `super::upstream_workaround::{…}` — short,
 // and a grep for `upstream_workaround::` lands directly on every consumer.
 pub(super) use side_channel::spawn_side_channel_listeners;
-pub(super) use subagent_listener::{PendingSubagentTasks, PermissionRegistry};
+pub(super) use subagent_listener::{
+    PendingSubagentState, PendingSubagentTasks, PermissionRegistry,
+};

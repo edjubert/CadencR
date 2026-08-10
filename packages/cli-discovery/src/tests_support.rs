@@ -19,11 +19,10 @@ pub(crate) fn make_executable_with_body(dir: &Path, name: &str, body: &str) -> P
 }
 
 pub(crate) fn dummy_spec() -> DiscoverySpec {
-    DiscoverySpec {
-        bin_name: "thing",
-        well_known_relative_to_home: vec![".thing/local"],
-        well_known_absolute: vec![],
-        version_args: &["--version"],
-        version_must_contain: None,
-    }
+    DiscoverySpec::builder()
+        .bin_name("thing")
+        .well_known_relative_to_home(vec![".thing/local"])
+        .well_known_absolute(Vec::new())
+        .version_args(&["--version"])
+        .build()
 }

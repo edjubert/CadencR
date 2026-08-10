@@ -44,12 +44,20 @@ pub enum AppServerEvent {
 }
 
 #[derive(Debug, Clone)]
+pub struct CodexServiceTier {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct CodexModel {
     pub id: String,
     pub label: String,
     pub description: Option<String>,
     pub supported_efforts: Vec<String>,
     pub default_effort: Option<String>,
+    pub service_tiers: Vec<CodexServiceTier>,
     pub context_window: Option<u64>,
     pub is_default: bool,
 }

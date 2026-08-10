@@ -1,0 +1,22 @@
+/*
+ * Rendering-cost utilities for the agent conversation, which holds the heaviest
+ * content in the app and has to stay responsive on low-end CPUs.
+ */
+
+/**
+ * Skip layout, style and paint for subtrees the user cannot see.
+ *
+ * `contain-intrinsic-size: auto <fallback>` is the load-bearing part: `auto`
+ * makes the browser remember the element's last rendered size and reuse it
+ * while skipped, so a subtree that scrolls out and back in does not change
+ * height. A placeholder that resolves to different content is exactly what
+ * makes a virtualized scroll position jump.
+ *
+ * Callers set `--cadencr-intrinsic-height` for the very first paint, before
+ * there is a remembered size. Unsupported browsers ignore both declarations and
+ * render eagerly, which is the correct fallback.
+ */
+@utility deferred-paint {
+  content-visibility: auto;
+  contain-intrinsic-size: auto var(--cadencr-intrinsic-height, 320px);
+}

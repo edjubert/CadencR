@@ -10,7 +10,7 @@ import { useStreamingMarkdownThrottle } from "@/hooks/useStreamingMarkdownThrott
  * used as a one-line preview next to the "Thinking" label when collapsed.
  * Matches only up to the first newline so the cost stays constant regardless of
  * how long the accumulated reasoning grows. */
-function thinkingPreview(content: string): string {
+export function thinkingPreview(content: string): string {
   const firstLine = /^[^\n]*\S[^\n]*/m.exec(content)?.[0] ?? "";
   return firstLine.trim().replace(/^(?:#+|[-*>]|\d+\.)\s+/, "");
 }
@@ -88,6 +88,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({
           <Markdown
             content={displayContent}
             cacheKey={cacheKey}
+            isStreaming={isStreaming}
             className="text-xs text-muted-foreground"
           />
         </div>

@@ -24,7 +24,7 @@ use super::session_permissions::{
     is_plan_approval_request_id, permission_kind_for_request_id, take_pending,
 };
 use super::timeouts::with_probe_timeout;
-use super::turn_start::turn_start_params;
+use super::turn_start::{turn_start_params, TurnStartOptions};
 use crate::domain::agents::adapter::{
     AgentRuntimeSession, RuntimeAccessMode, RuntimeError, RuntimeEvent, RuntimeMcpServerStatus,
     RuntimeMessageRx, RuntimePermissionMode, RuntimePermissionResponse,
@@ -39,6 +39,7 @@ pub(super) struct CodexSession {
     last_root_turn_id: Arc<RwLock<Option<String>>>,
     model: Arc<RwLock<Option<String>>>,
     effort: Arc<RwLock<Option<String>>>,
+    fast_mode: Arc<AtomicBool>,
     permission_mode: Arc<RwLock<Option<RuntimePermissionMode>>>,
     access_mode: Arc<RwLock<Option<RuntimeAccessMode>>>,
     cwd: PathBuf,
@@ -53,18 +54,23 @@ pub(super) struct CodexSession {
     context_window: Option<u64>,
 }
 
+pub(super) struct CodexSessionOptions {
+    pub(super) model: Option<String>,
+    pub(super) effort: Option<String>,
+    pub(super) fast_mode: bool,
+    pub(super) permission_mode: Option<RuntimePermissionMode>,
+    pub(super) access_mode: Option<RuntimeAccessMode>,
+    pub(super) cwd: PathBuf,
+    pub(super) mcp_servers: Vec<RuntimeMcpServerStatus>,
+    pub(super) context_window: Option<u64>,
+}
+
 impl CodexSession {
     pub(super) fn new(
         client: CodexAppServerClient,
         thread_id: String,
-        model: Option<String>,
-        effort: Option<String>,
-        permission_mode: Option<RuntimePermissionMode>,
-        access_mode: Option<RuntimeAccessMode>,
-        cwd: PathBuf,
         event_rx: broadcast::Receiver<AppServerEvent>,
-        mcp_servers: Vec<RuntimeMcpServerStatus>,
-        context_window: Option<u64>,
+        options: CodexSessionOptions,
     ) -> Self {
         let (local_tx, local_rx) = mpsc::unbounded_channel();
         Self {
@@ -72,11 +78,12 @@ impl CodexSession {
             thread_id,
             active_turn_id: Arc::new(RwLock::new(None)),
             last_root_turn_id: Arc::new(RwLock::new(None)),
-            model: Arc::new(RwLock::new(model)),
-            effort: Arc::new(RwLock::new(effort)),
-            permission_mode: Arc::new(RwLock::new(permission_mode)),
-            access_mode: Arc::new(RwLock::new(access_mode)),
-            cwd,
+            model: Arc::new(RwLock::new(options.model)),
+            effort: Arc::new(RwLock::new(options.effort)),
+            fast_mode: Arc::new(AtomicBool::new(options.fast_mode)),
+            permission_mode: Arc::new(RwLock::new(options.permission_mode)),
+            access_mode: Arc::new(RwLock::new(options.access_mode)),
+            cwd: options.cwd,
             event_rx: Some(event_rx),
             local_rx: Some(local_rx),
             local_tx,
@@ -84,8 +91,8 @@ impl CodexSession {
             pending_prompt_receipts: Arc::new(PendingPromptReceipts::default()),
             temp_files: Arc::new(Mutex::new(Vec::new())),
             closing: Arc::new(AtomicBool::new(false)),
-            mcp_servers: Arc::new(RwLock::new(mcp_servers)),
-            context_window,
+            mcp_servers: Arc::new(RwLock::new(options.mcp_servers)),
+            context_window: options.context_window,
         }
     }
 
@@ -111,16 +118,20 @@ impl CodexSession {
     ) -> Result<(), RuntimeError> {
         let model = self.model.read().await.clone();
         let effort = self.effort.read().await.clone();
+        let fast_mode = self.fast_mode.load(Ordering::Relaxed);
         let permission_mode = self.permission_mode.read().await.clone();
         let access_mode = self.access_mode.read().await.clone();
         let mut params = turn_start_params(
             &self.thread_id,
             input,
-            &self.cwd,
-            permission_mode.as_ref(),
-            access_mode.as_ref(),
-            model,
-            effort,
+            TurnStartOptions {
+                cwd: &self.cwd,
+                permission_mode: permission_mode.as_ref(),
+                access_mode: access_mode.as_ref(),
+                model,
+                effort,
+                fast_mode,
+            },
         );
         if let Some(client_message_id) = client_message_id {
             params["clientUserMessageId"] = Value::String(client_message_id.to_string());
@@ -300,6 +311,11 @@ impl AgentRuntimeSession for CodexSession {
 
     async fn set_thinking_effort(&self, effort: Option<String>) -> Result<(), RuntimeError> {
         *self.effort.write().await = effort;
+        Ok(())
+    }
+
+    async fn set_fast_mode(&self, enabled: bool) -> Result<(), RuntimeError> {
+        self.fast_mode.store(enabled, Ordering::Relaxed);
         Ok(())
     }
 

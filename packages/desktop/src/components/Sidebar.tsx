@@ -16,13 +16,14 @@ import { ProjectTree } from "@/components/ProjectTree";
 import { SidebarPinnedConversations } from "@/components/SidebarPinnedConversations";
 import { AppEnvironmentBadge } from "@/components/AppEnvironmentBadge";
 import { CadencrLogo } from "@/components/CadencrLogo";
+import { SchedulesSidebarLink } from "@/components/SchedulesSidebarLink";
 import { UnifiedAgentsSidebarLink } from "@/components/UnifiedAgentsSidebarLink";
 import { ConnectionStatusIndicator } from "@/components/ConnectionStatusIndicator";
 import { InternetStatusIndicator } from "@/components/InternetStatusIndicator";
 import { SidebarUpdateButton } from "@/components/SidebarUpdateButton";
 import { SidebarPushButton } from "@/components/SidebarPushButton";
 import { RemoteAccessButton } from "@/components/remote/RemoteAccessButton";
-import { APP_ENVIRONMENT_KIND } from "@/lib/app-environment";
+import { APP_ENVIRONMENT } from "@/lib/app-environment";
 import { getActiveFocusZone } from "@/lib/focus-zones";
 import { APP_VERSION } from "@/lib/app-version";
 import { SIDEBAR_FOOTER_PILL_CLASS } from "@/lib/changelog";
@@ -65,12 +66,12 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
         <div className="mb-2 shrink-0 px-1">
           <SidebarSearchButton onSearch={onSearch} />
         </div>
-        {/* The unified agents grid is desktop-only — hide its entry on phones. */}
-        {!isMobile && (
-          <div className="mb-2 shrink-0 px-1">
-            <UnifiedAgentsSidebarLink />
-          </div>
-        )}
+        {/* The unified agents grid is desktop-only — hide its entry on phones.
+            Schedules is a plain list, so it works everywhere. */}
+        <div className="mb-2 flex shrink-0 flex-col gap-0.5 px-1">
+          {!isMobile && <UnifiedAgentsSidebarLink />}
+          <SchedulesSidebarLink />
+        </div>
         <SidebarPinnedConversations
           activeFeatureId={effectiveFeatureId}
           onSelectFeature={setSelectedFeatureId}
@@ -177,6 +178,8 @@ function useSidebarKeyboardNavigation(
         focused.click();
       } else if (type === "agents") {
         void navigate({ to: "/agents" });
+      } else if (type === "schedules") {
+        void navigate({ to: "/schedules" });
       }
     },
     { enableOnFormTags: false, enableOnContentEditable: false },
@@ -254,7 +257,7 @@ function SidebarHeader({ onCollapse }: { onCollapse: () => void }): ReactElement
         <span className="font-brand text-xl font-extrabold uppercase tracking-widest leading-none">
           Cadencr
         </span>
-        <AppEnvironmentBadge className="ml-2 -translate-y-2" kind={APP_ENVIRONMENT_KIND} />
+        <AppEnvironmentBadge className="ml-2 -translate-y-2" environment={APP_ENVIRONMENT} />
         <div className="absolute right-4 inset-y-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
           <Button
             variant="ghost"

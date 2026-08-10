@@ -13,21 +13,6 @@ import { CollapsibleSection } from "@/components/ui/collapsible-section";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
-export function AuthorInitials({ name }: { name: string }): ReactElement {
-  const initials =
-    name
-      .split(/\s+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((part) => part[0]?.toUpperCase())
-      .join("") || "?";
-  return (
-    <span className="grid size-5 shrink-0 place-items-center rounded-full bg-muted text-[10px] font-semibold text-foreground">
-      {initials}
-    </span>
-  );
-}
-
 export function relativeTime(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;

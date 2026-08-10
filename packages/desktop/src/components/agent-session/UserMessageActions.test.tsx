@@ -1,11 +1,12 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 
 const rewindToMessage = vi.fn();
 const forkFromMessage = vi.fn();
 const sendPrompt = vi.fn();
 const copyAs = vi.fn();
+const toastError = vi.fn();
 
 vi.mock("@/stores/ws-session-store", () => ({
   useWsSessionStore: (selector: (s: unknown) => unknown) =>
@@ -14,6 +15,10 @@ vi.mock("@/stores/ws-session-store", () => ({
 vi.mock("@/lib/markdown-export", () => ({
   copyAs: (...args: unknown[]) => copyAs(...args),
 }));
+vi.mock("sonner", () => ({
+  toast: { error: (...args: unknown[]) => toastError(...args) },
+}));
+import { extractPromptBlobs, resetPromptBlobCacheForTest } from "@/lib/prompt-image-cache";
 import type { AgentBlockData } from "../AgentBlock";
 import { AgentSessionProvider } from "./agent-session-context";
 import { UserMessageActions } from "./UserMessageActions";
@@ -34,7 +39,9 @@ describe("UserMessageActions", () => {
     forkFromMessage.mockClear();
     sendPrompt.mockClear();
     copyAs.mockClear();
+    toastError.mockClear();
   });
+  afterEach(() => resetPromptBlobCacheForTest());
 
   it("copies the message as markdown", async () => {
     renderActions(persisted);
@@ -129,6 +136,62 @@ describe("UserMessageActions", () => {
     const retry = screen.getByRole("button", { name: /retry/i });
     expect(retry).toBeDisabled();
     await userEvent.click(retry);
+    expect(sendPrompt).not.toHaveBeenCalled();
+  });
+
+  it("rebuilds an off-loaded payload from the blob cache", async () => {
+    const stashed = extractPromptBlobs(
+      JSON.stringify([
+        { type: "text", text: "inspect" },
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "aW1hZ2U=" } },
+      ]),
+    );
+    renderActions({
+      ...persisted,
+      content: stashed,
+      messageUuid: "a48cc11a-8a72-47f7-8577-d5c533d7909c",
+      promptDeliveryState: "delivery_unknown",
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /retry/i }));
+
+    await waitFor(() =>
+      expect(sendPrompt).toHaveBeenCalledWith("ws-feature-1", "inspect", {
+        messageUuid: "a48cc11a-8a72-47f7-8577-d5c533d7909c",
+        attachments: [
+          { base64: "aW1hZ2U=", fileName: "image", kind: "image", mimeType: "image/png" },
+        ],
+      }),
+    );
+  });
+
+  // Re-sending the prompt with its screenshot quietly missing is worse than not
+  // re-sending it: the agent would answer a question about an image it can't see.
+  it("reports the failure instead of resending a message without its evicted image", async () => {
+    const stashed = extractPromptBlobs(
+      JSON.stringify([
+        { type: "text", text: "inspect" },
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "aW1hZ2U=" } },
+      ]),
+    );
+    resetPromptBlobCacheForTest();
+    renderActions({
+      ...persisted,
+      content: stashed,
+      messageUuid: "a48cc11a-8a72-47f7-8577-d5c533d7909c",
+      promptDeliveryState: "delivery_unknown",
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /retry/i }));
+
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith(
+        "Couldn't resend this message",
+        expect.objectContaining({
+          description: expect.stringContaining("no longer held in memory"),
+        }),
+      ),
+    );
     expect(sendPrompt).not.toHaveBeenCalled();
   });
 });

@@ -1,0 +1,1 @@
+ALTER TABLE agent_sessions ADD COLUMN fast_mode INTEGER NOT NULL DEFAULT 0;

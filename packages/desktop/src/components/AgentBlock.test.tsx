@@ -104,6 +104,10 @@ describe("AgentBlock", () => {
               output: "task_id: ses_123\n\n<task_result>\nTop finding\n</task_result>",
             }),
             childBlocks: [],
+            // DB-loaded subagents are always complete (`serverBlocksToAgentBlocks`
+            // sets this). Without it the block reads as still running, and its
+            // last child renders as the live streaming block.
+            taskComplete: true,
           })}
         />,
       );

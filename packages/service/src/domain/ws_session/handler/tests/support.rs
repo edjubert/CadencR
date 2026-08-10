@@ -221,7 +221,8 @@ pub(crate) async fn make_test_app_state() -> AppState {
                 input_tokens INTEGER NOT NULL DEFAULT 0,
                 output_tokens INTEGER NOT NULL DEFAULT 0,
                 context_window INTEGER NOT NULL DEFAULT 200000,
-                thinking_effort TEXT
+                thinking_effort TEXT,
+                fast_mode INTEGER NOT NULL DEFAULT 0
             )"#,
     )
     .execute(&pool)
@@ -412,6 +413,7 @@ pub(crate) fn make_active_handle(feature_id: i64, session_id: Option<String>) ->
             permission_mode: None,
             access_mode: None,
             thinking_effort: None,
+            fast_mode: false,
             system_prompt: None,
             allow_bypass_permissions: false,
             claude_profile: None,
@@ -449,6 +451,7 @@ pub(crate) fn make_in_place_effort_handle(feature_id: i64) -> SdkHandle {
             permission_mode: None,
             access_mode: None,
             thinking_effort: None,
+            fast_mode: false,
             system_prompt: None,
             allow_bypass_permissions: false,
             claude_profile: None,

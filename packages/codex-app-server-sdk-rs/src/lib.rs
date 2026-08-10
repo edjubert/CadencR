@@ -14,6 +14,6 @@ pub use discovery::{codex_discovery_spec, set_binary_override};
 pub use error::SdkError;
 pub use types::{
     AppServerClientInfo, AppServerEvent, CodexCommand, CodexCommandKind, CodexMcpServerStatus,
-    CodexModel, ThreadHandle, ThreadSnapshot, ThreadTurn, TurnHandle,
+    CodexModel, CodexServiceTier, ThreadHandle, ThreadSnapshot, ThreadTurn, TurnHandle,
     CONTEXT_USAGE_BASELINE_TOKENS,
 };

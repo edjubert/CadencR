@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@/test-utils";
-import type { Feature, PrStatusSnapshot } from "@/api/generated";
+import type { AllocatedPort, Feature, PrStatusSnapshot } from "@/api/generated";
 import { FeatureRowMetaLine } from "./ProjectFeatureRowParts";
 
 function feature(overrides: Partial<Feature> = {}): Feature {
@@ -30,7 +30,17 @@ function snapshot(overrides: Partial<PrStatusSnapshot> = {}): PrStatusSnapshot {
   };
 }
 
-function renderLine(prStatus: PrStatusSnapshot | undefined) {
+function port(overrides: Partial<AllocatedPort> = {}): AllocatedPort {
+  return {
+    port: 3000,
+    pid: 999,
+    process: "node",
+    source: "agent",
+    ...overrides,
+  };
+}
+
+function renderLine(prStatus: PrStatusSnapshot | undefined, ports: readonly AllocatedPort[] = []) {
   return render(
     <FeatureRowMetaLine
       feature={feature()}
@@ -38,6 +48,7 @@ function renderLine(prStatus: PrStatusSnapshot | undefined) {
       gitStats={undefined}
       shellCount={0}
       browserCount={0}
+      ports={ports}
       isEditingLabel={false}
       labelDraft=""
       labelSuggestions={[]}
@@ -45,6 +56,7 @@ function renderLine(prStatus: PrStatusSnapshot | undefined) {
       onLabelDraftChange={vi.fn()}
       onSaveLabel={vi.fn()}
       onCancelLabelEdit={vi.fn()}
+      onOpenPort={vi.fn()}
     />,
   );
 }
@@ -67,5 +79,19 @@ describe("FeatureRowMetaLine", () => {
     renderLine(snapshot());
 
     expect(document.querySelector("[data-feature-meta-line]")).toBeNull();
+  });
+
+  it("mounts for an allocated port even when the row has nothing else to show", () => {
+    renderLine(undefined, [port()]);
+
+    expect(document.querySelector("[data-feature-meta-line]")).not.toBeNull();
+    expect(screen.getByLabelText("Port 3000 in use")).toBeInTheDocument();
+  });
+
+  it("summarises several ports on one badge", () => {
+    renderLine(undefined, [port(), port({ port: 5173, pid: 1000 })]);
+
+    expect(screen.getByLabelText("Ports 3000, 5173 in use")).toBeInTheDocument();
+    expect(screen.getByText("+1")).toBeInTheDocument();
   });
 });

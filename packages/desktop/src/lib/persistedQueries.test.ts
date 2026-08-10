@@ -34,6 +34,10 @@ describe("persistedQueries", () => {
     expect(shouldDehydrateQuery(makeQuery("/api/features/1076/agent-state?after=foo"))).toBe(false);
   });
 
+  it("does NOT persist allocated ports (a restored scan would list dead servers)", () => {
+    expect(shouldDehydrateQuery(makeQuery("/api/features/ports"))).toBe(false);
+  });
+
   it("does NOT persist git endpoints (volatile)", () => {
     expect(shouldDehydrateQuery(makeQuery("/api/git/diff"))).toBe(false);
     expect(shouldDehydrateQuery(makeQuery("/api/git/branch"))).toBe(false);

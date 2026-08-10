@@ -316,6 +316,7 @@ fn build_spawn_config(provider_id: &str, model_id: &str, cwd: &str) -> RuntimeSp
         access_mode: None,
         model: Some(model_id.to_string()),
         thinking_effort: None,
+        fast_mode: false,
         system_prompt: Some(AUTO_NAME_SYSTEM_PROMPT.to_string()),
         resume_session_id: None,
         allow_bypass_permissions: false,

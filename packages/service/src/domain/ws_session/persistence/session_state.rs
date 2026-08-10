@@ -136,6 +136,19 @@ impl WsSessionPersistence {
         }
     }
 
+    pub async fn update_fast_mode_static(
+        pool: &SqlitePool,
+        session_id: i64,
+        enabled: bool,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE agent_sessions SET fast_mode = ? WHERE id = ?")
+            .bind(enabled)
+            .bind(session_id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn update_token_usage(
         pool: &SqlitePool,
         session_id: i64,
@@ -235,7 +248,8 @@ mod session_state_tests {
                 context_window INTEGER,
                 started_at TEXT,
                 ended_at TEXT,
-                thinking_effort TEXT
+                thinking_effort TEXT,
+                fast_mode INTEGER NOT NULL DEFAULT 0
             )"#,
         )
         .execute(&pool)
@@ -384,6 +398,24 @@ mod session_state_tests {
                 .await
                 .unwrap();
         assert!(row.0.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_update_fast_mode_static() {
+        let pool = setup_test_db().await;
+        let mut p = WsSessionPersistence::new(pool.clone(), 1);
+        let id = p.find_or_create_session(None, None).await.unwrap();
+
+        WsSessionPersistence::update_fast_mode_static(&pool, id, true)
+            .await
+            .unwrap();
+        let enabled: bool = sqlx::query_scalar("SELECT fast_mode FROM agent_sessions WHERE id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        assert!(enabled);
     }
 
     #[tokio::test]

@@ -23,6 +23,11 @@ function PaneAgentHarness({ onFire }: { onFire: () => void }): ReactElement {
   return <div data-testid="pane-agent-harness" tabIndex={0} />;
 }
 
+function ReferencedWorktreeHarness({ onFire }: { onFire: () => void }): ReactElement {
+  useShortcut("agent-use-referenced-worktree", onFire);
+  return <div data-testid="referenced-worktree-harness" tabIndex={0} />;
+}
+
 function ZoomResetHarness({ onFire }: { onFire: () => void }): ReactElement {
   useShortcut("zoom-reset", onFire);
   return <div data-testid="zoom-reset-harness" tabIndex={0} />;
@@ -98,6 +103,34 @@ describe("useShortcut", () => {
       metaKey: true,
       shiftKey: true,
       code: "KeyQ",
+    });
+
+    expect(onFire).toHaveBeenCalledTimes(1);
+  });
+
+  it("fires the referenced-worktree shortcut on QWERTY", () => {
+    const onFire = vi.fn();
+    render(<ReferencedWorktreeHarness onFire={onFire} />);
+
+    fireEvent.keyDown(document.body, {
+      key: "W",
+      metaKey: true,
+      shiftKey: true,
+      code: "KeyW",
+    });
+
+    expect(onFire).toHaveBeenCalledTimes(1);
+  });
+
+  it("fires the referenced-worktree shortcut on the labelled W key for AZERTY layouts", () => {
+    const onFire = vi.fn();
+    render(<ReferencedWorktreeHarness onFire={onFire} />);
+
+    fireEvent.keyDown(document.body, {
+      key: "W",
+      metaKey: true,
+      shiftKey: true,
+      code: "KeyZ",
     });
 
     expect(onFire).toHaveBeenCalledTimes(1);

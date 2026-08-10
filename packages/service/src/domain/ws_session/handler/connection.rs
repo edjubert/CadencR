@@ -1,6 +1,4 @@
-//! WebSocket upgrade + per-connection inbound/outbound loop. Hands every
-//! parsed envelope to [`super::dispatch::dispatch_envelope`] and sweeps
-//! per-connection state on disconnect.
+//! WebSocket upgrade + per-connection loop, dispatch, and disconnect cleanup.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -11,9 +9,9 @@ use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use futures::StreamExt;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio::time::Instant;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::api::middleware::authenticate_ws;
 use crate::app_state::AppState;
@@ -23,8 +21,19 @@ use crate::remote::RemoteContext;
 use super::dispatch::dispatch_envelope;
 use super::types::{QueryState, SdkSessions};
 
-const OUTBOUND_SOCKET_CAPACITY: usize = 256;
+mod outbound;
+
+use outbound::{
+    retryable_error_shutdown, retryable_shutdown, spawn_outbound_bridge, spawn_socket_sender,
+    OutboundBridgeExit, OUTBOUND_SOCKET_CAPACITY, OUTBOUND_SOCKET_SEND_TIMEOUT,
+    RETRY_CLOSE_SEND_TIMEOUT,
+};
+
 const MAX_INBOUND_MESSAGES_PER_SECOND: u16 = 120;
+const INBOUND_RATE_RETRY_AFTER_MS: u64 = 5_000;
+const GRACEFUL_CLOSE_SEND_TIMEOUT: Duration =
+    Duration::from_secs(RETRY_CLOSE_SEND_TIMEOUT.as_secs() + 1);
+const GRACEFUL_CLOSE_ECHO_TIMEOUT: Duration = Duration::from_secs(1);
 
 struct InboundRateLimit {
     window_started: Instant,
@@ -49,27 +58,26 @@ impl InboundRateLimit {
     }
 }
 
-/// Keep the widely-shared unbounded sender API behind a bounded socket queue.
-/// If a peer cannot drain that queue, close the connection so its next
-/// reconnect gets authoritative snapshots instead of letting host memory grow.
-fn spawn_outbound_bridge(
-    mut outbound_rx: mpsc::UnboundedReceiver<Message>,
-    socket_tx: mpsc::Sender<Message>,
-) -> (tokio::task::JoinHandle<()>, oneshot::Receiver<()>) {
-    let (overflow_tx, overflow_rx) = oneshot::channel();
-    let task = tokio::spawn(async move {
-        while let Some(message) = outbound_rx.recv().await {
-            match socket_tx.try_send(message) {
-                Ok(()) => {}
-                Err(mpsc::error::TrySendError::Full(_)) => {
-                    let _ = overflow_tx.send(());
-                    return;
-                }
-                Err(mpsc::error::TrySendError::Closed(_)) => return,
+async fn finish_graceful_close(
+    send_task: &mut tokio::task::JoinHandle<()>,
+    ws_stream: &mut futures::stream::SplitStream<WebSocket>,
+) {
+    if !matches!(
+        tokio::time::timeout(GRACEFUL_CLOSE_SEND_TIMEOUT, send_task).await,
+        Ok(Ok(()))
+    ) {
+        return;
+    }
+    // Wait for the close echo; dropping immediately produces code 1006.
+    let _ = tokio::time::timeout(GRACEFUL_CLOSE_ECHO_TIMEOUT, async {
+        while let Some(message) = ws_stream.next().await {
+            match message {
+                Ok(Message::Close(_)) | Err(_) => break,
+                Ok(_) => {}
             }
         }
-    });
-    (task, overflow_rx)
+    })
+    .await;
 }
 
 pub async fn ws_handler(
@@ -131,23 +139,19 @@ fn record_remote_connect(state: &AppState, device_id: i64) {
 
 /// Runs the WebSocket connection loop after upgrade.
 async fn handle_connection(socket: WebSocket, state: AppState) {
-    let (mut ws_sink, mut ws_stream) = socket.split();
+    let (ws_sink, mut ws_stream) = socket.split();
     let (outbound_tx, outbound_rx) = mpsc::unbounded_channel::<Message>();
-    let (socket_tx, mut socket_rx) = mpsc::channel::<Message>(OUTBOUND_SOCKET_CAPACITY);
-    let (bridge_task, mut overflow_rx) = spawn_outbound_bridge(outbound_rx, socket_tx);
+    let (socket_tx, socket_rx) = mpsc::channel::<Message>(OUTBOUND_SOCKET_CAPACITY);
+    let (bridge_task, mut bridge_exit_rx) = spawn_outbound_bridge(outbound_rx, socket_tx);
     let sdk_sessions: SdkSessions = std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
     let mut inbound_rate = InboundRateLimit::new();
+    let mut graceful_close_requested = false;
 
-    // Spawn outbound forwarder: reads from the bounded queue, writes to the sink.
-    // Exits when either the channel is dropped or the sink fails (peer gone).
-    let mut send_task = tokio::spawn(async move {
-        use futures::SinkExt;
-        while let Some(msg) = socket_rx.recv().await {
-            if ws_sink.send(msg).await.is_err() {
-                break;
-            }
-        }
-    });
+    // A separate priority channel lets overload shutdown bypass the full data
+    // queue and cancel an in-progress normal `send`. The framed socket may
+    // still need to flush bytes it already accepted before it can enqueue the
+    // close, so graceful teardown gives that bounded flush time to recover.
+    let (mut send_task, close_tx) = spawn_socket_sender(ws_sink, socket_rx);
 
     // Inbound loop: read messages from client. We `select!` against the
     // outbound task so a half-open TCP socket (e.g. laptop sleep, Wi-Fi
@@ -163,26 +167,53 @@ async fn handle_connection(socket: WebSocket, state: AppState) {
                 debug!("ws_sink closed; ending inbound loop");
                 break;
             }
-            _ = &mut overflow_rx => {
-                debug!("WebSocket outbound queue overflowed; closing for snapshot resync");
+            bridge_exit = &mut bridge_exit_rx => {
+                match bridge_exit {
+                    Ok(OutboundBridgeExit::SendTimeout) => {
+                        warn!(
+                            capacity = OUTBOUND_SOCKET_CAPACITY,
+                            timeout_ms = OUTBOUND_SOCKET_SEND_TIMEOUT.as_millis(),
+                            "WebSocket peer did not drain the outbound queue before timeout"
+                        );
+                        if close_tx.send(retryable_shutdown("overloaded")).await.is_err() {
+                            debug!("WebSocket sender closed before overload close could be requested");
+                        }
+                        graceful_close_requested = true;
+                    }
+                    Ok(OutboundBridgeExit::SocketClosed) | Err(_) => {
+                        debug!("WebSocket outbound bridge closed");
+                    }
+                }
                 break;
             }
             msg = ws_stream.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
                         if !inbound_rate.allow(Instant::now()) {
+                            warn!(
+                                max_messages_per_second = MAX_INBOUND_MESSAGES_PER_SECOND,
+                                retry_after_ms = INBOUND_RATE_RETRY_AFTER_MS,
+                                "WebSocket inbound message rate exceeded"
+                            );
                             let err_env = WsEnvelope::new(
                                 "session",
                                 "error",
                                 serde_json::to_value(SessionErrorPayload {
                                     code: "RATE_LIMITED".into(),
                                     message: "WebSocket message rate exceeded".into(),
+                                    retry_after_ms: Some(INBOUND_RATE_RETRY_AFTER_MS),
                                     ..Default::default()
                                 })
                                 .unwrap(),
                             );
-                            let _ = outbound_tx
-                                .send(Message::Text(String::from(err_env).into()));
+                            let shutdown = retryable_error_shutdown(
+                                Message::Text(String::from(err_env).into()),
+                                "rate-limited",
+                            );
+                            if close_tx.send(shutdown).await.is_err() {
+                                debug!("WebSocket sender closed before rate-limit shutdown could be requested");
+                            }
+                            graceful_close_requested = true;
                             break;
                         }
                         let text_str: &str = &text;
@@ -220,6 +251,10 @@ async fn handle_connection(socket: WebSocket, state: AppState) {
         }
     }
 
+    if graceful_close_requested {
+        finish_graceful_close(&mut send_task, &mut ws_stream).await;
+    }
+
     // Cleanup: this connection is going away, but a turn it started must keep
     // running on the host. Drop only `Pending` handles — viewers with no live
     // process. Every `Active` handle is left in place: its stream reader holds
@@ -241,12 +276,8 @@ async fn handle_connection(socket: WebSocket, state: AppState) {
     sessions.retain(|_, handle| matches!(handle.state, QueryState::Active { .. }));
     drop(sessions);
 
-    // Only sweep this connection's active-turn ownership when no live turn
-    // survives. A surviving turn must keep its registry entry so other devices
-    // can resolve the owner map to answer permissions/questions and render the
-    // synchronized timer while it runs to completion. The registry holds only
-    // `Weak` pointers, so the entry self-clears once the turn's reader drops the
-    // map.
+    // A surviving turn keeps its weak registry ownership so other devices can
+    // answer gates and render its timer. The reader clears it at completion.
     if live_turns == 0 {
         state.active_turns.remove_owned_by(&sdk_sessions).await;
     }
@@ -268,26 +299,6 @@ async fn handle_connection(socket: WebSocket, state: AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn outbound_bridge_signals_when_bounded_queue_is_full() {
-        let (socket_tx, _socket_rx) = mpsc::channel(1);
-        socket_tx
-            .try_send(Message::Text("already full".into()))
-            .expect("prefill bounded queue");
-        let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
-        let (task, overflow) = spawn_outbound_bridge(outbound_rx, socket_tx);
-
-        outbound_tx
-            .send(Message::Text("overflow".into()))
-            .expect("enqueue outbound message");
-
-        tokio::time::timeout(Duration::from_secs(1), overflow)
-            .await
-            .expect("overflow should be signalled")
-            .expect("overflow sender should not drop");
-        task.await.expect("bridge should exit cleanly");
-    }
 
     #[test]
     fn inbound_rate_limit_resets_after_one_second() {

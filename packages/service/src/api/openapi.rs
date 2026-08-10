@@ -20,6 +20,8 @@ use crate::domain::features::routes as features_routes;
 use crate::domain::imports::models as imports_models;
 use crate::domain::imports::routes as imports_routes;
 use crate::domain::lsp::routes as lsp_routes;
+use crate::domain::ports::models as ports_models;
+use crate::domain::ports::routes as ports_routes;
 use crate::domain::projects::icon as projects_icon;
 use crate::domain::projects::models as projects_models;
 use crate::domain::projects::routes as projects_routes;
@@ -27,14 +29,19 @@ use crate::domain::push::models as push_models;
 use crate::domain::push::routes as push_routes;
 use crate::domain::remote::models as remote_models;
 use crate::domain::remote::routes as remote_routes;
-use crate::domain::scheduled_messages::models as scheduled_messages_models;
-use crate::domain::scheduled_messages::routes as scheduled_messages_routes;
+use crate::domain::schedules::models as schedules_models;
+use crate::domain::schedules::recurrence as schedules_recurrence;
+use crate::domain::schedules::routes as schedules_routes;
 use crate::domain::sessions::models as sessions_models;
 use crate::domain::sessions::routes as sessions_routes;
 use crate::domain::terminal::routes as terminal_routes;
+use crate::domain::usage_stats::health as usage_stats_health;
+use crate::domain::usage_stats::models as usage_stats_models;
+use crate::domain::usage_stats::routes as usage_stats_routes;
 use crate::domain::workspace::models as workspace_models;
 use crate::domain::workspace::routes as workspace_routes;
 use crate::domain::ws_session::protocol as ws_protocol;
+use crate::domain::ws_session::routes as ws_routes;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -83,6 +90,7 @@ use crate::domain::ws_session::protocol as ws_protocol;
         projects_icon::scan_project_icons_handler,
         features_routes::list_features_handler,
         features_routes::list_feature_activity_handler,
+        ports_routes::list_feature_ports_handler,
         features_routes::list_pinned_features_handler,
         features_routes::create_feature_handler,
         features_routes::get_feature_handler,
@@ -114,9 +122,14 @@ use crate::domain::ws_session::protocol as ws_protocol;
         custom_actions_routes::cancel_run_handler,
         custom_actions_routes::get_schedule_handler,
         custom_actions_routes::set_schedule_handler,
-        scheduled_messages_routes::get_scheduled_message_handler,
-        scheduled_messages_routes::set_scheduled_message_handler,
-        scheduled_messages_routes::delete_scheduled_message_handler,
+        schedules_routes::list_schedules_handler,
+        schedules_routes::create_schedule_handler,
+        schedules_routes::get_schedule_by_id_handler,
+        schedules_routes::update_schedule_handler,
+        schedules_routes::delete_schedule_handler,
+        schedules_routes::set_schedule_enabled_handler,
+        schedules_routes::run_schedule_handler,
+        ws_routes::get_prompt_commands,
         feature_layouts_routes::list_layouts_handler,
         feature_layouts_routes::create_layout_handler,
         feature_layouts_routes::update_layout_handler,
@@ -154,6 +167,8 @@ use crate::domain::ws_session::protocol as ws_protocol;
         claude_code_routes::delete_custom_model_handler,
         lsp_routes::open_session_handler,
         lsp_routes::list_servers_handler,
+        usage_stats_routes::get_usage_stats_handler,
+        usage_stats_routes::dismiss_usage_recording_issue_handler,
         crate::domain::lsp::root::lsp_root_handler,
         imports_routes::list_claude_code_conversations_handler,
         imports_routes::list_provider_conversations_handler,
@@ -241,6 +256,9 @@ use crate::domain::ws_session::protocol as ws_protocol;
         features_models::SetFeatureModelSettingRequest,
         features_models::SetFeatureProviderSettingRequest,
         features_routes::SuccessResponse,
+        ports_models::AllocatedPort,
+        ports_models::FeaturePorts,
+        ports_models::PortSource,
         crate::domain::features::pending_gate::FeaturePendingGateResponse,
         crate::domain::features::pending_gate::FeatureRespondGateRequest,
         crate::domain::features::pending_gate::FeatureRespondGateResponse,
@@ -261,9 +279,24 @@ use crate::domain::ws_session::protocol as ws_protocol;
         custom_actions_models::Scope,
         custom_actions_models::TriggeredBy,
         custom_actions_models::SuccessResponse,
-        scheduled_messages_models::ScheduledMessage,
-        scheduled_messages_models::SetScheduledMessageRequest,
-        scheduled_messages_models::ScheduledMessageDeleted,
+        schedules_models::Schedule,
+        schedules_models::ScheduleTarget,
+        schedules_models::ScheduleContext,
+        schedules_models::ScheduleLastRun,
+        schedules_models::TargetKind,
+        schedules_models::SaveScheduleRequest,
+        schedules_models::RecurrenceInput,
+        schedules_models::SetScheduleEnabledRequest,
+        schedules_models::ScheduleDeleted,
+        schedules_models::ScheduleRunResult,
+        ws_routes::PromptCommandsResponse,
+        ws_protocol::SlashCommandPayload,
+        ws_protocol::SlashCommandKindPayload,
+        ws_protocol::PromptCommandPolicyPayload,
+        ws_protocol::PromptCommandPlacementPayload,
+        ws_protocol::SkillReferenceTriggerPayload,
+        schedules_recurrence::Recurrence,
+        schedules_recurrence::RecurrenceKind,
         feature_layouts_models::FeatureLayout,
         feature_layouts_models::CreateFeatureLayoutRequest,
         feature_layouts_models::UpdateFeatureLayoutRequest,
@@ -303,6 +336,9 @@ use crate::domain::ws_session::protocol as ws_protocol;
         lsp_routes::OpenLspSessionRequest,
         lsp_routes::OpenLspSessionResponse,
         lsp_routes::ListServersResponse,
+        usage_stats_health::UsageRecordingIssue,
+        usage_stats_models::UsageStatsEntry,
+        usage_stats_models::UsageStatsResponse,
         crate::domain::lsp::root::LspRootResponse,
         crate::domain::lsp::probe::ServerProbe,
         crate::domain::lsp::probe::ServerProbeStatus,
@@ -340,6 +376,7 @@ use crate::domain::ws_session::protocol as ws_protocol;
         ws_protocol::ModelSetPayload,
         ws_protocol::ModeSetPayload,
         ws_protocol::EffortSetPayload,
+        ws_protocol::FastModeSetPayload,
         ws_protocol::ProfileSetPayload,
         ws_protocol::GateClosedPayload,
         ws_protocol::PromptReceivedPayload,
@@ -351,6 +388,7 @@ use crate::domain::ws_session::protocol as ws_protocol;
         ws_protocol::ModeChangedPayload,
         ws_protocol::ModelSetOkPayload,
         ws_protocol::EffortSetOkPayload,
+        ws_protocol::FastModeSetOkPayload,
         ws_protocol::ProfileChangedPayload,
         ws_protocol::RuntimeSessionIdPayload,
         ws_protocol::BranchRewoundPayload,

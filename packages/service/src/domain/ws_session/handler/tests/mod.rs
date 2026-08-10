@@ -4,7 +4,7 @@
 //! helpers, and the glob re-exports the tests reach for) lives in
 //! [`support`]. The remaining files group the tests by responsibility.
 
-mod support;
+pub(in crate::domain::ws_session::handler) mod support;
 
 mod reader_spawn;
 

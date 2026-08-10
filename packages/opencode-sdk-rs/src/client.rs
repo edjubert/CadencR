@@ -65,10 +65,22 @@ impl OpenCodeClient {
     /// session. Used by both the root-usage poller (context-token totals
     /// for the root session) and the sub-agent listener (tailing
     /// child-session parts the ACP wire never delivers).
-    pub async fn list_messages(&self, session_id: &str) -> Result<Vec<Message>, SdkError> {
+    ///
+    /// Pass `directory` whenever the caller knows the workspace scope —
+    /// OpenCode's multi-project server routes via
+    /// `directory` / `x-opencode-directory`, and omitting it can miss
+    /// child-session messages that only exist in that instance.
+    pub async fn list_messages(
+        &self,
+        session_id: &str,
+        directory: Option<&str>,
+    ) -> Result<Vec<Message>, SdkError> {
         let response = self
-            .http
-            .get(format!("{}/session/{session_id}/message", self.base_url))
+            .maybe_scoped_request(
+                self.http
+                    .get(format!("{}/session/{session_id}/message", self.base_url)),
+                directory,
+            )
             .send()
             .await?;
         let body = ensure_success(response).await?;
@@ -331,17 +343,17 @@ mod tests {
     #[tokio::test]
     async fn list_messages_surfaces_array_and_status_errors() {
         let (client, _, _) = test_client(r#"{"not":"array"}"#, StatusCode::OK).await;
-        let error = client.list_messages("ses_1").await.unwrap_err();
+        let error = client.list_messages("ses_1", None).await.unwrap_err();
         assert!(error
             .to_string()
             .contains("expected message list response to be an array"));
         let (client, _, _) = test_client("[{}]", StatusCode::OK).await;
-        let error = client.list_messages("ses_1").await.unwrap_err();
+        let error = client.list_messages("ses_1", None).await.unwrap_err();
         assert!(error
             .to_string()
             .contains("malformed message at response index 0"));
         let (client, _, _) = test_client("bad gateway", StatusCode::BAD_GATEWAY).await;
-        let error = client.list_messages("ses_1").await.unwrap_err();
+        let error = client.list_messages("ses_1", None).await.unwrap_err();
         assert!(error.to_string().contains("http status 502"));
         assert!(error.to_string().contains("bad gateway"));
     }

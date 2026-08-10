@@ -3,6 +3,7 @@ import {
   useCallback,
   useMemo,
   useRef,
+  type CSSProperties,
   type MutableRefObject,
   type ReactNode,
   type Ref,
@@ -17,6 +18,7 @@ import {
 } from "react-virtuoso";
 import type { AgentBlockData } from "./AgentBlock";
 import { AgentStreamItem } from "./agent-session/AgentStreamItem";
+import { STREAM_AT_BOTTOM_THRESHOLD_PX, STREAM_BOTTOM_GAP_PX } from "./agent-session/stream-fade";
 import { CompactFlowRow } from "./agent-session/CompactFlowRow";
 import { ConversationSearch } from "./agent-session/ConversationSearch";
 import type { DisplayItem } from "./agentStreamDisplay";
@@ -119,13 +121,26 @@ const StreamingCursor = memo(function StreamingCursor({ label }: { label: string
   );
 });
 
+// The spacer is unconditional and lives inside the list rather than as padding
+// on the wrapper: the composer's fade band sits on the scroller's clip edge, so
+// anything that comes to rest against that edge rests under the ramp. Keeping
+// the gap here means the transcript scrolls *through* the fade while a settled
+// last message stays clear of it.
+const STREAM_BOTTOM_GAP_STYLE: CSSProperties = { height: STREAM_BOTTOM_GAP_PX };
+
 const StreamFooter = memo(function StreamFooter({
   context,
 }: {
   context?: AgentStreamVirtuosoContext;
 }) {
-  if (!context?.showStreamingIndicator) return null;
-  return <TurnProgressCursor lifecycle={context.lifecycle} label={context.workingLabel} />;
+  return (
+    <>
+      {context?.showStreamingIndicator && (
+        <TurnProgressCursor lifecycle={context.lifecycle} label={context.workingLabel} />
+      )}
+      <div aria-hidden style={STREAM_BOTTOM_GAP_STYLE} />
+    </>
+  );
 });
 
 const VIRTUOSO_COMPONENTS = {
@@ -236,14 +251,14 @@ function AgentVirtuoso({
       computeItemKey={computeItemKey}
       initialTopMostItemIndex={{ index: "LAST", align: "end" }}
       defaultItemHeight={40}
-      increaseViewportBy={{ top: 1600, bottom: 800 }}
-      minOverscanItemCount={{ top: 12, bottom: 8 }}
-      overscan={{ main: 800, reverse: 800 }}
+      increaseViewportBy={{ top: 600, bottom: 400 }}
+      minOverscanItemCount={{ top: 4, bottom: 3 }}
+      overscan={{ main: 300, reverse: 300 }}
       components={VIRTUOSO_COMPONENTS}
       context={context}
       followOutput={followOutput}
       atBottomStateChange={onAtBottomStateChange}
-      atBottomThreshold={16}
+      atBottomThreshold={STREAM_AT_BOTTOM_THRESHOLD_PX}
       totalListHeightChanged={onTotalListHeightChanged}
       startReached={onStartReached}
       rangeChanged={onRangeChanged}
