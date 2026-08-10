@@ -32,6 +32,15 @@ export interface TextureRect {
 /** How many rows the texture starts with, before it has to grow. */
 const INITIAL_ROWS = 4;
 
+/**
+ * Hard ceiling on texture height, in physical pixels.
+ *
+ * 8192 is WebGPU's guaranteed `maxTextureDimension2D`. Growing past it makes
+ * `createTexture` fail deep inside the render path, where the only symptom is a
+ * dead canvas; failing here instead names the actual cause.
+ */
+const MAX_HEIGHT = 8192;
+
 export class AtlasLayout {
   readonly cell: CellMetrics;
   readonly width: number;
@@ -85,10 +94,17 @@ export class AtlasLayout {
 
     const row = Math.floor(index / this.columns);
     const neededHeight = (row + 1) * this.cell.height;
+    if (neededHeight > MAX_HEIGHT) {
+      this.#slots.delete(codePoint);
+      throw new Error(
+        `Glyph atlas is full: ${this.#slots.size} glyphs need ${neededHeight}px of texture, ` +
+          `over the ${MAX_HEIGHT}px limit. The atlas has no eviction policy yet.`,
+      );
+    }
     if (neededHeight > this.#height) {
       // Double rather than grow by one row: reallocating a GPU texture is far
       // more expensive than holding some slack.
-      this.#height = Math.max(this.#height * 2, neededHeight);
+      this.#height = Math.min(Math.max(this.#height * 2, neededHeight), MAX_HEIGHT);
     }
 
     return { ...this.#position(index), index, isNew: true };

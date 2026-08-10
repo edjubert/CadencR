@@ -9,7 +9,7 @@
  * does.
  */
 
-import { AtlasLayout, type CellMetrics } from "./atlas-layout";
+import { AtlasLayout, type CellMetrics, type TextureRect } from "./atlas-layout";
 
 export interface FontSpec {
   /** CSS font-family list, e.g. "'Fira Code', Menlo, monospace". */
@@ -83,7 +83,7 @@ export class GlyphAtlas {
   /**
    * Texture coordinates for `codePoint`, rasterizing it on first sight.
    */
-  glyph(codePoint: number) {
+  glyph(codePoint: number): TextureRect {
     const slot = this.layout.slotFor(codePoint);
     if (!slot.isNew) {
       return this.layout.uvFor(slot);
@@ -93,7 +93,17 @@ export class GlyphAtlas {
       this.#grow();
     }
 
+    // Clip to the slot: a glyph wider than the cell — CJK, emoji, or a fallback
+    // face whose advance exceeds the measured "M" — would otherwise paint into
+    // the neighbouring slot. Neighbours are rasterized once, so that corruption
+    // would never be repaired. Clipping keeps the aspect ratio, unlike the
+    // `maxWidth` argument, which condenses the glyph instead.
+    this.#context.save();
+    this.#context.beginPath();
+    this.#context.rect(slot.x, slot.y, this.cell.width, this.cell.height);
+    this.#context.clip();
     this.#context.fillText(String.fromCodePoint(codePoint), slot.x, slot.y + this.cell.height / 2);
+    this.#context.restore();
     this.#dirty = true;
 
     return this.layout.uvFor(slot);

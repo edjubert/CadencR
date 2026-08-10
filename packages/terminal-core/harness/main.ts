@@ -46,6 +46,7 @@ const surface = requireElement<HTMLDivElement>("surface");
 const canvas = requireElement<HTMLCanvasElement>("canvas");
 const statusEl = requireElement<HTMLDivElement>("status");
 const errorEl = requireElement<HTMLDivElement>("error");
+const loadingEl = requireElement<HTMLDivElement>("loading");
 
 function requireElement<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -57,6 +58,55 @@ function requireElement<T extends HTMLElement>(id: string): T {
 
 function fontSpec(family: string): FontSpec {
   return { family, size: 13, weight: "400", lineHeight: 1.2 };
+}
+
+/** Keyboard into the engine, and a click readout of the cell under the pointer. */
+function wireInput(
+  terminal: Terminal,
+  feed: (bytes: Uint8Array) => void,
+  currentAtlas: () => GlyphAtlas,
+): void {
+  surface.addEventListener("keydown", (event) => {
+    event.preventDefault();
+    const bytes = encodeKey(
+      event.key,
+      event.ctrlKey,
+      event.altKey,
+      event.shiftKey,
+      event.metaKey,
+      terminal.applicationCursor,
+    );
+    if (bytes !== undefined) {
+      feed(bytes);
+    }
+  });
+
+  canvas.addEventListener("mousedown", (event) => {
+    const bounds = canvas.getBoundingClientRect();
+    const cell = cellAtPixel(
+      { x: event.clientX - bounds.left, y: event.clientY - bounds.top },
+      currentAtlas().cell,
+      devicePixelRatio,
+    );
+    statusEl.textContent = `clicked cell ${cell.line},${cell.column}`;
+  });
+}
+
+/** The canned byte sequences that exercise the parser. */
+function wireFeedButtons(feed: (bytes: Uint8Array) => void): void {
+  requireElement<HTMLButtonElement>("feed-text").onclick = () =>
+    feed(new TextEncoder().encode("hello from terminal-core\r\n"));
+  requireElement<HTMLButtonElement>("feed-colors").onclick = () => {
+    let sequence = "";
+    for (let color = 0; color < 16; color += 1) {
+      sequence += `\x1b[38;5;${color}m██`;
+    }
+    feed(new TextEncoder().encode(`${sequence}\x1b[0m\r\n`));
+  };
+  requireElement<HTMLButtonElement>("feed-truecolor").onclick = () =>
+    feed(new TextEncoder().encode("\x1b[1;38;2;18;52;86mtrue color bold\x1b[0m\r\n"));
+  requireElement<HTMLButtonElement>("feed-clear").onclick = () =>
+    feed(new TextEncoder().encode("\x1b[2J\x1b[H"));
 }
 
 async function main(): Promise<void> {
@@ -84,13 +134,25 @@ async function main(): Promise<void> {
   }
 
   function draw(): void {
-    const packed = terminal.packedSnapshot();
+    // Zero-copy contract: the engine writes the snapshot into its own wasm
+    // memory and hands back a pointer. The view must be rebuilt every frame —
+    // growing the wasm heap detaches any previously created ArrayBuffer view.
+    terminal.refreshSnapshot();
+    const packed = new Uint32Array(
+      wasm.memory.buffer,
+      terminal.snapshotPtr(),
+      terminal.snapshotLen(),
+    );
 
     renderer.render({
       columns: terminal.columns,
       lines: terminal.screenLines,
       packed,
     });
+
+    if (loadingEl.hidden === false) {
+      loadingEl.hidden = true;
+    }
 
     statusEl.textContent =
       `${terminal.columns}×${terminal.screenLines} cells · ` +
@@ -100,49 +162,16 @@ async function main(): Promise<void> {
     requestAnimationFrame(draw);
   }
 
-  surface.addEventListener("keydown", (event) => {
-    event.preventDefault();
-    const bytes = encodeKey(
-      event.key,
-      event.ctrlKey,
-      event.altKey,
-      event.shiftKey,
-      event.metaKey,
-      terminal.applicationCursor,
-    );
-    if (bytes !== undefined) {
-      feed(bytes);
-    }
-  });
-
-  canvas.addEventListener("mousedown", (event) => {
-    const bounds = canvas.getBoundingClientRect();
-    const cell = cellAtPixel(
-      { x: event.clientX - bounds.left, y: event.clientY - bounds.top },
-      atlas.cell,
-      devicePixelRatio,
-    );
-    statusEl.textContent = `clicked cell ${cell.line},${cell.column}`;
-  });
-
-  requireElement<HTMLButtonElement>("feed-text").onclick = () =>
-    feed(new TextEncoder().encode("hello from terminal-core\r\n"));
-  requireElement<HTMLButtonElement>("feed-colors").onclick = () => {
-    let sequence = "";
-    for (let color = 0; color < 16; color += 1) {
-      sequence += `\x1b[38;5;${color}m██`;
-    }
-    feed(new TextEncoder().encode(`${sequence}\x1b[0m\r\n`));
-  };
-  requireElement<HTMLButtonElement>("feed-truecolor").onclick = () =>
-    feed(new TextEncoder().encode("\x1b[1;38;2;18;52;86mtrue color bold\x1b[0m\r\n"));
-  requireElement<HTMLButtonElement>("feed-clear").onclick = () =>
-    feed(new TextEncoder().encode("\x1b[2J\x1b[H"));
+  wireInput(terminal, feed, () => atlas);
+  wireFeedButtons(feed);
 
   requireElement<HTMLSelectElement>("font").onchange = (event) => {
-    // Changing font rebuilds the atlas — the glyph shapes themselves changed.
+    // Changing font rebuilds the atlas — the glyph shapes themselves changed —
+    // and the renderer has to be handed the new one, or it keeps drawing the
+    // old glyph shapes at the old cell metrics.
     const family = (event.target as HTMLSelectElement).value;
     atlas = new GlyphAtlas(fontSpec(family), devicePixelRatio);
+    renderer.setAtlas(atlas);
     resize();
   };
 
@@ -165,5 +194,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
+  // Startup failed, so no frame will ever clear the loading line: clear it here
+  // or the page claims to still be loading under the error message.
+  loadingEl.hidden = true;
   errorEl.textContent = error instanceof Error ? (error.stack ?? error.message) : String(error);
 });

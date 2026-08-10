@@ -139,11 +139,29 @@ export class TerminalRenderer {
     );
   }
 
+  /**
+   * Replace the glyph atlas — the font changed, so every glyph shape did.
+   *
+   * Drops the current texture so the next frame re-uploads from the new atlas;
+   * keeping it would draw old glyph shapes at the new cell metrics.
+   */
+  setAtlas(atlas: AtlasTexture): void {
+    this.#atlas = atlas;
+    this.#texture?.destroy();
+    this.#texture = undefined;
+  }
+
   /** Draw one frame. */
   render(grid: RendererGrid): void {
+    // Build instances first: it rasterizes any code point seen for the first
+    // time into the atlas. Uploading before that would sample a texture that
+    // does not contain the new glyph yet, while using UVs that already point
+    // at it — the glyph renders as garbage until some later frame happens to
+    // re-upload.
+    const instances = buildInstanceData(grid.packed, grid.columns, grid.lines, this.#atlas);
+
     this.#uploadAtlasIfDirty();
 
-    const instances = buildInstanceData(grid.packed, grid.columns, grid.lines, this.#atlas);
     this.#ensureInstanceCapacity(instances.byteLength);
     const instanceBuffer = this.#instanceBuffer;
     if (instanceBuffer === undefined) {

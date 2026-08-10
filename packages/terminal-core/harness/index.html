@@ -51,6 +51,15 @@
         color: #f77;
         white-space: pre-wrap;
       }
+      #loading {
+        margin-top: 0.75rem;
+        font-family: ui-monospace, monospace;
+        font-size: 0.8rem;
+        color: #cc9;
+      }
+      #loading[hidden] {
+        display: none;
+      }
     </style>
   </head>
   <body>
@@ -75,6 +84,7 @@
 
     <div id="surface" tabindex="0"><canvas id="canvas"></canvas></div>
 
+    <div id="loading">Loading the wasm engine and acquiring a GPU adapter…</div>
     <div id="status">initialising…</div>
     <div id="error"></div>
 

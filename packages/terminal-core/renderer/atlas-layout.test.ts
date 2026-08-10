@@ -63,4 +63,24 @@ describe("AtlasLayout", () => {
   it("rejects a zero-sized cell rather than producing a degenerate atlas", () => {
     expect(() => new AtlasLayout({ width: 0, height: 17 }, 128)).toThrow(/cell width/i);
   });
+
+  it("refuses to grow past the guaranteed WebGPU texture limit", () => {
+    // One glyph per row makes the ceiling reachable in a test: 8192 / 17 rows.
+    const layout = new AtlasLayout(CELL, CELL.width);
+    expect(() => {
+      for (let code = 0; code < 1000; code += 1) layout.slotFor(code);
+    }).toThrow(/atlas is full/i);
+  });
+
+  it("does not keep a slot it refused to allocate", () => {
+    const layout = new AtlasLayout(CELL, CELL.width);
+    try {
+      for (let code = 0; code < 1000; code += 1) layout.slotFor(code);
+    } catch {
+      // Expected: the atlas hit its ceiling.
+    }
+    const sizeAfterFailure = layout.size;
+    expect(() => layout.slotFor(99_999)).toThrow(/atlas is full/i);
+    expect(layout.size).toBe(sizeAfterFailure);
+  });
 });
