@@ -193,6 +193,7 @@ pub fn encode_mouse_js(
     reporting: u8,
     alternate_scroll: bool,
     alt_screen: bool,
+    application_cursor: bool,
 ) -> Option<Vec<u8>> {
     let kind = match kind {
         0 => MouseEventKind::Press,
@@ -229,6 +230,7 @@ pub fn encode_mouse_js(
         reporting,
         alternate_scroll,
         alt_screen,
+        application_cursor,
     })
 }
 

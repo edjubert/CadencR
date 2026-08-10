@@ -182,13 +182,14 @@ impl TerminalCore {
 
         // Marking the cursor cell INVERSE paints a block cursor with the shader
         // path that already swaps foreground and background — no extra draw
-        // call, no second pipeline.
+        // call, no second pipeline. Toggled, not set: on a cell already inverse
+        // from SGR 7, setting the flag is a no-op and the cursor vanishes.
         if show_cursor {
             let line = usize::try_from(cursor.line.0).unwrap_or(0);
             let column = cursor.column.0;
             if line < lines && column < columns {
                 let flags = (line * columns + column) * WORDS_PER_CELL + 3;
-                self.packed[flags] |= u32::from(Flags::INVERSE.bits());
+                self.packed[flags] ^= u32::from(Flags::INVERSE.bits());
             }
         }
     }

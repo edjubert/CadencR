@@ -177,6 +177,9 @@ pub struct MouseInput {
     pub alternate_scroll: bool,
     /// Whether the alternate screen is active.
     pub alt_screen: bool,
+    /// Whether DECCKM (application cursor keys) is enabled, which changes the
+    /// arrow-key prefix the alternate-scroll translation must emit.
+    pub application_cursor: bool,
 }
 
 /// Encode a mouse event as PTY bytes.
@@ -190,9 +193,19 @@ pub fn encode_mouse(input: &MouseInput) -> Option<Vec<u8>> {
     // The wheel drives the alternate screen's pager directly when alternate
     // scroll is on, since such programs do not listen for mouse reports.
     if input.alternate_scroll && input.alt_screen {
+        // Under DECCKM the arrows are SS3-prefixed (`ESC O A`), not CSI. Neovim
+        // and every full-screen pager enable it, so emitting CSI here would send
+        // bytes the running program does not read as arrow keys.
+        let arrow = |final_byte: u8| -> Vec<u8> {
+            if input.application_cursor {
+                vec![0x1B, b'O', final_byte]
+            } else {
+                vec![0x1B, b'[', final_byte]
+            }
+        };
         match input.kind {
-            MouseEventKind::ScrollUp => return Some(b"\x1b[A".to_vec()),
-            MouseEventKind::ScrollDown => return Some(b"\x1b[B".to_vec()),
+            MouseEventKind::ScrollUp => return Some(arrow(b'A')),
+            MouseEventKind::ScrollDown => return Some(arrow(b'B')),
             _ => {}
         }
     }
@@ -308,6 +321,7 @@ mod tests {
             reporting: MouseReporting::Click,
             alternate_scroll: false,
             alt_screen: false,
+            application_cursor: false,
         }
     }
 
@@ -499,6 +513,24 @@ mod tests {
         input.alternate_scroll = true;
         input.alt_screen = true;
         assert_eq!(encode_mouse(&input), Some(b"\x1b[B".to_vec()));
+    }
+
+    #[test]
+    fn alternate_scroll_arrows_follow_application_cursor_mode() {
+        // Neovim and pagers enable DECCKM, which moves the arrows from CSI to
+        // SS3. Emitting CSI there sends bytes the program does not read as
+        // arrow keys, so the wheel would silently do nothing.
+        let mut input = mouse(MouseEventKind::ScrollUp, MouseButton::None, 0, 0);
+        input.alternate_scroll = true;
+        input.alt_screen = true;
+        input.application_cursor = true;
+        assert_eq!(encode_mouse(&input), Some(b"\x1bOA".to_vec()));
+
+        let mut input = mouse(MouseEventKind::ScrollDown, MouseButton::None, 0, 0);
+        input.alternate_scroll = true;
+        input.alt_screen = true;
+        input.application_cursor = true;
+        assert_eq!(encode_mouse(&input), Some(b"\x1bOB".to_vec()));
     }
 
     #[test]
