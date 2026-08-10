@@ -56,7 +56,31 @@ export class GlyphAtlas {
     }
     this.#context = context;
     this.#configureContext();
+    this.#prerasterize();
+  }
 
+  /**
+   * Drop every cached glyph and start over.
+   *
+   * The recovery path when the atlas fills up: a screen holds far fewer
+   * distinct code points than the atlas can, so refilling from scratch is
+   * always possible. Only safe between frames — every previously returned
+   * `TextureRect` becomes meaningless.
+   */
+  reset(): void {
+    this.layout.reset();
+    this.#canvas = new OffscreenCanvas(ATLAS_WIDTH, this.layout.height);
+    const context = this.#canvas.getContext("2d");
+    if (context === null) {
+      throw new Error("Could not get a 2D context while resetting the glyph atlas.");
+    }
+    this.#context = context;
+    this.#configureContext();
+    this.#prerasterize();
+    this.#dirty = true;
+  }
+
+  #prerasterize(): void {
     for (let code = PRERASTERIZED.first; code <= PRERASTERIZED.last; code += 1) {
       this.glyph(code);
     }

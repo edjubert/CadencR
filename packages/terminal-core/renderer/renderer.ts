@@ -6,7 +6,12 @@
  */
 
 import type { CellMetrics } from "./atlas-layout";
-import { buildInstanceData, FLOATS_PER_INSTANCE, type GlyphSource } from "./instance-data";
+import {
+  buildInstanceData,
+  ensureGlyphs,
+  FLOATS_PER_INSTANCE,
+  type GlyphSource,
+} from "./instance-data";
 import { buildPaletteBuffer, PALETTE_ENTRIES } from "./palette";
 import { TERMINAL_SHADER } from "./terminal-shader.wgsl";
 
@@ -153,11 +158,14 @@ export class TerminalRenderer {
 
   /** Draw one frame. */
   render(grid: RendererGrid): void {
-    // Build instances first: it rasterizes any code point seen for the first
-    // time into the atlas. Uploading before that would sample a texture that
-    // does not contain the new glyph yet, while using UVs that already point
-    // at it — the glyph renders as garbage until some later frame happens to
-    // re-upload.
+    // Order matters, and both steps have to precede the upload:
+    //   1. rasterize every code point, so the atlas reaches its final height
+    //      before any texture coordinate is normalized against it;
+    //   2. build the instance data, now guaranteed to hit only cached slots.
+    // Uploading first would sample a texture missing the new glyphs; building
+    // instances without step 1 would hand out coordinates normalized against a
+    // height that a later cell then grows.
+    ensureGlyphs(grid.packed, this.#atlas);
     const instances = buildInstanceData(grid.packed, grid.columns, grid.lines, this.#atlas);
 
     this.#uploadAtlasIfDirty();

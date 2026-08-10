@@ -97,6 +97,14 @@
       ],
       "outputs": []
     },
+    "@cadencr/terminal-core#build": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": [
+        "pkg/**"
+      ]
+    },
     "@cadencr/terminal-core#ts-check": {
       "dependsOn": [
         "build"

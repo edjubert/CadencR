@@ -41,6 +41,20 @@ const INITIAL_ROWS = 4;
  */
 const MAX_HEIGHT = 8192;
 
+/**
+ * Thrown when the atlas cannot fit another glyph. Callers recover by resetting
+ * the atlas at a frame boundary — never mid-frame, which would leave already
+ * emitted texture coordinates pointing at evicted slots.
+ */
+export class AtlasFullError extends Error {
+  constructor(needed: number) {
+    super(
+      `Glyph atlas is full: the next glyph needs ${needed}px of texture, over the ${MAX_HEIGHT}px limit.`,
+    );
+    this.name = "AtlasFullError";
+  }
+}
+
 export class AtlasLayout {
   readonly cell: CellMetrics;
   readonly width: number;
@@ -77,6 +91,17 @@ export class AtlasLayout {
   }
 
   /**
+   * Forget every allocation and shrink back to the initial height.
+   *
+   * Every previously returned `TextureRect` becomes meaningless, so this is
+   * only safe between frames.
+   */
+  reset(): void {
+    this.#slots.clear();
+    this.#height = this.cell.height * INITIAL_ROWS;
+  }
+
+  /**
    * The slot for `codePoint`, allocating one if this is the first sighting.
    *
    * `isNew` tells the caller whether it still has to rasterize the glyph — the
@@ -96,10 +121,7 @@ export class AtlasLayout {
     const neededHeight = (row + 1) * this.cell.height;
     if (neededHeight > MAX_HEIGHT) {
       this.#slots.delete(codePoint);
-      throw new Error(
-        `Glyph atlas is full: ${this.#slots.size} glyphs need ${neededHeight}px of texture, ` +
-          `over the ${MAX_HEIGHT}px limit. The atlas has no eviction policy yet.`,
-      );
+      throw new AtlasFullError(neededHeight);
     }
     if (neededHeight > this.#height) {
       // Double rather than grow by one row: reallocating a GPU texture is far

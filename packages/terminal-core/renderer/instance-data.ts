@@ -6,7 +6,7 @@
  */
 
 import { decodeColor } from "./palette";
-import type { TextureRect } from "./atlas-layout";
+import { AtlasFullError, type TextureRect } from "./atlas-layout";
 
 /** Words per cell in the engine snapshot: char, foreground, background, flags. */
 export const WORDS_PER_CELL = 4;
@@ -24,6 +24,39 @@ export const FLOATS_PER_INSTANCE = 15;
 /** The part of the atlas this module needs — kept narrow so tests can fake it. */
 export interface GlyphSource {
   glyph(codePoint: number): TextureRect;
+  /** Drop every cached glyph. Called only when the atlas runs out of room. */
+  reset(): void;
+}
+
+/**
+ * Rasterize every code point in the grid before any texture coordinate is read.
+ *
+ * Texture coordinates are normalized against the atlas height, so a glyph
+ * allocated late — which can grow the atlas — would invalidate every rect
+ * handed out earlier in the same pass. Forcing all growth to happen up front
+ * means `buildInstanceData` only ever hits cached slots, and every rect it
+ * returns is normalized against the same, final height.
+ *
+ * If the atlas fills up, it is reset once and the pass restarts: one screen
+ * holds far fewer distinct code points than the atlas can hold, so the second
+ * pass always completes.
+ */
+export function ensureGlyphs(packed: Uint32Array, atlas: GlyphSource): void {
+  try {
+    rasterizeAll(packed, atlas);
+  } catch (error) {
+    if (!(error instanceof AtlasFullError)) {
+      throw error;
+    }
+    atlas.reset();
+    rasterizeAll(packed, atlas);
+  }
+}
+
+function rasterizeAll(packed: Uint32Array, atlas: GlyphSource): void {
+  for (let word = 0; word < packed.length; word += WORDS_PER_CELL) {
+    atlas.glyph(packed[word]);
+  }
 }
 
 /**

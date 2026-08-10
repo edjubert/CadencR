@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { FLOATS_PER_INSTANCE, buildInstanceData } from "./instance-data";
+import { FLOATS_PER_INSTANCE, buildInstanceData, ensureGlyphs } from "./instance-data";
 import { WORDS_PER_CELL } from "./instance-data";
+import { AtlasLayout } from "./atlas-layout";
 
 function snapshot(cells: Array<[number, number, number, number]>): Uint32Array {
   const packed = new Uint32Array(cells.length * WORDS_PER_CELL);
@@ -10,6 +11,7 @@ function snapshot(cells: Array<[number, number, number, number]>): Uint32Array {
 
 const atlas = {
   glyph: () => ({ u0: 0, v0: 0, u1: 0.5, v1: 0.5 }),
+  reset: () => {},
 };
 
 describe("buildInstanceData", () => {
@@ -64,5 +66,54 @@ describe("buildInstanceData", () => {
   it("rejects a snapshot whose size does not match the grid", () => {
     const packed = snapshot([[65, (1 << 24) | 256, (1 << 24) | 257, 0]]);
     expect(() => buildInstanceData(packed, 4, 4, atlas)).toThrow(/16 cells/);
+  });
+});
+
+describe("ensureGlyphs", () => {
+  /** A layout-backed atlas, so growth really does renormalize coordinates. */
+  function growingAtlas(cell = { width: 8, height: 17 }, width = 16) {
+    const layout = new AtlasLayout(cell, width);
+    return {
+      layout,
+      glyph: (codePoint: number) => layout.uvFor(layout.slotFor(codePoint)),
+      reset: () => layout.reset(),
+    };
+  }
+
+  /** A cell carrying a valid palette foreground and background. */
+  function cellFor(codePoint: number): [number, number, number, number] {
+    return [codePoint, (1 << 24) | 256, (1 << 24) | 257, 0];
+  }
+
+  it("makes every texture coordinate outlive the growth it triggers", () => {
+    const atlas = growingAtlas();
+    // Enough distinct code points to force several growths.
+    const cells: Array<[number, number, number, number]> = [];
+    for (let code = 65; code < 105; code += 1) cells.push(cellFor(code));
+    const packed = snapshot(cells);
+
+    ensureGlyphs(packed, atlas);
+    const heightAfterEnsure = atlas.layout.height;
+    const first = atlas.glyph(65);
+    buildInstanceData(packed, cells.length, 1, atlas);
+
+    expect(atlas.layout.height).toBe(heightAfterEnsure);
+    expect(atlas.glyph(65)).toEqual(first);
+  });
+
+  it("resets and refills instead of throwing when the atlas fills up", () => {
+    // One glyph per row makes the 8192px ceiling reachable: 481 slots.
+    const atlas = growingAtlas({ width: 8, height: 17 }, 8);
+    // Leave the atlas nearly full, the way a long-lived terminal would.
+    for (let code = 1000; code < 1450; code += 1) atlas.glyph(code);
+
+    // A screen holding fewer distinct glyphs than the atlas can hold, so the
+    // refill after the reset always fits.
+    const cells: Array<[number, number, number, number]> = [];
+    for (let code = 0; code < 300; code += 1) cells.push(cellFor(code));
+    const packed = snapshot(cells);
+
+    expect(() => ensureGlyphs(packed, atlas)).not.toThrow();
+    expect(() => buildInstanceData(packed, cells.length, 1, atlas)).not.toThrow();
   });
 });
