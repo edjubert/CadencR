@@ -33,7 +33,20 @@
     "orval",
     "@fontsource-variable/inter",
     "electron-builder",
-    "tw-animate-css"
+    "tw-animate-css",
+    "@cadencr/cathode"
+  ],
+  "ignore": [
+    "src/components/terminal-core/TerminalCoreInstance.tsx",
+    "src/components/terminal-core/cathode-term-class.ts",
+    "src/components/terminal-core/cathode-term-stubs.ts",
+    "src/components/terminal-core/index.ts",
+    "src/components/terminal-core/terminal-defaults.ts",
+    "src/components/terminal-core/TerminalCoreInstance.types.ts",
+    "src/components/terminal-core/useCathodeTerminal.ts",
+    "src/components/terminal-core/useCathodeTransport.ts",
+    "src/components/terminal-core/useTerminalCoreInstanceController.ts",
+    "src/components/terminal-core/useTerminalOptions.ts"
   ],
   "tags": [
     "+@public"
