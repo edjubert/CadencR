@@ -8,7 +8,8 @@
 
 use std::path::PathBuf;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 /// Alacritty's own documented default: `font.size`.
 const DEFAULT_FONT_SIZE: f64 = 11.25;
@@ -19,7 +20,7 @@ const DEFAULT_CURSOR_SHAPE: &str = "Block";
 /// Alacritty's own documented default: `cursor.style.blinking`.
 const DEFAULT_CURSOR_BLINKING: &str = "Off";
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, ToSchema, PartialEq)]
 #[serde(default)]
 pub struct AlacrittyConfig {
     pub font: FontConfig,
@@ -39,14 +40,14 @@ impl Default for AlacrittyConfig {
     }
 }
 
-#[derive(Debug, Deserialize, PartialEq, Default)]
+#[derive(Debug, Deserialize, Serialize, ToSchema, PartialEq, Default)]
 #[serde(default)]
 pub struct FontFace {
     pub family: Option<String>,
     pub style: Option<String>,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, ToSchema, PartialEq)]
 #[serde(default)]
 pub struct FontConfig {
     /// Only `[font.normal]` is parsed — see this task's "Technical
@@ -64,14 +65,14 @@ impl Default for FontConfig {
     }
 }
 
-#[derive(Debug, Deserialize, PartialEq, Default)]
+#[derive(Debug, Deserialize, Serialize, ToSchema, PartialEq, Default)]
 #[serde(default)]
 pub struct PrimaryColors {
     pub foreground: Option<String>,
     pub background: Option<String>,
 }
 
-#[derive(Debug, Deserialize, PartialEq, Default)]
+#[derive(Debug, Deserialize, Serialize, ToSchema, PartialEq, Default)]
 #[serde(default)]
 pub struct CursorColors {
     /// Verbatim from the file: either a hex color or the sentinel strings
@@ -81,7 +82,7 @@ pub struct CursorColors {
     pub cursor: Option<String>,
 }
 
-#[derive(Debug, Deserialize, PartialEq, Clone)]
+#[derive(Debug, Deserialize, Serialize, ToSchema, PartialEq, Clone)]
 pub struct AnsiPalette {
     pub black: String,
     pub red: String,
@@ -93,7 +94,7 @@ pub struct AnsiPalette {
     pub white: String,
 }
 
-#[derive(Debug, Deserialize, PartialEq, Default)]
+#[derive(Debug, Deserialize, Serialize, ToSchema, PartialEq, Default)]
 #[serde(default)]
 pub struct ColorsConfig {
     pub primary: PrimaryColors,
@@ -106,7 +107,7 @@ pub struct ColorsConfig {
     pub bright: Option<AnsiPalette>,
 }
 
-#[derive(Debug, Deserialize, PartialEq, Clone)]
+#[derive(Debug, Deserialize, Serialize, ToSchema, PartialEq, Clone)]
 #[serde(default)]
 pub struct CursorStyle {
     pub shape: String,
@@ -122,7 +123,7 @@ impl Default for CursorStyle {
     }
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, ToSchema, PartialEq)]
 #[serde(default)]
 pub struct CursorConfig {
     pub style: CursorStyle,
@@ -136,7 +137,7 @@ impl Default for CursorConfig {
     }
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, ToSchema, PartialEq)]
 #[serde(default)]
 pub struct ScrollingConfig {
     pub history: u32,
@@ -154,10 +155,6 @@ impl Default for ScrollingConfig {
 /// home directory itself can't be resolved (no `$HOME`, no passwd entry —
 /// see `dirs::home_dir()`'s own doc comment for when that happens).
 ///
-/// `#[allow(dead_code)]`: nothing in the crate calls this yet -- Task 2
-/// wires it into a route. Remove the attribute there; leaving it after
-/// Task 2 lands would mask a real future dead-code regression.
-#[allow(dead_code)]
 pub fn default_config_path() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join(".config").join("alacritty").join("alacritty.toml"))
 }
@@ -167,9 +164,6 @@ pub fn default_config_path() -> Option<PathBuf> {
 /// Returns `Err` only when the file exists but fails to parse, since that
 /// means the user's real settings are silently not being honored.
 ///
-/// `#[allow(dead_code)]`: same as `default_config_path` above — Task 2
-/// consumes this and removes the attribute.
-#[allow(dead_code)]
 pub fn parse_alacritty_config(path: &std::path::Path) -> Result<Option<AlacrittyConfig>, String> {
     let raw = match std::fs::read_to_string(path) {
         Ok(raw) => raw,
@@ -179,6 +173,54 @@ pub fn parse_alacritty_config(path: &std::path::Path) -> Result<Option<Alacritty
     toml::from_str(&raw)
         .map(Some)
         .map_err(|e| format!("failed to parse {}: {e}", path.display()))
+}
+
+/// `GET /api/terminal/alacritty-config` response.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AlacrittyConfigResponse {
+    /// Always populated: either the user's real config, or Alacritty's own
+    /// documented defaults (see `AlacrittyConfig`'s `Default` impls) when
+    /// there's nothing to read or it failed to parse.
+    pub config: AlacrittyConfig,
+    /// `true` when `~/.config/alacritty/alacritty.toml` exists and parsed
+    /// successfully.
+    pub found: bool,
+    /// Set only when the file exists but failed to parse — `config` is then
+    /// defaults, not the user's real settings, and the frontend should
+    /// surface this (Plan 3), not silently show defaults as if they were
+    /// chosen.
+    pub parse_error: Option<String>,
+}
+
+/// Read and parse the config at its default path, collapsing every outcome
+/// (missing file, unresolvable `$HOME`, malformed file) into a response the
+/// caller can always render — see this task's "Technical constraint" for
+/// why none of these are modeled as an HTTP error.
+pub fn read_alacritty_config_response() -> AlacrittyConfigResponse {
+    let Some(path) = default_config_path() else {
+        return AlacrittyConfigResponse {
+            config: AlacrittyConfig::default(),
+            found: false,
+            parse_error: None,
+        };
+    };
+    match parse_alacritty_config(&path) {
+        Ok(Some(config)) => AlacrittyConfigResponse {
+            config,
+            found: true,
+            parse_error: None,
+        },
+        Ok(None) => AlacrittyConfigResponse {
+            config: AlacrittyConfig::default(),
+            found: false,
+            parse_error: None,
+        },
+        Err(e) => AlacrittyConfigResponse {
+            config: AlacrittyConfig::default(),
+            found: false,
+            parse_error: Some(e),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -224,6 +266,15 @@ mod tests {
         // Untouched by the file — still Alacritty's documented default.
         assert_eq!(config.cursor.style.blinking, "Off");
         assert_eq!(config.scrolling.history, 10_000);
+    }
+
+    #[test]
+    fn response_reports_found_true_only_on_successful_parse() {
+        let response = read_alacritty_config_response();
+        assert!(
+            !(response.found && response.parse_error.is_some()),
+            "a successfully parsed file must not also report a parse error"
+        );
     }
 
     #[test]

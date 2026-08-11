@@ -31,6 +31,7 @@ use crate::domain::scheduled_messages::models as scheduled_messages_models;
 use crate::domain::scheduled_messages::routes as scheduled_messages_routes;
 use crate::domain::sessions::models as sessions_models;
 use crate::domain::sessions::routes as sessions_routes;
+use crate::domain::terminal::alacritty_config as terminal_alacritty_config;
 use crate::domain::terminal::routes as terminal_routes;
 use crate::domain::workspace::models as workspace_models;
 use crate::domain::workspace::routes as workspace_routes;
@@ -143,6 +144,7 @@ use crate::domain::ws_session::protocol as ws_protocol;
         sessions_routes::get_message_preview_handler,
         terminal_routes::list_terminal_sessions_handler,
         terminal_routes::kill_terminal_sessions_handler,
+        terminal_routes::alacritty_config_route,
         super::get_agent_catalog,
         discovery_routes::binary_discovery_handler,
         claude_code_routes::list_profiles_handler,
@@ -293,6 +295,17 @@ use crate::domain::ws_session::protocol as ws_protocol;
         sessions_models::RefreshSessionResponse,
         terminal_routes::TerminalSessionInfo,
         terminal_routes::KillTerminalsResponse,
+        terminal_alacritty_config::AlacrittyConfigResponse,
+        terminal_alacritty_config::AlacrittyConfig,
+        terminal_alacritty_config::FontConfig,
+        terminal_alacritty_config::FontFace,
+        terminal_alacritty_config::ColorsConfig,
+        terminal_alacritty_config::PrimaryColors,
+        terminal_alacritty_config::CursorColors,
+        terminal_alacritty_config::AnsiPalette,
+        terminal_alacritty_config::CursorConfig,
+        terminal_alacritty_config::CursorStyle,
+        terminal_alacritty_config::ScrollingConfig,
         claude_code_routes::ProfileView,
         claude_code_routes::ProfilesResponse,
         claude_code_routes::UpsertProfileRequest,

@@ -159,6 +159,50 @@ export interface AgentSessionRow {
   was_compacted: number;
 }
 
+export interface AlacrittyConfig {
+  colors?: ColorsConfig;
+  cursor?: CursorConfig;
+  font?: FontConfig;
+  scrolling?: ScrollingConfig;
+}
+
+/**
+ * Set only when the file exists but failed to parse — `config` is then
+defaults, not the user's real settings, and the frontend should
+surface this (Plan 3), not silently show defaults as if they were
+chosen.
+ */
+export type AlacrittyConfigResponseParseError = string | null;
+
+/**
+ * `GET /api/terminal/alacritty-config` response.
+ */
+export interface AlacrittyConfigResponse {
+  /** Always populated: either the user's real config, or Alacritty's own
+documented defaults (see `AlacrittyConfig`'s `Default` impls) when
+there's nothing to read or it failed to parse. */
+  config: AlacrittyConfig;
+  /** `true` when `~/.config/alacritty/alacritty.toml` exists and parsed
+successfully. */
+  found: boolean;
+  /** Set only when the file exists but failed to parse — `config` is then
+defaults, not the user's real settings, and the frontend should
+surface this (Plan 3), not silently show defaults as if they were
+chosen. */
+  parse_error?: AlacrittyConfigResponseParseError;
+}
+
+export interface AnsiPalette {
+  black: string;
+  blue: string;
+  cyan: string;
+  green: string;
+  magenta: string;
+  red: string;
+  white: string;
+  yellow: string;
+}
+
 /**
  * Keyed by discovery id (`"claude"`, `"opencode"`, `"codex"`, `"cursor"`).
  */
@@ -289,6 +333,17 @@ export const CiState = {
 
 export interface ClaudeCodeSuccessResponse {
   ok: boolean;
+}
+
+export type ColorsConfigBright = null | AnsiPalette;
+
+export type ColorsConfigNormal = null | AnsiPalette;
+
+export interface ColorsConfig {
+  bright?: ColorsConfigBright;
+  cursor?: CursorColors;
+  normal?: ColorsConfigNormal;
+  primary?: PrimaryColors;
 }
 
 export interface CommandsGetPayload {
@@ -594,6 +649,32 @@ export interface CreateWorktreeBody {
 export interface CreateWorktreeResponse {
   branch: string;
   worktree_path: string;
+}
+
+export type CursorColorsCursor = string | null;
+
+/**
+ * Verbatim from the file: either a hex color or the sentinel strings
+`"CellBackground"`/`"CellForeground"`. Not validated or resolved
+here — that's the consumer's job (Plan 3).
+ */
+export type CursorColorsText = string | null;
+
+export interface CursorColors {
+  cursor?: CursorColorsCursor;
+  /** Verbatim from the file: either a hex color or the sentinel strings
+`"CellBackground"`/`"CellForeground"`. Not validated or resolved
+here — that's the consumer's job (Plan 3). */
+  text?: CursorColorsText;
+}
+
+export interface CursorConfig {
+  style?: CursorStyle;
+}
+
+export interface CursorStyle {
+  blinking?: string;
+  shape?: string;
 }
 
 /**
@@ -1068,6 +1149,20 @@ export interface FileTreeEntry {
   is_gitignored: boolean;
   name: string;
   path: string;
+}
+
+export interface FontConfig {
+  normal?: FontFace;
+  size?: number;
+}
+
+export type FontFaceFamily = string | null;
+
+export type FontFaceStyle = string | null;
+
+export interface FontFace {
+  family?: FontFaceFamily;
+  style?: FontFaceStyle;
 }
 
 export type ForgeAuthSource = (typeof ForgeAuthSource)[keyof typeof ForgeAuthSource];
@@ -1873,6 +1968,15 @@ in the UI surfaces that show them (Git sub-tab, sidebar menu, header). */
   url: string;
 }
 
+export type PrimaryColorsBackground = string | null;
+
+export type PrimaryColorsForeground = string | null;
+
+export interface PrimaryColors {
+  background?: PrimaryColorsBackground;
+  foreground?: PrimaryColorsForeground;
+}
+
 export type ProfileChangedPayloadModel = string | null;
 
 export interface ProfileChangedPayload {
@@ -2327,6 +2431,11 @@ export const Scope = {
   global: "global",
   project: "project",
 } as const;
+
+export interface ScrollingConfig {
+  /** @minimum 0 */
+  history?: number;
+}
 
 /**
  * Absolute path on disk when found. `None` otherwise.
@@ -13732,6 +13841,69 @@ export const useSaveSessionDraft = <TError = ErrorType<unknown>, TContext = unkn
 
   return useMutation(mutationOptions);
 };
+
+/**
+ * @summary `GET /api/terminal/alacritty-config` — the user's parsed Alacritty
+config (font, colors, cursor style, scrollback depth), or Alacritty's
+own documented defaults when there's nothing to read.
+ */
+export const alacrittyConfigRoute = (signal?: AbortSignal) => {
+  return customInstance<AlacrittyConfigResponse>({
+    url: `/api/terminal/alacritty-config`,
+    method: "GET",
+    signal,
+  });
+};
+
+export const getAlacrittyConfigRouteQueryKey = () => {
+  return [`/api/terminal/alacritty-config`] as const;
+};
+
+export const getAlacrittyConfigRouteQueryOptions = <
+  TData = Awaited<ReturnType<typeof alacrittyConfigRoute>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<Awaited<ReturnType<typeof alacrittyConfigRoute>>, TError, TData>;
+}) => {
+  const { query: queryOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getAlacrittyConfigRouteQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof alacrittyConfigRoute>>> = ({ signal }) =>
+    alacrittyConfigRoute(signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof alacrittyConfigRoute>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type AlacrittyConfigRouteQueryResult = NonNullable<
+  Awaited<ReturnType<typeof alacrittyConfigRoute>>
+>;
+export type AlacrittyConfigRouteQueryError = ErrorType<unknown>;
+
+/**
+ * @summary `GET /api/terminal/alacritty-config` — the user's parsed Alacritty
+config (font, colors, cursor style, scrollback depth), or Alacritty's
+own documented defaults when there's nothing to read.
+ */
+
+export function useAlacrittyConfigRoute<
+  TData = Awaited<ReturnType<typeof alacrittyConfigRoute>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<Awaited<ReturnType<typeof alacrittyConfigRoute>>, TError, TData>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getAlacrittyConfigRouteQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  query.queryKey = queryOptions.queryKey;
+
+  return query;
+}
 
 /**
  * @summary Kill every live shell belonging to a feature. Used when archiving or deleting

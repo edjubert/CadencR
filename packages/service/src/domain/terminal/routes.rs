@@ -41,6 +41,10 @@ pub fn terminal_router() -> Router<AppState> {
             get(list_terminal_sessions_handler),
         )
         .route("/api/terminal/kill", post(kill_terminal_sessions_handler))
+        .route(
+            "/api/terminal/alacritty-config",
+            get(alacritty_config_route),
+        )
 }
 
 /// A live terminal session a client can attach to (one PTY).
@@ -112,6 +116,20 @@ pub async fn kill_terminal_sessions_handler(
     Json(KillTerminalsResponse {
         killed: killed as u32,
     })
+}
+
+/// `GET /api/terminal/alacritty-config` — the user's parsed Alacritty
+/// config (font, colors, cursor style, scrollback depth), or Alacritty's
+/// own documented defaults when there's nothing to read.
+#[utoipa::path(
+    get,
+    path = "/api/terminal/alacritty-config",
+    responses((status = 200, body = crate::domain::terminal::alacritty_config::AlacrittyConfigResponse))
+)]
+pub async fn alacritty_config_route(
+    State(_state): State<AppState>,
+) -> Json<crate::domain::terminal::alacritty_config::AlacrittyConfigResponse> {
+    Json(crate::domain::terminal::alacritty_config::read_alacritty_config_response())
 }
 
 async fn terminal_ws_handler(
