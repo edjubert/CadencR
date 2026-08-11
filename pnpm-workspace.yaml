@@ -12,11 +12,11 @@ minimumReleaseAgeExclude:
   # Emergency security fix for CVE-2026-44705; tmp <0.2.6 is vulnerable.
   - "tmp@0.2.6"
   # First-party dependency, published from a repository we control
-  # (github.com/emeria/cathode). The 14-day soak exists to catch a
+  # (github.com/edjubert/cathode). The 14-day soak exists to catch a
   # compromised upstream release; it does not apply to a package whose
   # source, CI and publishing key are ours. Keep this entry permanently
   # rather than churning it on every release.
-  - "@cadencr/cathode"
+  - "cathode-term"
   # Security updates (PR #62): vite 6.4.3 patches GHSA-fx2h-pf6j-xcff (HIGH,
   # server.fs.deny bypass) + GHSA-v6wh-96g9-6wx3; astro 6.4.6 patches
   # GHSA-2pvr-wf23-7pc7 (HIGH, Host-header SSRF) + GHSA-jrpj-wcv7-9fh9. The
