@@ -32,7 +32,7 @@
     "notarize:mac:staple": "node scripts/notarize-staple.mjs"
   },
   "dependencies": {
-    "@cadencr/cathode": "file:/Users/frx43946/workspace/edjubert/cathode",
+    "cathode-term": "link:/Users/frx43946/workspace/edjubert/cathode",
     "@fontsource-variable/figtree": "^5.2.10",
     "dotenv": "^17.4.2",
     "electron-updater": "^6.8.9"

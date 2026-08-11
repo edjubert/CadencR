@@ -45,12 +45,12 @@ importers:
 
   packages/desktop:
     dependencies:
-      '@cadencr/cathode':
-        specifier: file:/Users/frx43946/workspace/edjubert/cathode
-        version: file:../../edjubert/cathode
       '@fontsource-variable/figtree':
         specifier: ^5.2.10
         version: 5.2.10
+      cathode-term:
+        specifier: link:/Users/frx43946/workspace/edjubert/cathode
+        version: link:../../../../edjubert/cathode
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2
@@ -618,10 +618,6 @@ packages:
   '@bramus/specificity@2.4.2':
     resolution: {integrity: sha512-ctxtJ/eA+t+6q2++vj5j7FYX3nRu311q1wfYH3xjlLOsczhlhxAg2FWNUXhpGvAw3BWo1xBcvOV6/YLc2r5FJw==}
     hasBin: true
-
-  '@cadencr/cathode@file:../../edjubert/cathode':
-    resolution: {directory: ../../edjubert/cathode, type: directory}
-    engines: {node: '>=22.18.0 <23.0.0'}
 
   '@capsizecss/unpack@4.0.1':
     resolution: {integrity: sha512-CuNiSqg7+e1cO/GjffyMOm5Tt2jUF9CWHHnvQ/UkqvtkGfHdgwEC0wpmq7fkN3gxwpRnrAN0WzO3vREKmNolMQ==}
@@ -8657,8 +8653,6 @@ snapshots:
   '@bramus/specificity@2.4.2':
     dependencies:
       css-tree: 3.2.1
-
-  '@cadencr/cathode@file:../../edjubert/cathode': {}
 
   '@capsizecss/unpack@4.0.1':
     dependencies:
