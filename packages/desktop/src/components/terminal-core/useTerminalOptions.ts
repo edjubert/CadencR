@@ -1,16 +1,10 @@
-import { useEffect, useRef, useState, useCallback } from "react";
 import {
   useAlacrittyConfigRoute,
   type AlacrittyConfigResponse,
+  type AnsiPalette,
 } from "@/api/generated";
-import {
-  readPersistedTheme,
-} from "@/lib/themes";
-import { useConnectionStatusStore } from "@/stores/connection-status-store";
-import type {
-  TerminalOptions,
-  TerminalColorsConfig,
-} from "./cathode-term-stubs";
+import type { TerminalOptions, TerminalPalette } from "cathode-term";
+import { DEFAULT_TERMINAL_PALETTE } from "./terminal-palette";
 
 export interface UseTerminalOptionsResult {
   options: TerminalOptions | undefined;
@@ -18,131 +12,117 @@ export interface UseTerminalOptionsResult {
   error: string | null;
 }
 
-function mergeTerminalOptions(
-  response: AlacrittyConfigResponse,
-  fontOverride: { family: string; size: number } | null,
-): TerminalOptions {
-  const config = response.config;
-  const result: TerminalOptions = {
-    bellStyle: (config.colors?.normal ? "sound" : "none") as "none" | "sound",
-    cursorBlink: false,
-    cursorStyle: "block" as const,
-    cursorWidth: 2,
-    scrollback: 5000,
-    fontSize: 13,
-    fontFamily:
-      "'FiraCode Nerd Font', 'Fira Code', 'CaskaydiaCove Nerd Font', 'Cascadia Code', 'SF Mono', Menlo, Monaco, 'Courier New', monospace",
-    fontWeight: "400",
-    fontWeightBold: "600",
-    letterSpacing: 0,
-    lineHeight: 1.2,
-    allowTransparency: true,
-    macOptionIsMeta: true,
-  };
+const DEFAULT_FONT_FAMILY =
+  "'FiraCode Nerd Font', 'Fira Code', 'CaskaydiaCove Nerd Font', 'Cascadia Code', 'SF Mono', Menlo, Monaco, 'Courier New', monospace";
 
-  if (config.font) {
-    result.fontFamily = config.font.normal?.family || result.fontFamily;
-    result.fontSize = config.font.size || result.fontSize;
-  }
-
-  if (config.colors) {
-    const mappedColors: TerminalColorsConfig = {};
-    for (const [key, value] of Object.entries(config.colors)) {
-      if (key === "bright") continue;
-      if (value != null) {
-        (mappedColors as Record<string, unknown>)[key] = value;
-      }
-    }
-    result.colors = mappedColors;
-  }
-
-  if (config.cursor?.style?.shape) {
-    const shape = config.cursor.style.shape;
-    if (shape === "bar") {
-      result.cursorStyle = "bar";
-    } else if (shape === "underline") {
-      result.cursorStyle = "underline";
-    } else {
-      result.cursorStyle = "block";
-    }
-  }
-
-  if (config.cursor?.style?.blinking) {
-    result.cursorBlink = config.cursor.style.blinking === "always" || config.cursor.style.blinking === "off";
-  }
-
-  if (config.scrolling) {
-    result.scrollback = config.scrolling.history || result.scrollback;
-  }
-
-  if (fontOverride) {
-    result.fontFamily = fontOverride.family;
-    result.fontSize = fontOverride.size;
-  }
-
-  return result;
+function applyNormalAnsi(target: TerminalPalette, source: AnsiPalette): void {
+  target.black = source.black;
+  target.red = source.red;
+  target.green = source.green;
+  target.yellow = source.yellow;
+  target.blue = source.blue;
+  target.magenta = source.magenta;
+  target.cyan = source.cyan;
+  target.white = source.white;
 }
 
+function applyBrightAnsi(target: TerminalPalette, source: AnsiPalette): void {
+  target.brightBlack = source.black;
+  target.brightRed = source.red;
+  target.brightGreen = source.green;
+  target.brightYellow = source.yellow;
+  target.brightBlue = source.blue;
+  target.brightMagenta = source.magenta;
+  target.brightCyan = source.cyan;
+  target.brightWhite = source.white;
+}
+
+/**
+ * Alacritty writes cursor shapes capitalized ("Block", "Beam", "Underline");
+ * the component's type is lowercase. Unrecognized shapes fall back to
+ * "block" rather than rejecting an otherwise valid configuration.
+ */
+function cursorStyle(shape: string | null | undefined): TerminalOptions["cursor"]["style"] {
+  switch ((shape ?? "").toLowerCase()) {
+    case "beam":
+      return "beam";
+    case "underline":
+      return "underline";
+    default:
+      return "block";
+  }
+}
+
+/** `blinking` is "Off" | "On" | "Always" | "Never". Only "On"/"Always" mean the cursor blinks. */
+function cursorBlink(blinking: string | null | undefined): boolean {
+  const value = (blinking ?? "").toLowerCase();
+  return value === "on" || value === "always";
+}
+
+/**
+ * Resolve the backend's `AlacrittyConfigResponse` into `TerminalOptions`.
+ *
+ * The service only fills `colors.normal` (the 8 ANSI colors) with its own
+ * fallback when the file doesn't set them — foreground, background, cursor
+ * color and the 8 bright colors stay `undefined` when absent, and are filled
+ * here from `DEFAULT_TERMINAL_PALETTE` (CadencR Dark's palette, the same
+ * source the service's own fallback is copied from).
+ */
+export function resolveTerminalOptions(response: AlacrittyConfigResponse): TerminalOptions {
+  const config = response.config;
+  const palette: TerminalPalette = { ...DEFAULT_TERMINAL_PALETTE };
+
+  if (config.colors?.normal) applyNormalAnsi(palette, config.colors.normal);
+  if (config.colors?.bright) applyBrightAnsi(palette, config.colors.bright);
+  if (config.colors?.primary?.foreground) palette.foreground = config.colors.primary.foreground;
+  if (config.colors?.primary?.background) palette.background = config.colors.primary.background;
+  if (config.colors?.cursor?.cursor) palette.cursor = config.colors.cursor.cursor;
+
+  return {
+    font: {
+      family: config.font?.normal?.family ?? DEFAULT_FONT_FAMILY,
+      size: config.font?.size ?? 13,
+    },
+    colors: palette,
+    cursor: {
+      style: cursorStyle(config.cursor?.style?.shape),
+      blink: cursorBlink(config.cursor?.style?.blinking),
+    },
+    scrollback: config.scrolling?.history ?? 10_000,
+  };
+}
+
+/**
+ * The one place that decides what the terminal looks like.
+ *
+ * The backend resolves the user's `alacritty.toml` (or reports that none was
+ * found) and the service's own bundled palette fills anything the file
+ * doesn't set. The component itself resolves nothing — it applies what this
+ * hook produces.
+ *
+ * There is no font override here yet: this branch has no font-selection
+ * settings UI to read from. When one exists, its value replaces
+ * `options.font` the same way `FontSelector`-driven overrides do in the
+ * design spec — as a patch applied after this resolution, not woven into it.
+ */
 export function useTerminalOptions(): UseTerminalOptionsResult {
-  const {
-    data: configResponse,
-    isLoading,
-    error: fetchError,
-  } = useAlacrittyConfigRoute();
+  const { data, isLoading, error: fetchError } = useAlacrittyConfigRoute();
 
-  const fontOverrideRef = useRef<{ family: string; size: number } | null>(null);
-  const [fontFamily, setFontFamily] = useState<string | null>(null);
-  const [fontSize, setFontSize] = useState<number | null>(null);
-
-  // Read font override from settings
-  useEffect(() => {
-    const readSettings = () => {
-      const themeId = readPersistedTheme();
-      const baseFamily =
-        "'FiraCode Nerd Font', 'Fira Code', 'CaskaydiaCove Nerd Font', 'Cascadia Code', 'SF Mono', Menlo, Monaco, 'Courier New', monospace";
-      const baseSize = 13;
-
-      try {
-        const savedFamily = localStorage.getItem(
-          `terminal.font.family.${themeId}`,
-        );
-        const savedSize = localStorage.getItem(`terminal.font.size.${themeId}`);
-        if (savedFamily || savedSize) {
-          fontOverrideRef.current = {
-            family: savedFamily || baseFamily,
-            size: savedSize ? Number(savedSize) : baseSize,
-          };
-          setFontFamily(fontOverrideRef.current.family);
-          setFontSize(fontOverrideRef.current.size);
-        }
-      } catch {
-        // Settings read failure is non-fatal
-      }
-    };
-    readSettings();
-  }, []);
-
-  // TODO: Subscribe to `terminal / config_changed` WebSocket envelopes
-  // to invalidate the query when the config file changes (Plan 10, Task 9).
-  // The envelope carries no payload, so just refetching is sufficient:
-  // useConnectionStatusStore.getState().onConfigChanged?.(() => {})
-
-  // Fetch error
   if (fetchError) {
-    const message =
-      fetchError instanceof Error
-        ? fetchError.message
-        : "Failed to load terminal configuration";
+    const message = fetchError instanceof Error ? fetchError.message : "Failed to load terminal configuration";
     return { options: undefined, isLoading: false, error: message };
   }
 
-  // Loading
-  if (isLoading || !configResponse) {
+  if (isLoading || !data) {
     return { options: undefined, isLoading: true, error: null };
   }
 
-  // Merge
-  const options = mergeTerminalOptions(configResponse, fontOverrideRef.current);
+  if (data.parse_error) {
+    // The file exists but failed to parse: `data.config` is defaults, not
+    // the user's real settings. Surfacing this as an error rather than
+    // silently rendering a theme the user never chose.
+    return { options: undefined, isLoading: false, error: data.parse_error };
+  }
 
-  return { options, isLoading: false, error: null };
+  return { options: resolveTerminalOptions(data), isLoading: false, error: null };
 }

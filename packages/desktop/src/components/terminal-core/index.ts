@@ -1,16 +1,10 @@
 export { TerminalCoreInstance } from "./TerminalCoreInstance";
-export type {
-  TerminalCoreInstanceHandle,
-  TerminalCoreInstanceProps,
-} from "./TerminalCoreInstance.types";
+export type { TerminalCoreInstanceHandle, TerminalCoreInstanceProps } from "./TerminalCoreInstance.types";
 export { useCathodeTerminal } from "./useCathodeTerminal";
-export type {
-  UseCathodeTerminalOptions,
-  UseCathodeTerminalResult,
-} from "./useCathodeTerminal";
+export type { UseCathodeTerminalOptions, UseCathodeTerminalResult } from "./useCathodeTerminal";
 export { useTerminalCoreInstanceController } from "./useTerminalCoreInstanceController";
-export { TerminalStub as Terminal } from "./cathode-term-class";
-export type {
-  TerminalOptions,
-  TerminalTransport,
-} from "./cathode-term-stubs";
+export { useCathodeTransport } from "./useCathodeTransport";
+export type { CathodeTransportBridge } from "./useCathodeTransport";
+export { useTerminalOptions, resolveTerminalOptions } from "./useTerminalOptions";
+export type { UseTerminalOptionsResult } from "./useTerminalOptions";
+export { DEFAULT_TERMINAL_PALETTE } from "./terminal-palette";

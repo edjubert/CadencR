@@ -9,7 +9,7 @@
 import { invalidateByExactUrl, invalidateByUrlPrefix, queryClient } from "@/lib/queryClient";
 import { createLeadingSettleCoalescer } from "@/lib/coalesceInvalidation";
 import { scheduleSettingsInvalidation } from "@/lib/settingsInvalidation";
-import { getListFeaturesQueryKey, type Feature } from "@/api/generated";
+import { getAlacrittyConfigRouteQueryKey, getListFeaturesQueryKey, type Feature } from "@/api/generated";
 import { invalidateFeatureQueries } from "@/lib/featureUpdated";
 import { isViewingFeature, notifyAgentDone, notifyAgentNeedsInput } from "@/lib/notify-agent-done";
 import { useUnreadStore } from "@/stores/unread-store";
@@ -292,6 +292,14 @@ export function handleAppEnvelope(
     // the watcher echo, sibling settings files), and each refetch triggers a
     // re-render wave across every mounted ModelSelector/session composer.
     scheduleSettingsInvalidation(queryClient);
+    return true;
+  }
+  if (domain === "app" && action === "alacritty_config_event") {
+    // `~/.config/alacritty/alacritty.toml` changed on disk. The envelope
+    // carries no payload — same "ping, then re-fetch" convention as
+    // settings_event — so this just invalidates the one query that reads it;
+    // `useTerminalOptions` re-resolves from the refetched response.
+    void queryClient.invalidateQueries({ queryKey: getAlacrittyConfigRouteQueryKey() });
     return true;
   }
   if (domain === "app" && action === "feature_event") {

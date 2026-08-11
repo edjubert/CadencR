@@ -1,65 +1,81 @@
-import { useCallback, useMemo } from "react";
-import type { TerminalTransport } from "./cathode-term-stubs";
+import { useMemo } from "react";
+import type { TerminalTransport } from "cathode-term";
 
 interface TerminalSocketHandle {
-  connect: (cols: number, rows: number) => void;
   write: (data: string) => void;
   resize: (cols: number, rows: number) => void;
-  kill: () => void;
-  isConnected: boolean;
+}
+
+export interface CathodeTransportBridge {
+  transport: TerminalTransport;
+  /** Call from the socket's `onData` callback to forward bytes to whoever attached. */
+  deliverData: (data: string) => void;
+  /** Call from the socket's `onExit`/`onError` callback to signal closure. */
+  deliverClose: (reason?: string) => void;
 }
 
 /**
  * Presents the shell terminal's WebSocket hook as a `TerminalTransport`.
  *
- * The hook does considerably more than four methods: it reattaches to a PTY
- * by id, reports exit codes, replays scrollback after a reconnect and
- * recovers from a stalled socket. None of that is the component's business,
- * and this file is where it stops.
+ * The hook does considerably more than four methods: `connect`/`kill`, PTY
+ * reattachment by id, exit codes, scrollback replay on reconnect, stall
+ * recovery. None of that is the component's business — the controller calls
+ * `connect`/`kill` itself at the right lifecycle points, and this file wraps
+ * only the four methods `TerminalTransport` needs.
  *
- * Encoding note: the socket carries `data` as a string. The transport
- * interface expects bytes. We convert at this boundary with
- * `TextEncoder`/`TextDecoder`. This is lossy for non-UTF-8 output —
- * the same corruption described in PROTOCOL.md. Pre-existing in CadencR,
- * not introduced here. Followup: change the endpoint to accept bytes.
+ * `useTerminalWebSocket`'s `onData`/`onExit`/`onError` are callbacks fixed at
+ * hook-call time, not a subscription registry — the opposite direction from
+ * `TerminalTransport.onData`, which the *terminal* calls to register its own
+ * listener. `deliverData`/`deliverClose` are the bridge: the controller wires
+ * the socket's fixed callbacks to call them, and they fan out to whatever
+ * `Terminal.attach()` registered via `transport.onData()`.
+ *
+ * Encoding: the socket carries `data` as a string; `TerminalTransport` is
+ * bytes both ways. Converting here is lossy for output that is not valid
+ * UTF-8 — the same corruption `PROTOCOL.md` describes (a multi-byte sequence
+ * split across a socket message becomes `U+FFFD`). Pre-existing in CadencR,
+ * not introduced here. Followup: change `/api/terminal/ws` to carry binary
+ * frames, matching the protocol cathode-term's own reference transport uses.
  */
-export function useCathodeTransport(
-  socket: TerminalSocketHandle,
-): TerminalTransport {
-  const transport = useMemo((): TerminalTransport => {
-    const subscribers: Array<(data: string) => void> = [];
-    const closeCallbacks: Array<() => void> = [];
+export function useCathodeTransport(socket: TerminalSocketHandle): CathodeTransportBridge {
+  return useMemo((): CathodeTransportBridge => {
+    const dataListeners = new Set<(bytes: Uint8Array) => void>();
+    const closeListeners = new Set<(reason?: string) => void>();
 
-    return {
-      write(data: Uint8Array) {
-        const text = new TextDecoder().decode(data);
-        socket.write(text);
+    const transport: TerminalTransport = {
+      write(bytes: Uint8Array) {
+        socket.write(new TextDecoder().decode(bytes));
       },
-      resize(cols: number, rows: number) {
-        socket.resize(cols, rows);
+      resize(columns: number, rows: number) {
+        socket.resize(columns, rows);
       },
-      connect(cols: number, rows: number) {
-        socket.connect(cols, rows);
-      },
-      kill() {
-        socket.kill();
-      },
-      onData(callback: (data: string) => void) {
-        subscribers.push(callback);
+      onData(cb: (bytes: Uint8Array) => void) {
+        dataListeners.add(cb);
         return () => {
-          const idx = subscribers.indexOf(callback);
-          if (idx !== -1) subscribers.splice(idx, 1);
+          dataListeners.delete(cb);
         };
       },
-      onClose(callback: () => void) {
-        closeCallbacks.push(callback);
+      onClose(cb: (reason?: string) => void) {
+        closeListeners.add(cb);
         return () => {
-          const idx = closeCallbacks.indexOf(callback);
-          if (idx !== -1) closeCallbacks.splice(idx, 1);
+          closeListeners.delete(cb);
         };
       },
     };
-  }, [socket]);
 
-  return transport;
+    return {
+      transport,
+      deliverData: (data: string) => {
+        const bytes = new TextEncoder().encode(data);
+        for (const cb of dataListeners) cb(bytes);
+      },
+      deliverClose: (reason?: string) => {
+        for (const cb of closeListeners) cb(reason);
+      },
+    };
+    // socket.write/resize close over the latest useTerminalWebSocket return
+    // value; recreating this bridge only when `socket` itself changes
+    // identity keeps `transport` stable across renders, which
+    // `Terminal.attach` depends on to avoid detaching and reattaching.
+  }, [socket]);
 }

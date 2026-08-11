@@ -1,93 +1,88 @@
-import { useEffect, useRef, useState, useCallback } from "react";
-import type { TerminalOptions, TerminalTransport } from "./cathode-term-stubs";
-import { TerminalStub } from "./cathode-term-class";
-import { TERMINAL_DEFAULTS } from "./terminal-defaults";
+import { useEffect, useRef, useState } from "react";
+import { Terminal, type TerminalOptions, type TerminalTransport } from "cathode-term";
 
 export interface UseCathodeTerminalOptions {
-  hostRef: React.RefObject<HTMLDivElement | null>;
+  hostRef: React.RefObject<HTMLElement | null>;
   options: TerminalOptions | undefined;
   transport: TerminalTransport | undefined;
 }
 
 export interface UseCathodeTerminalResult {
-  terminal: TerminalStub | undefined;
+  terminal: Terminal | undefined;
   status: "loading" | "ready" | "error";
   errorMessage: string | null;
 }
 
-export function useCathodeTerminal(
-  o: UseCathodeTerminalOptions,
-): UseCathodeTerminalResult {
+/**
+ * Owns one `cathode-term` `Terminal`'s lifecycle: construct once options and
+ * a host are available, attach/detach as the transport comes and goes,
+ * dispose on unmount. Shared between the shell panel and the Neovim pane —
+ * each keeps its own socket hook and its own `TerminalTransport` adapter;
+ * this hook knows about neither.
+ */
+export function useCathodeTerminal(o: UseCathodeTerminalOptions): UseCathodeTerminalResult {
   const { hostRef, options, transport } = o;
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const terminalRef = useRef<TerminalStub | null>(null);
-  const cancelledRef = useRef(false);
-  const transportRef = useRef<TerminalTransport | undefined>(undefined);
-  transportRef.current = transport;
+  const terminalRef = useRef<Terminal | undefined>(undefined);
 
-  const createTerminal = useCallback((): TerminalStub | null => {
-    const host = hostRef.current;
-    if (!host || !options) return null;
-    const terminal = new TerminalStub(host, {
-      ...TERMINAL_DEFAULTS,
-      ...options,
-    });
-    terminalRef.current = terminal;
-    return terminal;
-  }, [hostRef, options]);
-
+  // Constructed once options and the host are both available. Not keyed on
+  // `options` identity — a live config change goes through `setOptions` in
+  // the effect below, not through rebuilding the terminal.
   useEffect(() => {
-    cancelledRef.current = false;
-    const terminal = createTerminal();
-    if (!terminal) return;
+    const host = hostRef.current;
+    if (!host || !options) return;
 
-    let disposed = false;
+    let cancelled = false;
+    const terminal = new Terminal(host, options);
+    terminalRef.current = terminal;
 
-    terminal
-      .ready
+    terminal.ready
       .then(() => {
-        if (cancelledRef.current || disposed) return;
-        const tr = transportRef.current;
-        if (tr) {
-          terminal.onData((data: string) => {
-            if (cancelledRef.current) return;
-            tr.write(new TextEncoder().encode(data));
-          });
-          terminal.onClose(() => {
-            if (cancelledRef.current) return;
-            setStatus("error");
-            setErrorMessage("Terminal connection closed");
-          });
-        }
-        if (!cancelledRef.current) {
-          setStatus("ready");
-        }
+        if (cancelled) return;
+        setStatus("ready");
       })
       .catch((err: unknown) => {
-        if (cancelledRef.current) return;
-        const msg =
-          err instanceof Error ? err.message : "WebGPU not available";
+        if (cancelled) return;
+        setErrorMessage(err instanceof Error ? err.message : "WebGPU is not available");
         setStatus("error");
-        setErrorMessage(msg);
       });
 
     return () => {
-      cancelledRef.current = true;
-      disposed = true;
+      cancelled = true;
       terminal.dispose();
-      terminalRef.current = null;
+      terminalRef.current = undefined;
     };
-  }, [createTerminal, transport]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hostRef.current, options === undefined]);
 
+  // Live theme/font/scrollback changes: patched in place, no rebuild.
   useEffect(() => {
-    const terminal = terminalRef.current;
-    if (!terminal || !options) return;
-    terminal.setOptions(options);
+    if (!options) return;
+    terminalRef.current?.setOptions(options);
   }, [options]);
 
+  // Attach/detach as the transport comes and goes. Waits for `ready` so a
+  // transport arriving before the engine has finished loading doesn't attach
+  // to a terminal that can't `feed()` yet.
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal || !transport) return;
+
+    let cancelled = false;
+    terminal.ready.then(() => {
+      if (cancelled) return;
+      terminal.attach(transport);
+    });
+
+    return () => {
+      cancelled = true;
+      terminal.detach();
+    };
+  }, [transport, status]);
+
   return {
-    terminal: terminalRef.current ?? undefined,
+    terminal: terminalRef.current,
     status,
     errorMessage,
   };
