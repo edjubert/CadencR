@@ -199,6 +199,13 @@ pub struct AppState {
     /// Shared by the subscription endpoints and the push dispatcher. See
     /// `domain::push`.
     pub push: Arc<PushNotifier>,
+    /// Fallback ANSI palette used when no `alacritty.toml` exists or fails to
+    /// parse. Mirrors the Cadencr Dark theme's xterm palette (copied from
+    /// `packages/desktop/src/lib/themes/cadencr-dark.ts` lines 32-39) so the
+    /// terminal has consistent defaults whether or not the user has a config
+    /// file. The durable fix would be for the frontend to send its palette
+    /// with the request — right now the two will drift.
+    pub fallback_palette: crate::domain::terminal::alacritty_config::AnsiPalette,
 }
 
 impl AppState {
@@ -290,6 +297,16 @@ impl AppState {
             import_jobs: ImportJobRegistry::new(),
             remote,
             push,
+            fallback_palette: crate::domain::terminal::alacritty_config::AnsiPalette {
+                black: "#1a1b1d".to_string(),
+                red: "#ec707b".to_string(),
+                green: "#8bcf67".to_string(),
+                yellow: "#e2b64d".to_string(),
+                blue: "#6d9bec".to_string(),
+                magenta: "#de7ca7".to_string(),
+                cyan: "#52bfd0".to_string(),
+                white: "#c6c8cc".to_string(),
+            },
         }
     }
 
@@ -357,6 +374,16 @@ impl AppState {
                 data_dir: std::env::temp_dir().join("cadencr-remote-test"),
             })),
             push: Arc::new(PushNotifier::ephemeral()),
+            fallback_palette: crate::domain::terminal::alacritty_config::AnsiPalette {
+                black: "#1a1b1d".to_string(),
+                red: "#ec707b".to_string(),
+                green: "#8bcf67".to_string(),
+                yellow: "#e2b64d".to_string(),
+                blue: "#6d9bec".to_string(),
+                magenta: "#de7ca7".to_string(),
+                cyan: "#52bfd0".to_string(),
+                white: "#c6c8cc".to_string(),
+            },
         }
     }
 

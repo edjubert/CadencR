@@ -203,30 +203,65 @@ pub struct AlacrittyConfigResponse {
 /// (missing file, unresolvable `$HOME`, malformed file) into a response the
 /// caller can always render — see this task's "Technical constraint" for
 /// why none of these are modeled as an HTTP error.
-pub fn read_alacritty_config_response() -> AlacrittyConfigResponse {
+///
+/// The `fallback_palette` is used to fill `colors.normal` when the user's
+/// config doesn't override it — unlike Alacritty's own defaults, this is
+/// the same palette the terminal panel already uses, so there's no visual
+/// discontinuity when switching between "no config" and "config exists" states.
+pub fn read_alacritty_config_response(fallback_palette: AnsiPalette) -> AlacrittyConfigResponse {
     let Some(path) = default_config_path() else {
         return AlacrittyConfigResponse {
-            config: AlacrittyConfig::default(),
+            config: merge_with_fallback(AlacrittyConfig::default(), &fallback_palette),
             found: false,
             parse_error: None,
         };
     };
     match parse_alacritty_config(&path) {
         Ok(Some(config)) => AlacrittyConfigResponse {
-            config,
+            config: merge_with_fallback(config, &fallback_palette),
             found: true,
             parse_error: None,
         },
         Ok(None) => AlacrittyConfigResponse {
-            config: AlacrittyConfig::default(),
+            config: merge_with_fallback(AlacrittyConfig::default(), &fallback_palette),
             found: false,
             parse_error: None,
         },
         Err(e) => AlacrittyConfigResponse {
-            config: AlacrittyConfig::default(),
+            config: merge_with_fallback(AlacrittyConfig::default(), &fallback_palette),
             found: false,
             parse_error: Some(e),
         },
+    }
+}
+
+/// Fill `colors.normal` with `fallback_palette` when the user's config
+/// doesn't override it. This is how the terminal panel gets a consistent
+/// color palette whether or not the user has an `alacritty.toml`.
+fn merge_with_fallback(config: AlacrittyConfig, fallback: &AnsiPalette) -> AlacrittyConfig {
+    let resolved = match config.colors.normal {
+        Some(existing) => existing,
+        None => AnsiPalette {
+            black: fallback.black.clone(),
+            red: fallback.red.clone(),
+            green: fallback.green.clone(),
+            yellow: fallback.yellow.clone(),
+            blue: fallback.blue.clone(),
+            magenta: fallback.magenta.clone(),
+            cyan: fallback.cyan.clone(),
+            white: fallback.white.clone(),
+        },
+    };
+    AlacrittyConfig {
+        font: config.font,
+        colors: ColorsConfig {
+            primary: config.colors.primary,
+            cursor: config.colors.cursor,
+            normal: Some(resolved),
+            bright: config.colors.bright,
+        },
+        cursor: config.cursor,
+        scrolling: config.scrolling,
     }
 }
 
@@ -356,7 +391,17 @@ mod tests {
 
     #[test]
     fn response_reports_found_true_only_on_successful_parse() {
-        let response = read_alacritty_config_response();
+        let fallback = AnsiPalette {
+            black: "#1a1b1d".to_string(),
+            red: "#ec707b".to_string(),
+            green: "#8bcf67".to_string(),
+            yellow: "#e2b64d".to_string(),
+            blue: "#6d9bec".to_string(),
+            magenta: "#de7ca7".to_string(),
+            cyan: "#52bfd0".to_string(),
+            white: "#c6c8cc".to_string(),
+        };
+        let response = read_alacritty_config_response(fallback);
         assert!(
             !(response.found && response.parse_error.is_some()),
             "a successfully parsed file must not also report a parse error"

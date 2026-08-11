@@ -127,9 +127,11 @@ pub async fn kill_terminal_sessions_handler(
     responses((status = 200, body = crate::domain::terminal::alacritty_config::AlacrittyConfigResponse))
 )]
 pub async fn alacritty_config_route(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
 ) -> Json<crate::domain::terminal::alacritty_config::AlacrittyConfigResponse> {
-    Json(crate::domain::terminal::alacritty_config::read_alacritty_config_response())
+    Json(crate::domain::terminal::alacritty_config::read_alacritty_config_response(
+        state.fallback_palette.clone(),
+    ))
 }
 
 async fn terminal_ws_handler(
