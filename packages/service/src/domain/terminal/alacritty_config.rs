@@ -6,10 +6,17 @@
 //! be able to surface, since it means the user's real settings are silently
 //! not being honored.
 
+use std::ffi::OsStr;
 use std::path::PathBuf;
+use std::sync::OnceLock;
+use std::time::Duration;
 
+use notify_debouncer_mini::notify::RecursiveMode;
+use notify_debouncer_mini::{new_debouncer, Debouncer};
 use serde::{Deserialize, Serialize};
+use tokio::sync::broadcast;
 use utoipa::ToSchema;
+use tracing::{debug, warn};
 
 /// Alacritty's own documented default: `font.size`.
 const DEFAULT_FONT_SIZE: f64 = 11.25;
@@ -223,6 +230,85 @@ pub fn read_alacritty_config_response() -> AlacrittyConfigResponse {
     }
 }
 
+/// Emitted when `alacritty.toml` changes on disk. Carries no data — the
+/// client re-fetches `GET /api/terminal/alacritty-config` on receiving one,
+/// the same "ping, then re-fetch" convention `SettingsChangeEvent` already
+/// uses for the settings directory.
+#[derive(Clone, Debug, Serialize)]
+pub struct AlacrittyConfigChangedEvent {}
+
+/// Keeps the debouncer (and its underlying OS watcher) alive for the
+/// process lifetime. Dropping it would silently stop notifications — same
+/// reasoning as `settings_store::watcher`'s own `WATCHER` static.
+static WATCHER: OnceLock<Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>> =
+    OnceLock::new();
+
+/// Watch `~/.config/alacritty/alacritty.toml`'s parent directory
+/// (non-recursive) and broadcast a ping on `tx` whenever the file itself
+/// changes. Best-effort: a failure is logged, never fatal — the config
+/// still loads once at startup via the HTTP route, just without live
+/// external-edit refresh. No-ops (does not start a watcher, does not warn)
+/// when the home directory can't be resolved at all.
+pub fn start_watcher(tx: broadcast::Sender<AlacrittyConfigChangedEvent>) {
+    let Some(config_path) = default_config_path() else {
+        return;
+    };
+    let Some(watch_dir) = config_path.parent().map(std::path::Path::to_path_buf) else {
+        return;
+    };
+    let target_file_name = config_path
+        .file_name()
+        .map(|n| n.to_owned())
+        .unwrap_or_default();
+
+    let mut debouncer = match new_debouncer(
+        Duration::from_millis(500),
+        move |result: Result<Vec<notify_debouncer_mini::DebouncedEvent>, _>| {
+            let events = match result {
+                Ok(events) => events,
+                Err(e) => {
+                    warn!("alacritty config watcher error: {e:?}");
+                    return;
+                }
+            };
+            let changed = events
+                .iter()
+                .any(|e| is_watched_config_file(&e.path, &target_file_name));
+            if changed {
+                debug!("alacritty.toml change detected");
+                let _ = tx.send(AlacrittyConfigChangedEvent {});
+            }
+        },
+    ) {
+        Ok(debouncer) => debouncer,
+        Err(e) => {
+            warn!("failed to create alacritty config watcher: {e}");
+            return;
+        }
+    };
+
+    // Watching the parent directory (not the file itself) survives editors
+    // that save by replacing the file (write-to-temp-then-rename) rather
+    // than writing in place — a watch on the file's own inode would go
+    // stale the moment such an editor "saves."
+    if let Err(e) = debouncer.watcher().watch(&watch_dir, RecursiveMode::NonRecursive) {
+        warn!(dir = %watch_dir.display(), "failed to watch alacritty config dir: {e}");
+        return;
+    }
+    let _ = WATCHER.set(debouncer);
+    debug!(dir = %watch_dir.display(), "alacritty config watcher started");
+}
+
+/// Whether `path`'s file name matches `target_file_name` — the config file
+/// itself, not some unrelated file in the same directory (e.g. a
+/// `.alacritty.toml.swp` an editor drops next to it).
+fn is_watched_config_file(
+    path: &std::path::Path,
+    target_file_name: &OsStr,
+) -> bool {
+    path.file_name() == Some(target_file_name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,5 +419,22 @@ history = 5000
         assert_eq!(config.scrolling.history, 5000);
         // Not set in the file -- still the real default, not zeroed.
         assert_eq!(config.cursor.style.shape, "Block");
+    }
+
+    #[test]
+    fn matches_only_the_exact_config_file_name() {
+        let target = OsStr::new("alacritty.toml");
+        assert!(is_watched_config_file(
+            std::path::Path::new("/home/user/.config/alacritty/alacritty.toml"),
+            target
+        ));
+        assert!(!is_watched_config_file(
+            std::path::Path::new("/home/user/.config/alacritty/alacritty.toml.swp"),
+            target
+        ));
+        assert!(!is_watched_config_file(
+            std::path::Path::new("/home/user/.config/alacritty/other.toml"),
+            target
+        ));
     }
 }

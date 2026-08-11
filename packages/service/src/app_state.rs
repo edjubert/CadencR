@@ -106,6 +106,11 @@ pub struct AppState {
     /// Broadcast when a settings JSON file changes on disk (our own writes or an
     /// external editor). Drives the frontend to re-fetch settings live.
     pub settings_events_tx: broadcast::Sender<crate::domain::settings_store::SettingsChangeEvent>,
+    /// Broadcast when `alacritty.toml` changes on disk. Drives the frontend
+    /// to re-fetch `GET /api/terminal/alacritty-config` live.
+    pub alacritty_config_events_tx: broadcast::Sender<
+        crate::domain::terminal::alacritty_config::AlacrittyConfigChangedEvent,
+    >,
     /// Broadcast when a remote device opens its first live socket. Subscribed
     /// host clients turn this into a "device connected" toast. Emitted once per
     /// device-connection (deduped at the live-session registry), not per socket.
@@ -230,6 +235,7 @@ impl AppState {
         let (feature_events_tx, _) = broadcast::channel(64);
         let (file_change_tx, _) = broadcast::channel(16);
         let (settings_events_tx, _) = broadcast::channel(16);
+        let (alacritty_config_events_tx, _) = broadcast::channel(16);
         let (remote_events_tx, _) = broadcast::channel(16);
         let (forge_events_tx, _) = broadcast::channel(64);
         // VAPID keys live next to the other remote secrets. Failure here is
@@ -256,6 +262,7 @@ impl AppState {
             pty_manager: PtyManager::new(),
             file_change_tx,
             settings_events_tx,
+            alacritty_config_events_tx,
             remote_events_tx,
             file_watcher: crate::domain::editor::watcher::new_shared(),
             auth_token,
@@ -297,6 +304,7 @@ impl AppState {
         let (feature_events_tx, _) = broadcast::channel(64);
         let (file_change_tx, _) = broadcast::channel(16);
         let (settings_events_tx, _) = broadcast::channel(16);
+        let (alacritty_config_events_tx, _) = broadcast::channel(16);
         let (remote_events_tx, _) = broadcast::channel(16);
         let (forge_events_tx, _) = broadcast::channel(64);
         Self {
@@ -317,6 +325,7 @@ impl AppState {
             pty_manager: PtyManager::new(),
             file_change_tx,
             settings_events_tx,
+            alacritty_config_events_tx,
             remote_events_tx,
             file_watcher: crate::domain::editor::watcher::new_shared(),
             auth_token: "test-token".to_string(),
