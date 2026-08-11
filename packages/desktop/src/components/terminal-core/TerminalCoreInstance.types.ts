@@ -1,11 +1,8 @@
-import type { XTermPalette } from "@/lib/themes";
-
-export interface XTermInstanceProps {
+export interface TerminalCoreInstanceProps {
   featureId: number;
   projectId: number;
   existingPtyId?: string;
   requestedCwd?: string;
-  theme: XTermPalette;
   onExit?: (ptyId: string) => void;
   onPtyReady?: (ptyId: string, cwd: string | null) => void;
   killOnUnmount?: boolean;
@@ -18,7 +15,7 @@ export interface XTermInstanceProps {
   onConsumeCtrl?: () => void;
 }
 
-export interface XTermInstanceHandle {
+export interface TerminalCoreInstanceHandle {
   focus: () => void;
   clearScreen: () => void;
   clearInput: () => void;

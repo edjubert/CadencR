@@ -20,6 +20,8 @@ use crate::domain::features::routes as features_routes;
 use crate::domain::imports::models as imports_models;
 use crate::domain::imports::routes as imports_routes;
 use crate::domain::lsp::routes as lsp_routes;
+use crate::domain::neovim::protocol as neovim_protocol;
+use crate::domain::neovim::routes as neovim_routes;
 use crate::domain::projects::icon as projects_icon;
 use crate::domain::projects::models as projects_models;
 use crate::domain::projects::routes as projects_routes;
@@ -31,6 +33,7 @@ use crate::domain::scheduled_messages::models as scheduled_messages_models;
 use crate::domain::scheduled_messages::routes as scheduled_messages_routes;
 use crate::domain::sessions::models as sessions_models;
 use crate::domain::sessions::routes as sessions_routes;
+use crate::domain::terminal::alacritty_config as terminal_alacritty_config;
 use crate::domain::terminal::routes as terminal_routes;
 use crate::domain::workspace::models as workspace_models;
 use crate::domain::workspace::routes as workspace_routes;
@@ -114,9 +117,6 @@ use crate::domain::ws_session::protocol as ws_protocol;
         custom_actions_routes::cancel_run_handler,
         custom_actions_routes::get_schedule_handler,
         custom_actions_routes::set_schedule_handler,
-        scheduled_messages_routes::get_scheduled_message_handler,
-        scheduled_messages_routes::set_scheduled_message_handler,
-        scheduled_messages_routes::delete_scheduled_message_handler,
         feature_layouts_routes::list_layouts_handler,
         feature_layouts_routes::create_layout_handler,
         feature_layouts_routes::update_layout_handler,
@@ -132,6 +132,9 @@ use crate::domain::ws_session::protocol as ws_protocol;
         diff_comments_routes::mark_diff_viewed_handler,
         diff_comments_routes::unmark_diff_viewed_handler,
         diff_comments_routes::clear_all_diff_viewed_handler,
+        scheduled_messages_routes::get_scheduled_message_handler,
+        scheduled_messages_routes::set_scheduled_message_handler,
+        scheduled_messages_routes::delete_scheduled_message_handler,
         sessions_routes::get_sessions_handler,
         sessions_routes::list_conversation_references_handler,
         sessions_routes::get_feature_agent_state_handler,
@@ -143,6 +146,7 @@ use crate::domain::ws_session::protocol as ws_protocol;
         sessions_routes::get_message_preview_handler,
         terminal_routes::list_terminal_sessions_handler,
         terminal_routes::kill_terminal_sessions_handler,
+        terminal_routes::alacritty_config_route,
         super::get_agent_catalog,
         discovery_routes::binary_discovery_handler,
         claude_code_routes::list_profiles_handler,
@@ -170,6 +174,10 @@ use crate::domain::ws_session::protocol as ws_protocol;
         push_routes::vapid_key_handler,
         push_routes::subscribe_handler,
         push_routes::unsubscribe_handler,
+        neovim_routes::start_route,
+        neovim_routes::stop_route,
+        neovim_routes::detect_route,
+        neovim_routes::open_file_route,
     ),
     components(schemas(
         HealthResponse,
@@ -261,9 +269,11 @@ use crate::domain::ws_session::protocol as ws_protocol;
         custom_actions_models::Scope,
         custom_actions_models::TriggeredBy,
         custom_actions_models::SuccessResponse,
-        scheduled_messages_models::ScheduledMessage,
-        scheduled_messages_models::SetScheduledMessageRequest,
-        scheduled_messages_models::ScheduledMessageDeleted,
+        ws_protocol::SlashCommandPayload,
+        ws_protocol::SlashCommandKindPayload,
+        ws_protocol::PromptCommandPolicyPayload,
+        ws_protocol::PromptCommandPlacementPayload,
+        ws_protocol::SkillReferenceTriggerPayload,
         feature_layouts_models::FeatureLayout,
         feature_layouts_models::CreateFeatureLayoutRequest,
         feature_layouts_models::UpdateFeatureLayoutRequest,
@@ -276,6 +286,9 @@ use crate::domain::ws_session::protocol as ws_protocol;
         diff_comments_models::DiffViewedFile,
         diff_comments_models::MarkViewedRequest,
         diff_comments_routes::SuccessResponse,
+        scheduled_messages_models::ScheduledMessage,
+        scheduled_messages_models::SetScheduledMessageRequest,
+        scheduled_messages_models::ScheduledMessageDeleted,
         sessions_models::AgentSessionRow,
         sessions_models::AgentBlock,
         sessions_models::SessionState,
@@ -293,6 +306,17 @@ use crate::domain::ws_session::protocol as ws_protocol;
         sessions_models::RefreshSessionResponse,
         terminal_routes::TerminalSessionInfo,
         terminal_routes::KillTerminalsResponse,
+        terminal_alacritty_config::AlacrittyConfigResponse,
+        terminal_alacritty_config::AlacrittyConfig,
+        terminal_alacritty_config::FontConfig,
+        terminal_alacritty_config::FontFace,
+        terminal_alacritty_config::ColorsConfig,
+        terminal_alacritty_config::PrimaryColors,
+        terminal_alacritty_config::CursorColors,
+        terminal_alacritty_config::AnsiPalette,
+        terminal_alacritty_config::CursorConfig,
+        terminal_alacritty_config::CursorStyle,
+        terminal_alacritty_config::ScrollingConfig,
         claude_code_routes::ProfileView,
         claude_code_routes::ProfilesResponse,
         claude_code_routes::UpsertProfileRequest,
@@ -329,6 +353,9 @@ use crate::domain::ws_session::protocol as ws_protocol;
         push_models::PushUnsubscribeRequest,
         push_models::PushSubscriptionKeys,
         push_models::PushSubscriptionResponse,
+        neovim_protocol::NeovimStartResponse,
+        neovim_protocol::NeovimDetectResponse,
+        neovim_protocol::OpenFileRequest,
         ws_protocol::WsSessionAction,
         ws_protocol::PermissionDecision,
         ws_protocol::SessionInitPayload,

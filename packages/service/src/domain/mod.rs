@@ -37,6 +37,7 @@ pub mod git;
 pub mod imports;
 pub mod lsp;
 pub mod mcp;
+pub mod neovim;
 pub mod permission_bridge;
 pub mod projects;
 pub mod push;

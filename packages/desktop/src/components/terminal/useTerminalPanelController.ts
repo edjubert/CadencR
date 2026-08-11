@@ -17,9 +17,8 @@ import {
   type SplitOrientation,
   type TerminalPanelState,
 } from "@/hooks/useTerminalState";
-import { useTheme } from "@/hooks/useTheme";
 import { useWorktreeTerminalAutoSwitch } from "@/hooks/useWorktreeTerminalAutoSwitch";
-import type { XTermInstanceHandle } from "./XTermInstance";
+import type { TerminalCoreInstanceHandle } from "@/components/terminal-core";
 import { useTerminalPaneShortcuts } from "./useTerminalPaneShortcuts";
 
 export interface TerminalPanelProps {
@@ -85,10 +84,10 @@ function useTerminalSlots(leaves: TerminalLeaves) {
 }
 
 function useTerminalPaneFocus(leaves: TerminalLeaves) {
-  const paneRefs = useRef<Map<string, XTermInstanceHandle>>(new Map());
+  const paneRefs = useRef<Map<string, TerminalCoreInstanceHandle>>(new Map());
   const [activePaneId, setActivePaneId] = useState<string | null>(null);
   const [ctrlArmed, setCtrlArmed] = useState(false);
-  const setPaneRef = useCallback((paneId: string, handle: XTermInstanceHandle | null): void => {
+  const setPaneRef = useCallback((paneId: string, handle: TerminalCoreInstanceHandle | null): void => {
     if (handle) paneRefs.current.set(paneId, handle);
     else paneRefs.current.delete(paneId);
   }, []);
@@ -308,7 +307,6 @@ export function useTerminalPanelController(
   const slots = useTerminalSlots(leaves);
   const layout = useTerminalLayoutActions(props, leaves, focus);
   const runtime = useTerminalRuntimeActions(props, leaves, focus, layout);
-  const { theme } = useTheme();
   const setPtyId = useTerminalStore((state) => state.setPtyId);
   const setPaneCwd = useTerminalStore((state) => state.setPaneCwd);
   const clearInitialCommand = useTerminalStore((state) => state.clearInitialCommand);
@@ -334,7 +332,6 @@ export function useTerminalPanelController(
       setPaneCwd,
       setPtyId,
       slots,
-      xtermPalette: theme.xterm,
     }),
     [
       clearInitialCommand,
@@ -347,7 +344,6 @@ export function useTerminalPanelController(
       setPaneCwd,
       setPtyId,
       slots,
-      theme.xterm,
     ],
   );
 }

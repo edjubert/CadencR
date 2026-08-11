@@ -18,6 +18,8 @@ use crate::domain::features::routes::features_router;
 use crate::domain::git::routes::git_router;
 use crate::domain::imports::routes::imports_router;
 use crate::domain::lsp::lsp_router;
+use crate::domain::neovim::routes::routes as neovim_routes;
+use crate::domain::neovim::ws::ws_routes as neovim_ws_routes;
 use crate::domain::projects::routes::projects_router;
 use crate::domain::scheduled_messages::routes::scheduled_messages_router;
 use crate::domain::sessions::routes::sessions_router;
@@ -116,6 +118,8 @@ pub fn build_api_routes() -> Router<AppState> {
         .merge(discovery_router())
         .merge(imports_router())
         .merge(lsp_router())
+        .merge(neovim_routes())
+        .merge(neovim_ws_routes())
         // VAPID public key — shared, so the frontend can fetch it on either
         // listener. Subscription management (device-keyed) is remote-only and
         // merged separately in `build_remote_router`.
@@ -136,6 +140,10 @@ fn compression_layer() -> tower_http::compression::CompressionLayer {
 /// remote-access control endpoints (enable/disable/status/pairing-code/revoke),
 /// which a remote device can therefore never reach.
 pub fn build_router(state: AppState) -> Router {
+    // Keep a high-ceiling runaway backstop on loopback too: `/ws` is
+    // intentionally upgradeable without the HTTP launch-token middleware.
+    // Credential-bearing requests have an independent allowance so anonymous
+    // local traffic cannot starve the renderer.
     let limiter = std::sync::Arc::new(middleware::RateLimiter::default());
     build_api_routes()
         .route("/api/browser-bridge", put(register_browser_bridge))
@@ -145,7 +153,10 @@ pub fn build_router(state: AppState) -> Router {
             state.clone(),
             middleware::auth_middleware,
         ))
-        .layer(axum::middleware::from_fn(middleware::rate_limit_middleware))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::rate_limit_middleware,
+        ))
         .layer(axum::Extension(limiter))
         .layer(compression_layer())
         .with_state(state)

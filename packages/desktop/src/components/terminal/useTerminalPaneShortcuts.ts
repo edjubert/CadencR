@@ -1,12 +1,12 @@
 import type { RefObject } from "react";
 import { useScopedGlobalShortcutById } from "@/hooks/useShortcut";
 import type { SplitOrientation } from "@/hooks/useTerminalState";
-import type { XTermInstanceHandle } from "./XTermInstance";
+import type { TerminalCoreInstanceHandle } from "@/components/terminal-core";
 
 interface UseTerminalPaneShortcutsParams {
   hotkeysEnabled: boolean;
   resolvedActivePaneId: string | null;
-  paneRefs: RefObject<Map<string, XTermInstanceHandle>>;
+  paneRefs: RefObject<Map<string, TerminalCoreInstanceHandle>>;
   onSplit: (orientation: SplitOrientation) => void;
   onNavigate: (direction: "left" | "right" | "up" | "down") => void;
   onClose: (paneId: string) => void;

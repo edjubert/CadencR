@@ -57,6 +57,7 @@ function handleAppWsOpen(connection: AppWsConnection): void {
   ws.send(JSON.stringify(createEnvelope("app", "subscribe.session_status", {})));
   ws.send(JSON.stringify(createEnvelope("app", "subscribe.feature_events", {})));
   ws.send(JSON.stringify(createEnvelope("app", "subscribe.settings_events", {})));
+  ws.send(JSON.stringify(createEnvelope("app", "subscribe.alacritty_config_events", {})));
   connection.unsubscribeForgeVisibility = subscribeForgeStatus(ws);
   void hydratePrStatuses();
   if (!isBrowserRemote()) {

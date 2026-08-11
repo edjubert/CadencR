@@ -15,6 +15,7 @@ tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 sqlx = { version = "0.9", default-features = false, features = ["sqlite", "runtime-tokio", "migrate", "macros", "chrono", "uuid", "json"] }
 serde = { version = "1", features = ["derive"] }
+toml = "0.8"
 serde_json = "1"
 utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-axum = "0.2"
@@ -36,7 +37,7 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 rmcp = { version = "1", features = ["server", "transport-streamable-http-server", "transport-io", "elicitation"] }
 dashmap = "6"
 libc = "0.2"
-portable-pty = "0.9"
+portable-pty = { path = "vendor/portable-pty" }
 percent-encoding = "2"
 ignore = "0.4"
 nucleo-matcher = "0.3"
@@ -66,6 +67,9 @@ if-addrs = "0.15"
 # (pure-rust, the same crate web-push uses for ES256) generates the VAPID keypair.
 web-push = { version = "0.11", default-features = false, features = ["hyper-client"] }
 jwt-simple = { version = "0.12", default-features = false, features = ["pure-rust"] }
+chrono-tz = { version = "0.10.4", features = ["serde"] }
+nvim-rs = { version = "0.6", features = ["use_tokio"] }
+rmpv = "1"
 
 [[bin]]
 name = "dump-openapi"
