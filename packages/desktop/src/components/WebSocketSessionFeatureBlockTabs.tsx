@@ -129,6 +129,8 @@ function AgentTabContent({
         }
         currentThinkingEffort={controls.ws.currentThinkingEffort}
         onThinkingEffortChange={controls.ws.setThinkingEffort}
+        fastMode={controls.ws.fastMode}
+        onFastModeChange={controls.ws.setFastMode}
         runtimeProvider={controls.ws.currentSelection?.providerId}
         runtimeSessionId={controls.ws.runtimeSessionId || undefined}
         slashCommandsOverride={data.session?.slashCommands ?? []}

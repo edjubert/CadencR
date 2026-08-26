@@ -37,8 +37,9 @@ export function useProjectRuntimeSelection(projectId: number | undefined): Proje
       : {
           providerId: catalog.data?.default_provider ?? DEFAULT_PROVIDER,
           modelId:
-            catalog.data?.providers.find((provider) => provider.id === (catalog.data?.default_provider ?? DEFAULT_PROVIDER))
-              ?.default_model ?? "",
+            catalog.data?.providers.find(
+              (provider) => provider.id === (catalog.data?.default_provider ?? DEFAULT_PROVIDER),
+            )?.default_model ?? "",
         };
 
   const isLoading =

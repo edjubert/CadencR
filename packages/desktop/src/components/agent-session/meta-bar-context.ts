@@ -1,4 +1,5 @@
 import { useImperativeHandle } from "react";
+import { cn } from "@/lib/utils";
 import type { WorktreeMode } from "@/lib/worktree-mode";
 import type { TodoItem } from "@/types/agent";
 import type { ThinkingEffortLevel } from "@/shared/thinking-effort";
@@ -101,21 +102,16 @@ export function useMetaBarForwardRef(
   );
 }
 
-export interface MetaBarStyles {
-  containerClassName: string;
-  containerStyle: React.CSSProperties | undefined;
-}
-
-export function useMetaBarStyles(isStandalone: boolean): MetaBarStyles {
-  return {
-    containerClassName: isStandalone
-      ? "flex items-center gap-1.5 px-3 py-2"
-      : "flex items-center gap-1.5 relative -mt-6 px-3 py-3 backdrop-blur-sm",
-    containerStyle: isStandalone
-      ? undefined
-      : {
-          background:
-            "linear-gradient(to bottom, transparent 0%, hsl(var(--background) / 0.05) 10%, hsl(var(--background) / 0.12) 20%, hsl(var(--background) / 0.25) 35%, hsl(var(--background) / 0.45) 50%, hsl(var(--background) / 0.65) 65%, hsl(var(--background) / 0.82) 80%, hsl(var(--background) / 0.93) 90%, hsl(var(--background)) 100%)",
-        },
-  };
+/**
+ * `@container`: Fast mode drops its text label by this bar's width, not the
+ * window — the agent pane is often a narrow side column.
+ *
+ * No fade and no overhang of its own: the transcript dissolves at its own
+ * bottom edge (`STREAM_DISSOLVE_STYLE`), so this row always sits on plain page.
+ */
+export function useMetaBarContainerClassName(variant: "session" | "standalone"): string {
+  return cn(
+    "@container flex items-center gap-1.5 px-3",
+    variant === "standalone" ? "py-2" : "py-3",
+  );
 }

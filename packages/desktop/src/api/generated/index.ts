@@ -4796,65 +4796,6 @@ export function useGetAgentSelection<
   return query;
 }
 
-export const getAgentSelection = (params?: GetAgentSelectionParams, signal?: AbortSignal) => {
-  return customInstance<AgentSelectionResponse>({
-    url: `/api/agent-runtime/selection`,
-    method: "GET",
-    params,
-    signal,
-  });
-};
-
-export const getGetAgentSelectionQueryKey = (params?: GetAgentSelectionParams) => {
-  return [`/api/agent-runtime/selection`, ...(params ? [params] : [])] as const;
-};
-
-export const getGetAgentSelectionQueryOptions = <
-  TData = Awaited<ReturnType<typeof getAgentSelection>>,
-  TError = ErrorType<void>,
->(
-  params?: GetAgentSelectionParams,
-  options?: {
-    query?: UseQueryOptions<Awaited<ReturnType<typeof getAgentSelection>>, TError, TData>;
-  },
-) => {
-  const { query: queryOptions } = options ?? {};
-
-  const queryKey = queryOptions?.queryKey ?? getGetAgentSelectionQueryKey(params);
-
-  const queryFn: QueryFunction<Awaited<ReturnType<typeof getAgentSelection>>> = ({ signal }) =>
-    getAgentSelection(params, signal);
-
-  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
-    Awaited<ReturnType<typeof getAgentSelection>>,
-    TError,
-    TData
-  > & { queryKey: QueryKey };
-};
-
-export type GetAgentSelectionQueryResult = NonNullable<
-  Awaited<ReturnType<typeof getAgentSelection>>
->;
-export type GetAgentSelectionQueryError = ErrorType<void>;
-
-export function useGetAgentSelection<
-  TData = Awaited<ReturnType<typeof getAgentSelection>>,
-  TError = ErrorType<void>,
->(
-  params?: GetAgentSelectionParams,
-  options?: {
-    query?: UseQueryOptions<Awaited<ReturnType<typeof getAgentSelection>>, TError, TData>;
-  },
-): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
-  const queryOptions = getGetAgentSelectionQueryOptions(params, options);
-
-  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & { queryKey: QueryKey };
-
-  query.queryKey = queryOptions.queryKey;
-
-  return query;
-}
-
 export const binaryDiscovery = (signal?: AbortSignal) => {
   return customInstance<BinaryDiscoveryResponse>({
     url: `/api/agents/binary-discovery`,

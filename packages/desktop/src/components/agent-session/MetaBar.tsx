@@ -18,7 +18,11 @@ import {
   MetaBarTrailingGroup,
   useMetaBarDerivedState,
 } from "./meta-bar-sections";
-import { useMetaBarInput, useMetaBarForwardRef, useMetaBarStyles } from "./meta-bar-context";
+import {
+  useMetaBarInput,
+  useMetaBarForwardRef,
+  useMetaBarContainerClassName,
+} from "./meta-bar-context";
 
 export interface MetaBarProps {
   showAutoScrollChip: boolean;
@@ -92,9 +96,8 @@ export interface MetaBarProps {
   onPause?: () => void;
   onModelSelected?: () => void;
   /**
-   * Layout variant. `"session"` (default) fades into the agent stream above
-   * via a negative margin + background gradient. `"standalone"` drops that
-   * styling so the bar can sit on its own inside a bordered container.
+   * Layout variant. Only the vertical padding differs: `"standalone"` tightens
+   * it so the bar can sit on its own inside a bordered container.
    */
   variant?: "session" | "standalone";
   /**
@@ -116,7 +119,7 @@ export const MetaBar = forwardRef<MetaBarHandle, MetaBarProps>(function MetaBar(
   const displayProviderId = input.currentSelection?.providerId;
 
   useMetaBarForwardRef(ref, setInternalModelPickerOpen);
-  const { containerClassName, containerStyle } = useMetaBarStyles(input.secondaryBelow);
+  const containerClassName = useMetaBarContainerClassName(props.variant ?? "session");
 
   const {
     pickerProviders,
@@ -128,7 +131,7 @@ export const MetaBar = forwardRef<MetaBarHandle, MetaBarProps>(function MetaBar(
   } = useMetaBarDerivedState(props, displayProviderId);
 
   return (
-    <div className={containerClassName} style={containerStyle}>
+    <div className={containerClassName}>
       <MetaBarLeadingChips
         showAutoScrollChip={input.showAutoScrollChip}
         secondaryBelow={input.secondaryBelow}
