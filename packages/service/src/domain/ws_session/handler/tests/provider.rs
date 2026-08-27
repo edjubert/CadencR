@@ -140,6 +140,49 @@ async fn test_provider_set_updates_pending_session_and_persists_runtime_provider
 }
 
 #[tokio::test]
+async fn test_provider_set_applies_a_model_change_on_the_same_provider() {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let sdk_sessions: SdkSessions = Arc::new(Mutex::new(HashMap::new()));
+    let app_state = make_test_app_state().await;
+
+    let session_id = init_session(&tx, &mut rx, &sdk_sessions, &app_state, 1).await;
+
+    let db_id: i64 = session_id.parse().unwrap();
+    {
+        let sessions = sdk_sessions.lock().await;
+        let handle = sessions.get(&db_id).unwrap();
+        assert_eq!(handle.runtime_provider, "claude_code");
+    }
+
+    let envelope = make_envelope(
+        "session",
+        "provider.set",
+        serde_json::json!({
+            "session_id": session_id,
+            "provider": "claude_code",
+            "model": "sonnet",
+        }),
+    );
+    dispatch_envelope(envelope, &tx, &sdk_sessions, &app_state).await;
+
+    let msg = rx.recv().await.unwrap();
+    let Message::Text(text) = msg else {
+        panic!("expected text message");
+    };
+    let env: WsEnvelope = serde_json::from_str(&text).unwrap();
+    assert_eq!(env.action, "provider.set.ok");
+    assert_eq!(
+        env.payload.get("model").and_then(|v| v.as_str()),
+        Some("sonnet"),
+        "same-provider model change must not be acknowledged with the stale model"
+    );
+
+    let sessions = sdk_sessions.lock().await;
+    let handle = sessions.get(&db_id).unwrap();
+    assert_eq!(handle.desired_model.as_deref(), Some("sonnet"));
+}
+
+#[tokio::test]
 async fn test_provider_set_rejects_unsupported_provider() {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let sdk_sessions: SdkSessions = Arc::new(Mutex::new(HashMap::new()));

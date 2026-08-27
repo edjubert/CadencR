@@ -45,4 +45,7 @@ jobs:
       - name: Run pre-commit checks
         run: |
           pnpm run test:release-scripts
-          pnpm turbo run format:check lint ts-check test knip --log-order=stream
+          pnpm turbo run format:check lint ts-check knip --log-order=stream
+          # @cadencr/service already ran in the "Rust tests" step above —
+          # exclude it here so cargo test doesn't run twice.
+          pnpm turbo run test --filter='!@cadencr/service' --log-order=stream

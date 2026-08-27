@@ -107,10 +107,15 @@ enum SwitchDecision {
 
 /// Decide whether the switch applies, and capture what resolving the new
 /// model needs. Rejects sessions whose conversation has already started.
+///
+/// "Unchanged" requires the provider *and* the requested model (when one was
+/// sent) to already match — comparing the provider alone would silently drop
+/// a same-provider model change (picking model C right after model B) by
+/// acknowledging the stale model instead of applying the new one.
 async fn decide_switch(
     sdk_sessions: &SdkSessions,
     db_session_id: i64,
-    requested_provider: &str,
+    payload: &ProviderSetPayload,
 ) -> Result<SwitchDecision, ProviderSetError> {
     let sessions = sdk_sessions.lock().await;
     let handle = sessions
@@ -119,7 +124,12 @@ async fn decide_switch(
     let QueryState::Pending(_) = &handle.state else {
         return Err(ProviderSetError::locked());
     };
-    if handle.runtime_provider == requested_provider {
+    let provider_unchanged = handle.runtime_provider == payload.provider;
+    let model_unchanged = payload
+        .model
+        .as_deref()
+        .is_none_or(|requested| Some(requested) == handle.desired_model.as_deref());
+    if provider_unchanged && model_unchanged {
         return Ok(SwitchDecision::Unchanged {
             active_model: handle.desired_model.clone().unwrap_or_default(),
         });
@@ -137,11 +147,16 @@ async fn decide_switch(
 /// Apply the resolved provider/model pair to the in-memory handle. Re-checks
 /// the session state, since the lock was released while the model resolved.
 /// Contains no `await`, so provider and model always land together.
+///
+/// `resolved_model` is `None` when the new provider exposes no usable model
+/// (typically its CLI is not installed). The switch still applies, but the
+/// model is *cleared* rather than kept: carrying the previous provider's model
+/// over would leave an incompatible provider/model pair behind.
 async fn commit_switch(
     sdk_sessions: &SdkSessions,
     db_session_id: i64,
     new_provider: &str,
-    resolved_model: String,
+    resolved_model: Option<String>,
     next_access_mode: Option<RuntimeAccessMode>,
 ) -> Result<(i64, String), ProviderSetError> {
     let mut sessions = sdk_sessions.lock().await;
@@ -162,9 +177,9 @@ async fn commit_switch(
     options.access_mode = next_access_mode;
     handle.config.fast_mode = false;
     options.fast_mode = false;
-    handle.desired_model = Some(resolved_model.clone());
-    options.model = Some(resolved_model.clone());
-    Ok((handle.feature_id, resolved_model))
+    handle.desired_model = resolved_model.clone();
+    options.model = resolved_model.clone();
+    Ok((handle.feature_id, resolved_model.unwrap_or_default()))
 }
 
 /// Reject the switch before the first prompt is even possible: unparseable
@@ -239,13 +254,18 @@ pub(crate) async fn handle_provider_set(
 /// to its default — even when no model was requested at all, a provider switch
 /// must still land on *some* model for the new provider.
 ///
-/// Resolved before anything is written, so a provider with no usable model
-/// leaves both the handle and the DB row untouched.
+/// Resolved before anything is written, so the provider and the model are
+/// committed together.
+///
+/// `None` means the new provider exposes no usable model — normal when its CLI
+/// is not installed. That must not block the switch: refusing it would make a
+/// provider unreachable precisely when the user is trying to configure it.
+/// `commit_switch` clears the model instead of keeping the old provider's.
 async fn resolve_switch_model(
     app_state: &AppState,
     payload: &ProviderSetPayload,
     snapshot: &SwitchSnapshot,
-) -> Result<String, ProviderSetError> {
+) -> Option<String> {
     let requested_model = payload
         .model
         .clone()
@@ -258,15 +278,6 @@ async fn resolve_switch_model(
         snapshot.profile.as_deref(),
     )
     .await
-    .ok_or_else(|| {
-        ProviderSetError::new(
-            "NO_MODEL_AVAILABLE",
-            format!(
-                "Provider '{}' exposes no usable model; check that its CLI is installed and authenticated",
-                payload.provider
-            ),
-        )
-    })
 }
 
 async fn apply_provider_set(
@@ -286,7 +297,7 @@ async fn apply_provider_set(
     })?;
     let supports_prompt_receipts = adapter.supports_prompt_receipts();
 
-    let snapshot = match decide_switch(sdk_sessions, db_session_id, &payload.provider).await? {
+    let snapshot = match decide_switch(sdk_sessions, db_session_id, payload).await? {
         SwitchDecision::Unchanged { active_model } => {
             send_provider_set_ok(
                 sender,
@@ -301,24 +312,17 @@ async fn apply_provider_set(
         SwitchDecision::Changed(snapshot) => snapshot,
     };
 
-    let resolved_model = resolve_switch_model(app_state, payload, &snapshot).await?;
+    let resolved_model = resolve_switch_model(app_state, payload, &snapshot).await;
 
     let configured_access_mode = adapter.configured_access_mode(&app_state.read_pool).await;
     let configured_access_wire = configured_access_mode.as_ref().map(access_mode_wire);
     let new_mode_wire = adapter.default_permission_mode_wire();
 
-    // In-memory first: its state check and its write are atomic under the
-    // lock, so a session that went active while the model resolved is rejected
-    // without ever touching the DB row.
-    let (feature_id, active_model) = commit_switch(
-        sdk_sessions,
-        db_session_id,
-        &payload.provider,
-        resolved_model,
-        configured_access_mode.clone(),
-    )
-    .await?;
-
+    // DB first: a write failure here (e.g. a disk or lock error) must leave
+    // the live handle untouched. Committing in memory first and persisting
+    // after would instead hand the caller a DB_ERROR while the live session
+    // had already moved on — other clients get no confirmation, and a
+    // reconnect would read the stale provider from SQLite.
     persist_provider_selection(
         &app_state.write_pool,
         db_session_id,
@@ -332,10 +336,24 @@ async fn apply_provider_set(
             db_session_id,
             runtime_provider = %payload.provider,
             %error,
-            "failed to persist runtime provider selection; the live session is ahead of its row"
+            "failed to persist runtime provider selection"
         );
         ProviderSetError::new("DB_ERROR", "Failed to persist runtime provider selection")
     })?;
+
+    // In-memory last, re-validating state: a session that went active while
+    // the model resolved and the DB was written is rejected here. The DB row
+    // already reflects the new provider in that case, which the next
+    // `session.init` will pick up — the same outcome the pre-refactor code
+    // had no guard against at all.
+    let (feature_id, active_model) = commit_switch(
+        sdk_sessions,
+        db_session_id,
+        &payload.provider,
+        resolved_model,
+        configured_access_mode.clone(),
+    )
+    .await?;
 
     broadcast_provider_set(
         app_state,
