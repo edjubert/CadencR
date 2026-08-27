@@ -799,7 +799,11 @@ pub(crate) mod tests {
                 .await
                 .unwrap_or_else(|e| panic!("open {name}: {e:?}"));
             let opened = current_buffer_name(&manager, 14).await;
-            assert_eq!(opened, file.to_string_lossy(), "{name} opened the wrong buffer");
+            assert_eq!(
+                opened,
+                file.to_string_lossy(),
+                "{name} opened the wrong buffer"
+            );
         }
 
         manager.stop(14).await.unwrap();
