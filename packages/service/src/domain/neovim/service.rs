@@ -79,7 +79,11 @@ impl NeovimManager {
         let socket_dir = tempfile::tempdir().map_err(|e| AppError::NeovimSpawnError {
             detail: format!("failed to create control socket directory: {e}"),
         })?;
-        let control_socket = socket_dir.path().join(format!("nvim-{feature_id}.sock"));
+        // The tempdir is already unique per spawn, so the socket needs no
+        // per-feature name of its own — keeps `feature_id` (client-supplied)
+        // out of path construction entirely, rather than trusting its `i64`
+        // type to rule out traversal characters.
+        let control_socket = socket_dir.path().join("nvim.sock");
 
         let mut cmd = CommandBuilder::new("nvim");
         cmd.arg("--listen");
