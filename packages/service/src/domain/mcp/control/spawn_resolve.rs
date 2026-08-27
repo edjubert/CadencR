@@ -244,7 +244,17 @@ async fn effective_spawn_provider(
     .await
     {
         Ok(selection) => selection.provider_id,
-        Err(_) => default_provider_id().to_string(),
+        Err(error) => {
+            // The provider may have resolved fine while its catalog is empty;
+            // keep the user's configured provider only when the whole
+            // resolution failed, and never hide the reason.
+            tracing::warn!(
+                target_project_id = target_project.id,
+                %error,
+                "selection resolution failed for spawn; falling back to the default provider"
+            );
+            default_provider_id().to_string()
+        }
     }
 }
 

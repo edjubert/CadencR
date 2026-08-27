@@ -13,20 +13,32 @@ const mockSetWorkspaceSettingMutate = vi.fn();
 type KvEntry = { key: string; value: string | null };
 
 const mockWorkspaceKvSettings = vi.fn((): { data: KvEntry[] } => ({ data: [] }));
-const mockAgentCatalog = vi.fn(() => ({
-  data: {
-    default_provider: "claude_code",
-    providers: [
-      {
-        id: "claude_code",
-        label: "Claude",
-        status: "available",
-        models: [] as unknown,
-        default_model: "opus",
-      },
-    ],
-  },
-}));
+interface MockCatalogProvider {
+  id: string;
+  label: string;
+  status: string;
+  models: unknown;
+  default_model?: string;
+}
+
+const mockAgentCatalog = vi.fn(
+  (): {
+    data?: { default_provider?: string; providers?: MockCatalogProvider[] };
+  } => ({
+    data: {
+      default_provider: "claude_code",
+      providers: [
+        {
+          id: "claude_code",
+          label: "Claude",
+          status: "available",
+          models: [] as unknown,
+          default_model: "claude-sonnet-4-5",
+        },
+      ],
+    },
+  }),
+);
 
 const mockUseGetAgentSelection = vi.fn(
   (): { data?: AgentSelectionResponse; error?: unknown; isLoading: boolean } => ({
@@ -68,10 +80,13 @@ vi.mock("@/api/settings", () => ({
 
 vi.mock("../api/agentRuntime", () => ({
   useAgentCatalog: () => mockAgentCatalog(),
-  useSetFeatureProviderSetting: vi.fn((opts?: { mutation?: { onSuccess?: () => void } }) => ({
+  // `useSetFeatureProviderSetting` takes flat callbacks ({ onSuccess }), not a
+  // nested `mutation` object — mirror the real contract so the invalidation
+  // path is actually exercised.
+  useSetFeatureProviderSetting: vi.fn((opts?: { onSuccess?: () => void }) => ({
     mutate: (data: unknown) => {
       mockSetProviderMutate(data);
-      opts?.mutation?.onSuccess?.();
+      opts?.onSuccess?.();
     },
   })),
 }));
@@ -105,7 +120,7 @@ describe("useResolvedModel", () => {
             label: "Claude",
             status: "available",
             models: [] as unknown,
-            default_model: "opus",
+            default_model: "claude-sonnet-4-5",
           },
         ],
       },
@@ -152,7 +167,22 @@ describe("useResolvedModel", () => {
     });
     const { result } = renderHook(() => useResolvedModel(1, 1), { wrapper });
     expect(result.current.resolveProvider("session")).toBe("claude_code");
-    expect(result.current.resolveModel("session")).toBe("opus");
+    // The mock's default_model is distinct from any hardcoded fallback, so
+    // this proves the catalog value (not a literal) is what gets returned.
+    expect(result.current.resolveModel("session")).toBe("claude-sonnet-4-5");
+  });
+
+  it("returns an empty model id when the catalog has no default model", () => {
+    mockAgentCatalog.mockReturnValue({
+      data: {
+        default_provider: "claude_code",
+        providers: [
+          { id: "claude_code", label: "Claude", status: "available", models: [] as unknown },
+        ],
+      },
+    });
+    const { result } = renderHook(() => useResolvedModel(1, 1), { wrapper });
+    expect(result.current.resolveModel("session")).toBe("");
   });
 
   it("handleModelChange calls setModelMutation.mutate", () => {

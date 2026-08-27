@@ -752,7 +752,7 @@ dependencies = [
  "sqlx",
  "subtle",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite 0.30.0",
  "tokio-util",

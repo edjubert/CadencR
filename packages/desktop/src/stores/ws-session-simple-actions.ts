@@ -163,11 +163,8 @@ function createConfigurationActions(deps: SimpleSessionActionDeps) {
     setThinkingEffort(sessionId: string, thinkingEffort?: string) {
       const session = getSession(sessionId);
       sendRaw(sessionId, createEffortSet(session.serverSessionId, thinkingEffort));
-      set(
-        updateSession(get(), sessionId, {
-          currentThinkingEffort: thinkingEffort,
-        }),
-      );
+      // No optimistic update: `currentThinkingEffort` is set only once the
+      // backend confirms via `effortSetOk` (see ws-envelope-handler.ts).
     },
 
     async setFastMode(sessionId: string, enabled: boolean): Promise<void> {

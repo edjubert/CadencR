@@ -242,11 +242,11 @@ mod tests {
     async fn model_settings_surface_the_failure_instead_of_inventing_a_model() {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
 
-        let result = get_model_settings(&pool).await;
+        let settings = get_model_settings(&pool)
+            .await
+            .expect("get_model_settings should not fail against an empty pool");
 
-        // Whatever the outcome, "opus" must never be fabricated as a fallback.
-        if let Ok(settings) = result {
-            assert_ne!(settings.session, "opus", "hardcoded placeholder leaked");
-        }
+        // "opus" must never be fabricated as a fallback.
+        assert_ne!(settings.session, "opus", "hardcoded placeholder leaked");
     }
 }

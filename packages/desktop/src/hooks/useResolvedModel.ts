@@ -22,7 +22,7 @@ import {
   thinkingEffortModelKey,
   type ThinkingEffortLevel,
 } from "@/shared/thinking-effort";
-import { useResolvedSelection, sessionSelectionOf } from "../api/agentSelection";
+import { useResolvedSelection } from "../api/agentSelection";
 import { toastError } from "@/lib/api-errors";
 
 const RESOLVED_MODEL_STALE_MS = 5 * 60 * 1000;
@@ -72,8 +72,8 @@ export function useResolvedModel(featureId: number, projectId: number) {
   }, [selectionQuery.error]);
 
   const resolveSelection = useCallback(
-    (_agentType: AgentType): RuntimeSelection | null => {
-      const resolved = sessionSelectionOf(selectionQuery.data);
+    (agentType: AgentType): RuntimeSelection | null => {
+      const resolved = selectionQuery.data?.selections?.[agentType];
       return resolved ? { providerId: resolved.provider_id, modelId: resolved.model_id } : null;
     },
     [selectionQuery.data],
@@ -85,7 +85,9 @@ export function useResolvedModel(featureId: number, projectId: number) {
       if (selection) return selection.modelId;
       const providerId = agentCatalog.data?.default_provider ?? DEFAULT_PROVIDER;
       const provider = agentCatalog.data?.providers.find((p) => p.id === providerId);
-      return provider?.default_model ?? "opus";
+      // No hardcoded model fallback: an absent catalog default means "no
+      // selection yet" (empty string), never a foreign provider's model id.
+      return provider?.default_model ?? "";
     },
     [resolveSelection, agentCatalog.data],
   );

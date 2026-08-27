@@ -64,7 +64,9 @@ function currentRawValue(
 }
 
 function defaultModelForProviderId(agentCatalog: AgentCatalogQuery, providerId: string): string {
-  return agentCatalog.data?.providers.find((p) => p.id === providerId)?.default_model ?? "opus";
+  // An absent catalog default means "no selection yet" (empty string) — never
+  // a hardcoded model id from a foreign provider.
+  return agentCatalog.data?.providers.find((p) => p.id === providerId)?.default_model ?? "";
 }
 
 function useSelectorMutations(
@@ -324,13 +326,27 @@ export function useModelSelectorState(
     (agentType) => level === "global" || !WORKSPACE_ONLY_AGENT_TYPES.includes(agentType),
   );
 
-  const rows = visibleAgentTypes.map((agentType) =>
-    buildRow(agentType, level, selectionFor(agentType), agentCatalog, providers, applySelection),
-  );
+  // A failed selection query means `selectionFor` returns undefined for every
+  // row, which `buildRow` cannot distinguish from "no override set" — surface
+  // the error instead of rendering rows with a misleading "Override" badge.
+  const hasSelectionError = Boolean(selectionQuery.error);
+  const rows = hasSelectionError
+    ? []
+    : visibleAgentTypes.map((agentType) =>
+        buildRow(
+          agentType,
+          level,
+          selectionFor(agentType),
+          agentCatalog,
+          providers,
+          applySelection,
+        ),
+      );
 
   return {
     isLoading: selectionQuery.isLoading || agentCatalog.isLoading,
     hasCatalogError: Boolean(agentCatalog.error),
+    hasSelectionError,
     rows,
   };
 }
