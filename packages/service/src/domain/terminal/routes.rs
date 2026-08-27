@@ -102,6 +102,11 @@ pub struct KillTerminalsResponse {
 /// Kill every live shell belonging to a feature. Used when archiving or deleting
 /// a feature so its terminals don't keep running in a worktree that may be about
 /// to be removed.
+///
+/// Shells only: the feature's Neovim PTY is `PtyKind::Neovim` and is left
+/// running, because this route is also the sidebar's "close activity" action on
+/// a feature the user still has open. Neovim teardown belongs to the paths that
+/// actually destroy the worktree (`delete_worktree`, `delete_feature`).
 #[utoipa::path(
     post,
     path = "/api/terminal/kill",
@@ -113,7 +118,6 @@ pub async fn kill_terminal_sessions_handler(
     State(state): State<AppState>,
 ) -> Json<KillTerminalsResponse> {
     let killed = state.pty_manager.kill_feature_ptys(query.feature_id);
-    let _ = state.neovim_manager.stop(query.feature_id).await;
     Json(KillTerminalsResponse {
         killed: killed as u32,
     })

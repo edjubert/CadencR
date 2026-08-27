@@ -207,24 +207,32 @@ impl NeovimManager {
         // there — resolving them against the service's own working directory
         // would reject every relative path. Needed because `:tab drop` opens an
         // empty buffer for a missing path, where `:edit` used to fail.
-        let readable = nvim
-            .eval(&format!("filereadable('{}')", path.replace('\'', "''")))
-            .await
-            .map_err(|e| AppError::NeovimSpawnError {
-                detail: e.to_string(),
-            })?;
+        //
+        // Passed as an RPC argument rather than interpolated into an expression,
+        // so no quoting rule applies to it at all.
+        let readable = call_str_fn(&nvim, "filereadable", path).await?;
         if readable.as_i64() != Some(1) {
             return Err(AppError::NeovimFileNotFound {
                 path: path.to_string(),
             });
         }
 
+        // Escaped by Neovim itself: the path is about to be interpolated into an
+        // Ex command line, where `|` starts a second command and a newline ends
+        // the line outright, on top of the space / `%` / `#` cases. `fnameescape`
+        // is the authority on that grammar, and all of these are legal
+        // characters in a POSIX filename.
+        let escaped = call_str_fn(&nvim, "fnameescape", path).await?;
+        let escaped = escaped.as_str().ok_or_else(|| AppError::NeovimSpawnError {
+            detail: "fnameescape() returned a non-string".to_string(),
+        })?;
+
         // `:tab drop`, not `:edit`: `edit` replaces the current window's buffer,
         // so every open from the file tree threw away the previous file. `drop`
         // jumps to the file if it is already open and opens a new tab page
         // otherwise — the same semantics the CodeMirror pane gives its tabs. An
         // empty unnamed buffer is reused rather than leaving a blank first tab.
-        nvim.command(&format!("tab drop {}", escape_for_ex(path)))
+        nvim.command(&format!("tab drop {escaped}"))
             .await
             .map_err(|_| AppError::NeovimFileNotFound {
                 path: path.to_string(),
@@ -375,14 +383,22 @@ pub async fn nvim_available() -> bool {
     !nvim_version().await.is_empty()
 }
 
-/// Escape a path for use as an argument to an ex-command. Neovim treats
-/// spaces as argument separators and `%`/`#` as buffer shorthands, so a real
-/// path containing them would otherwise open the wrong file.
-fn escape_for_ex(path: &str) -> String {
-    path.replace('\\', "\\\\")
-        .replace(' ', "\\ ")
-        .replace('%', "\\%")
-        .replace('#', "\\#")
+/// Call a Neovim function taking a single string argument. Keeps the path out
+/// of any interpolated expression: it travels as a msgpack value, so neither
+/// vimscript string quoting nor Ex-command grammar can reinterpret it.
+async fn call_str_fn<W>(
+    nvim: &nvim_rs::Neovim<W>,
+    name: &str,
+    arg: &str,
+) -> Result<nvim_rs::Value, AppError>
+where
+    W: futures::AsyncWrite + Send + Unpin + 'static,
+{
+    nvim.call_function(name, vec![nvim_rs::Value::from(arg)])
+        .await
+        .map_err(|e| AppError::NeovimSpawnError {
+            detail: format!("{name}(): {e}"),
+        })
 }
 
 #[cfg(test)]
@@ -445,6 +461,22 @@ pub(crate) mod tests {
         }
 
         NeovimManager::new(PtyManager::new(), pool)
+    }
+
+    /// Absolute path of the buffer Neovim currently shows. Lets a test assert
+    /// which file `open_file` actually landed on, rather than just that the Ex
+    /// command returned without error.
+    async fn current_buffer_name(manager: &NeovimManager, feature_id: i64) -> String {
+        let socket = manager.control_socket_path(feature_id).await.unwrap();
+        let (nvim, _io) = nvim_rs::create::tokio::new_path(&socket, Dummy::new())
+            .await
+            .unwrap();
+        nvim.eval("expand('%:p')")
+            .await
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string()
     }
 
     #[tokio::test]
@@ -746,11 +778,30 @@ pub(crate) mod tests {
         assert!(matches!(result, Err(AppError::NeovimProcessNotRunning)));
     }
 
-    #[test]
-    fn escape_for_ex_escapes_spaces_and_buffer_shorthands() {
-        assert_eq!(escape_for_ex("/tmp/a b.rs"), "/tmp/a\\ b.rs");
-        assert_eq!(escape_for_ex("/tmp/100%.rs"), "/tmp/100\\%.rs");
-        assert_eq!(escape_for_ex("/tmp/i#1.rs"), "/tmp/i\\#1.rs");
-        assert_eq!(escape_for_ex("/tmp/plain.rs"), "/tmp/plain.rs");
+    /// Every one of these is a legal POSIX filename and a piece of Ex grammar:
+    /// a space separates arguments, `%`/`#` are buffer shorthands, and `|`
+    /// starts a second command — `tab drop a|bwd` used to run `bwd`.
+    #[tokio::test]
+    async fn open_file_handles_ex_metacharacters_in_the_filename() {
+        if !nvim_available_test().await {
+            eprintln!("SKIP: nvim binary not found");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let manager = test_manager().await;
+        manager.start(14).await.unwrap();
+
+        for name in ["a b.txt", "100%.txt", "i#1.txt", "a|bwd.txt"] {
+            let file = dir.path().join(name);
+            std::fs::write(&file, "alpha\n").unwrap();
+            manager
+                .open_file(14, file.to_str().unwrap(), None, None)
+                .await
+                .unwrap_or_else(|e| panic!("open {name}: {e:?}"));
+            let opened = current_buffer_name(&manager, 14).await;
+            assert_eq!(opened, file.to_string_lossy(), "{name} opened the wrong buffer");
+        }
+
+        manager.stop(14).await.unwrap();
     }
 }
