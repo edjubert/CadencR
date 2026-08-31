@@ -179,6 +179,10 @@ function useSessionInitialization({
     if (!autoInitSession) return;
     if (!isConnected || controls.initializedRef.current === sessionId) return;
     if (serverSessionId !== "" || !persistedLoaded) return;
+    // Until the selection query settles, the resolvers return catalog
+    // fallbacks. The backend treats the provider we send as pinned and skips
+    // its own resolution, so sending a fallback here would persist it.
+    if (controls.isSelectionLoading) return;
     controls.initializedRef.current = sessionId;
     initSession({
       cwd,
@@ -191,6 +195,7 @@ function useSessionInitialization({
   }, [
     autoInitSession,
     controls.initializedRef,
+    controls.isSelectionLoading,
     controls.resolvedModelId,
     controls.resolvedProviderId,
     controls.resolvedThinkingEffort,

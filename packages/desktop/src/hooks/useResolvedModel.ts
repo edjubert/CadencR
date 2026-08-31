@@ -129,6 +129,10 @@ export function useResolvedModel(featureId: number, projectId: number) {
       resolveProvider,
       resolveSelection,
       resolveModelThinkingEffort,
+      // Callers that persist the resolved pair (session init) must wait for
+      // this to settle: until then the resolvers hand back catalog fallbacks,
+      // not the user's actual selection.
+      isSelectionLoading: selectionQuery.isLoading,
       handleModelChange: (agentType: AgentType, modelId: string) =>
         setModelMutation.mutate({
           id: featureId,
@@ -147,6 +151,7 @@ export function useResolvedModel(featureId: number, projectId: number) {
       resolveProvider,
       resolveSelection,
       resolveModelThinkingEffort,
+      selectionQuery.isLoading,
       setModelThinkingEffort,
       setModelMutation,
       setProviderMutation,

@@ -274,4 +274,30 @@ describe("useResolvedModel", () => {
       data: { value: "high" },
     });
   });
+
+  it("reports the selection query as loading", () => {
+    mockUseGetAgentSelection.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      error: undefined,
+    });
+
+    const { result } = renderHook(() => useResolvedModel(1, 1), { wrapper });
+
+    // Session init must not send a catalog fallback pair while the real
+    // selection is still in flight.
+    expect(result.current.isSelectionLoading).toBe(true);
+  });
+
+  it("reports the selection query as settled once it resolves", () => {
+    mockUseGetAgentSelection.mockReturnValue({
+      data: { selections: {} },
+      isLoading: false,
+      error: undefined,
+    });
+
+    const { result } = renderHook(() => useResolvedModel(1, 1), { wrapper });
+
+    expect(result.current.isSelectionLoading).toBe(false);
+  });
 });
