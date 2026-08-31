@@ -366,3 +366,63 @@ async fn provider_set_persists_the_resolved_model_with_the_provider() {
     let handle = sessions.get(&db_id).unwrap();
     assert_eq!(persisted_model, handle.desired_model);
 }
+
+// A provider switch on a session whose conversation has already started must
+// be rejected AND leave the persisted row untouched. This is a regression
+// invariant: with the session already locked, `decide_switch` rejects before
+// anything is written, so the row is unchanged. It guards against a future
+// regression where a rejected (PROVIDER_LOCKED) switch would still move the
+// persisted provider. The narrow timing window (session goes active *during*
+// model resolution) is closed by `ensure_still_pending`, re-validating state
+// right before the DB write; that race is not deterministically reproducible
+// from a black-box test.
+#[tokio::test]
+async fn provider_set_leaves_the_row_untouched_when_the_session_is_locked() {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let sdk_sessions: SdkSessions = Arc::new(Mutex::new(HashMap::new()));
+    let app_state = make_test_app_state().await;
+
+    let session_id = init_session(&tx, &mut rx, &sdk_sessions, &app_state, 1).await;
+    let db_id: i64 = session_id.parse().unwrap();
+
+    let before: Option<String> =
+        sqlx::query_scalar("SELECT runtime_provider FROM agent_sessions WHERE id = ?")
+            .bind(db_id)
+            .fetch_one(&app_state.read_pool)
+            .await
+            .unwrap();
+
+    // Simulate the first prompt landing before the switch is committed.
+    {
+        let mut sessions = sdk_sessions.lock().await;
+        let handle = sessions.get_mut(&db_id).unwrap();
+        let (permission_tx, _permission_rx) =
+            mpsc::channel::<session_prompt::PermissionResponse>(1);
+        handle.state = QueryState::Active {
+            query: Arc::new(RwLock::new(Box::new(ClaudeCodeSession::from_query(
+                Query::new_test_stub(Some("locked-before-switch".to_string())),
+            )))),
+            permission_tx,
+        };
+    }
+
+    let envelope = make_envelope(
+        "session",
+        "provider.set",
+        serde_json::json!({
+            "session_id": session_id,
+            "provider": "codex_cli",
+        }),
+    );
+    dispatch_envelope(envelope, &tx, &sdk_sessions, &app_state).await;
+
+    let after: Option<String> =
+        sqlx::query_scalar("SELECT runtime_provider FROM agent_sessions WHERE id = ?")
+            .bind(db_id)
+            .fetch_one(&app_state.read_pool)
+            .await
+            .unwrap();
+
+    // A rejected switch must not have moved the persisted provider.
+    assert_eq!(before, after);
+}

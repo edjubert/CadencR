@@ -3,7 +3,7 @@ use tracing::error;
 
 use super::super::super::protocol::*;
 use super::super::helpers::{parse_session_id, send_error};
-use super::super::types::{QueryState, SdkSessions, WsSender};
+use super::super::types::{SdkSessions, WsSender};
 use super::session_has_messages;
 use crate::app_state::AppState;
 use crate::domain::agents::adapter::{access_mode_wire, RuntimeAccessMode};
@@ -69,124 +69,11 @@ fn send_provider_set_ok(
     let _ = sender.send(Message::Text(String::from(reply).into()));
 }
 
-/// A failure to report back over the WS as `{code, message}`.
-struct ProviderSetError {
-    code: &'static str,
-    message: String,
-}
-
-impl ProviderSetError {
-    fn new(code: &'static str, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-        }
-    }
-
-    fn locked() -> Self {
-        Self::new(
-            "PROVIDER_LOCKED",
-            "Provider cannot be changed after the conversation starts",
-        )
-    }
-
-    fn session_not_found() -> Self {
-        Self::new("SESSION_NOT_FOUND", "Session not found")
-    }
-}
-
-/// What the session looked like when the switch was accepted. Captured under
-/// the lock so the model resolution can run without holding it.
-struct SwitchSnapshot {
-    desired_model: Option<String>,
-    cwd: std::path::PathBuf,
-    profile: Option<String>,
-}
-
-enum SwitchDecision {
-    /// Already on the requested provider — ack with the current model.
-    Unchanged {
-        active_model: String,
-    },
-    Changed(SwitchSnapshot),
-}
-
-/// Decide whether the switch applies, and capture what resolving the new
-/// model needs. Rejects sessions whose conversation has already started.
-///
-/// "Unchanged" requires the provider *and* the requested model (when one was
-/// sent) to already match — comparing the provider alone would silently drop
-/// a same-provider model change (picking model C right after model B) by
-/// acknowledging the stale model instead of applying the new one.
-async fn decide_switch(
-    sdk_sessions: &SdkSessions,
-    db_session_id: i64,
-    payload: &ProviderSetPayload,
-) -> Result<SwitchDecision, ProviderSetError> {
-    let sessions = sdk_sessions.lock().await;
-    let handle = sessions
-        .get(&db_session_id)
-        .ok_or_else(ProviderSetError::session_not_found)?;
-    let QueryState::Pending(_) = &handle.state else {
-        return Err(ProviderSetError::locked());
-    };
-    let provider_unchanged = handle.runtime_provider == payload.provider;
-    let model_unchanged = payload
-        .model
-        .as_deref()
-        .is_none_or(|requested| Some(requested) == handle.desired_model.as_deref());
-    if provider_unchanged && model_unchanged {
-        return Ok(SwitchDecision::Unchanged {
-            active_model: handle.desired_model.clone().unwrap_or_default(),
-        });
-    }
-    Ok(SwitchDecision::Changed(SwitchSnapshot {
-        desired_model: handle.desired_model.clone(),
-        cwd: handle.config.cwd.clone(),
-        profile: handle
-            .desired_claude_profile
-            .clone()
-            .or_else(|| handle.spawned_claude_profile.clone()),
-    }))
-}
-
-/// Apply the resolved provider/model pair to the in-memory handle. Re-checks
-/// the session state, since the lock was released while the model resolved.
-/// Contains no `await`, so provider and model always land together.
-///
-/// `resolved_model` is `None` when the new provider exposes no usable model
-/// (typically its CLI is not installed). The switch still applies, but the
-/// model is *cleared* rather than kept: carrying the previous provider's model
-/// over would leave an incompatible provider/model pair behind.
-async fn commit_switch(
-    sdk_sessions: &SdkSessions,
-    db_session_id: i64,
-    new_provider: &str,
-    resolved_model: Option<String>,
-    next_access_mode: Option<RuntimeAccessMode>,
-) -> Result<(i64, String), ProviderSetError> {
-    let mut sessions = sdk_sessions.lock().await;
-    let handle = sessions
-        .get_mut(&db_session_id)
-        .ok_or_else(ProviderSetError::session_not_found)?;
-    let QueryState::Pending(options) = &mut handle.state else {
-        return Err(ProviderSetError::locked());
-    };
-    handle.runtime_provider = new_provider.to_string();
-    handle.resume_session_id = None;
-    options.resume_session_id = None;
-    handle.desired_permission_mode = None;
-    handle.config.permission_mode = None;
-    options.permission_mode = None;
-    handle.desired_access_mode = next_access_mode.clone();
-    handle.config.access_mode = next_access_mode.clone();
-    options.access_mode = next_access_mode;
-    handle.config.fast_mode = false;
-    options.fast_mode = false;
-    handle.desired_model = resolved_model.clone();
-    options.model = resolved_model.clone();
-    Ok((handle.feature_id, resolved_model.unwrap_or_default()))
-}
+mod switch;
+use switch::{
+    commit_switch, decide_switch, ensure_still_pending, ProviderSetError, SwitchDecision,
+    SwitchSnapshot,
+};
 
 /// Reject the switch before the first prompt is even possible: unparseable
 /// payloads, unknown providers, and sessions that already have history.
@@ -324,41 +211,15 @@ async fn apply_provider_set(
     let configured_access_wire = configured_access_mode.as_ref().map(access_mode_wire);
     let new_mode_wire = adapter.default_permission_mode_wire();
 
-    // DB first: a write failure here (e.g. a disk or lock error) must leave
-    // the live handle untouched. Committing in memory first and persisting
-    // after would instead hand the caller a DB_ERROR while the live session
-    // had already moved on — other clients get no confirmation, and a
-    // reconnect would read the stale provider from SQLite.
-    persist_provider_selection(
-        &app_state.write_pool,
-        db_session_id,
-        &payload.provider,
-        resolved_model.as_deref(),
-        configured_access_wire,
-        new_mode_wire.as_ref(),
-    )
-    .await
-    .map_err(|error| {
-        error!(
-            db_session_id,
-            runtime_provider = %payload.provider,
-            %error,
-            "failed to persist runtime provider selection"
-        );
-        ProviderSetError::new("DB_ERROR", "Failed to persist runtime provider selection")
-    })?;
-
-    // In-memory last, re-validating state: a session that went active while
-    // the model resolved and the DB was written is rejected here. The DB row
-    // already reflects the new provider in that case, which the next
-    // `session.init` will pick up — the same outcome the pre-refactor code
-    // had no guard against at all.
-    let (feature_id, active_model) = commit_switch(
+    let (feature_id, active_model) = persist_and_commit_switch(
+        app_state,
         sdk_sessions,
         db_session_id,
         &payload.provider,
         resolved_model,
-        configured_access_mode.clone(),
+        configured_access_mode,
+        configured_access_wire,
+        new_mode_wire.as_ref(),
     )
     .await?;
 
@@ -377,6 +238,56 @@ async fn apply_provider_set(
     )
     .await;
     Ok(())
+}
+
+/// Re-validate state, persist the selection, then commit it to the live
+/// handle. The lock cannot be held across the DB write (it is global to the
+/// WS connection), so the re-check here shrinks the race window to the write
+/// itself: a prompt that started during the (much longer) model resolution is
+/// rejected *before* the row is touched. `commit_switch` re-checks once more
+/// under the lock it actually mutates.
+async fn persist_and_commit_switch(
+    app_state: &AppState,
+    sdk_sessions: &SdkSessions,
+    db_session_id: i64,
+    provider: &str,
+    resolved_model: Option<String>,
+    configured_access_mode: Option<RuntimeAccessMode>,
+    configured_access_wire: Option<&'static str>,
+    new_mode_wire: &str,
+) -> Result<(i64, String), ProviderSetError> {
+    ensure_still_pending(sdk_sessions, db_session_id).await?;
+
+    // DB first: a write failure must leave the live handle untouched.
+    persist_provider_selection(
+        &app_state.write_pool,
+        db_session_id,
+        provider,
+        resolved_model.as_deref(),
+        configured_access_wire,
+        new_mode_wire,
+    )
+    .await
+    .map_err(|error| {
+        error!(
+            db_session_id,
+            runtime_provider = %provider,
+            %error,
+            "failed to persist runtime provider selection"
+        );
+        ProviderSetError::new("DB_ERROR", "Failed to persist runtime provider selection")
+    })?;
+
+    // In-memory last, re-validating state: a session that went active while the
+    // model resolved and the DB was written is rejected here.
+    commit_switch(
+        sdk_sessions,
+        db_session_id,
+        provider,
+        resolved_model,
+        configured_access_mode,
+    )
+    .await
 }
 
 struct BroadcastArgs<'a> {
