@@ -12,8 +12,7 @@ use sqlx::SqlitePool;
 use utoipa::ToSchema;
 
 use super::providers::{
-    canonical_provider_or_error, default_provider_id, provider_default_model,
-    provider_model_catalog_entry,
+    canonical_provider_or_error, provider_default_model, provider_model_catalog_entry,
 };
 use super::runtime::runtime_setting_key;
 use crate::domain::settings::{self, SettingOrigin};
@@ -70,7 +69,7 @@ pub async fn resolve_selection(
     profile: Option<&str>,
 ) -> Result<ResolvedSelection, SelectionError> {
     let (provider_id, provider_origin) =
-        resolve_provider(read_pool, agent_type, feature_id, project_id).await;
+        resolve_provider(read_pool, agent_type, feature_id, project_id, cwd, profile).await;
     let (model_id, model_origin) = resolve_model(
         read_pool,
         cwd,
@@ -97,6 +96,8 @@ async fn resolve_provider(
     agent_type: &str,
     feature_id: Option<i64>,
     project_id: Option<i64>,
+    cwd: Option<&Path>,
+    profile: Option<&str>,
 ) -> (String, SelectionOrigin) {
     let key = runtime_setting_key(agent_type);
     let stored =
@@ -112,16 +113,33 @@ async fn resolve_provider(
                     "stored provider is not a known provider; falling back to the default"
                 );
                 (
-                    default_provider_id().to_string(),
+                    available_default_provider(read_pool, cwd, profile).await,
                     SelectionOrigin::ProviderDefault,
                 )
             }
         },
         None => (
-            default_provider_id().to_string(),
+            available_default_provider(read_pool, cwd, profile).await,
             SelectionOrigin::ProviderDefault,
         ),
     }
+}
+
+/// The default provider as the frontend sees it: the live catalog's default,
+/// which prefers the first registered provider only when it is actually
+/// available. Resolving against the registry alone would hand new sessions a
+/// provider whose CLI is not installed on this machine.
+///
+/// Only called on the fallback paths — a valid stored provider never pays the
+/// catalog probe.
+async fn available_default_provider(
+    read_pool: &SqlitePool,
+    cwd: Option<&Path>,
+    profile: Option<&str>,
+) -> String {
+    crate::domain::agents::providers::provider_catalog_live_for_cwd(read_pool, cwd, profile)
+        .await
+        .default_provider
 }
 
 /// The invariant lives here: a stored model is only kept when it belongs to the
@@ -168,7 +186,7 @@ mod tests {
 
     use crate::domain::agents::runtime::DEFAULT_PROVIDER;
 
-    use super::{resolve_selection, SelectionOrigin};
+    use super::{resolve_provider, resolve_selection, SelectionOrigin};
 
     /// Pool with a feature-level SQLite surface (features + feature_settings)
     /// and a projects table for project-file name resolution.
@@ -234,6 +252,26 @@ mod tests {
 
         assert_eq!(selection.provider_id, DEFAULT_PROVIDER);
         assert_eq!(selection.provider_origin, SelectionOrigin::ProviderDefault);
+    }
+
+    /// The unset-provider fallback must agree with what `/api/agent-catalog`
+    /// advertises — the live catalog's default — not simply the first
+    /// registered provider. On a machine without Claude, resolving against the
+    /// registry alone would hand new sessions a provider whose CLI is not
+    /// installed.
+    #[tokio::test]
+    async fn unset_provider_falls_back_to_an_available_provider() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+
+        let (provider_id, origin) =
+            resolve_provider(&pool, "session", None, None, None, None).await;
+
+        let catalog =
+            crate::domain::agents::providers::provider_catalog_live_for_cwd(&pool, None, None)
+                .await;
+
+        assert_eq!(provider_id, catalog.default_provider);
+        assert_eq!(origin, SelectionOrigin::ProviderDefault);
     }
 
     /// The invariant this whole change exists for: a stored model that does not
