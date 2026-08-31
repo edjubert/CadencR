@@ -219,12 +219,22 @@ function useAgentSendHandler(args: {
   );
 }
 
-function handleModelChange(
+export function handleModelChange(
   nextProviderId: string,
   modelId: string,
   controls: ReturnType<typeof useSessionControls>,
 ): void {
-  controls.ws.setProvider(nextProviderId, modelId);
+  // `provider.set` is rejected once the session is active, so it is reserved
+  // for cross-provider picks that genuinely need the atomic switch. A plain
+  // model change on the same provider goes through `model.set`, which stays
+  // legal mid-conversation.
+  const currentProviderId = controls.ws.currentSelection?.providerId;
+  if (currentProviderId !== undefined && currentProviderId === nextProviderId) {
+    controls.ws.setModel(modelId, nextProviderId);
+  } else {
+    controls.ws.setProvider(nextProviderId, modelId);
+  }
+
   const nextModel = controls.agentCatalog.data?.providers
     .find((provider) => provider.id === nextProviderId)
     ?.models.find((model) => model.id === modelId);
