@@ -247,7 +247,10 @@ function handleModeChanged(ctx: StoreAccessors, sessionId: string, payload: unkn
 
 function handleProviderSetOk(ctx: StoreAccessors, sessionId: string, payload: unknown): void {
   const p = parseProviderPayload(payload);
-  if (!p?.provider || !p.model) return;
+  // An empty model is deliberate — the backend says this provider exposes no
+  // usable model — and must not discard the provider change with it. Only a
+  // missing field means "no update to apply".
+  if (!p?.provider || p.model === undefined) return;
   const session = ctx.getSession(sessionId);
   const providerChanged = p.provider !== session.currentSelection?.providerId;
   const accessMode = p.access_mode ?? p.codex_permission_mode;

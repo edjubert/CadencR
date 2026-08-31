@@ -372,6 +372,42 @@ describe("handleEnvelope provider.set.ok", () => {
     expect(updated.currentSelection).toEqual({ providerId: "claude_code", modelId: "opus" });
   });
 
+  it("applies the provider change when the backend reports no usable model", () => {
+    const session = createSessionEntry();
+    session.currentSelection = { providerId: "claude_code", modelId: "sonnet" };
+    const ctx = createTestContext(session);
+
+    handleEnvelope(ctx, "s1", {
+      domain: "session",
+      action: "provider.set.ok",
+      payload: { provider: "codex_cli", model: "", supports_prompt_receipts: true },
+    });
+
+    // The empty model is information ("this provider exposes none"), not an
+    // absent field: the provider change must still land.
+    expect(ctx.getSession("s1").currentSelection).toEqual({
+      providerId: "codex_cli",
+      modelId: "",
+    });
+  });
+
+  it("ignores a provider.set.ok whose model field is absent", () => {
+    const session = createSessionEntry();
+    session.currentSelection = { providerId: "claude_code", modelId: "sonnet" };
+    const ctx = createTestContext(session);
+
+    handleEnvelope(ctx, "s1", {
+      domain: "session",
+      action: "provider.set.ok",
+      payload: { provider: "codex_cli" },
+    });
+
+    expect(ctx.getSession("s1").currentSelection).toEqual({
+      providerId: "claude_code",
+      modelId: "sonnet",
+    });
+  });
+
   it("ignores model.set.ok when the payload is missing the provider half", () => {
     const session = createSessionEntry();
     session.currentSelection = { providerId: "claude_code", modelId: "opus" };
