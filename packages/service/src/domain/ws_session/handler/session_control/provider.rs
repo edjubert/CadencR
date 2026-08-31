@@ -14,14 +14,19 @@ async fn persist_provider_selection(
     pool: &sqlx::SqlitePool,
     session_id: i64,
     provider: &str,
+    model: Option<&str>,
     codex_permission_mode: Option<&str>,
     permission_mode: &str,
 ) -> Result<(), sqlx::Error> {
+    // The model travels with the provider in one statement: a row carrying the
+    // new provider next to the previous provider's model is the exact mismatch
+    // `session.init` would later restore.
     if let Some(codex_mode) = codex_permission_mode {
         sqlx::query(
-            "UPDATE agent_sessions SET runtime_provider = ?, codex_permission_mode = ?, permission_mode = ?, fast_mode = 0 WHERE id = ?",
+            "UPDATE agent_sessions SET runtime_provider = ?, model = ?, codex_permission_mode = ?, permission_mode = ?, fast_mode = 0 WHERE id = ?",
         )
         .bind(provider)
+        .bind(model)
         .bind(codex_mode)
         .bind(permission_mode)
         .bind(session_id)
@@ -29,9 +34,10 @@ async fn persist_provider_selection(
         .await?;
     } else {
         sqlx::query(
-            "UPDATE agent_sessions SET runtime_provider = ?, permission_mode = ?, fast_mode = 0 WHERE id = ?",
+            "UPDATE agent_sessions SET runtime_provider = ?, model = ?, permission_mode = ?, fast_mode = 0 WHERE id = ?",
         )
         .bind(provider)
+        .bind(model)
         .bind(permission_mode)
         .bind(session_id)
         .execute(pool)
@@ -327,6 +333,7 @@ async fn apply_provider_set(
         &app_state.write_pool,
         db_session_id,
         &payload.provider,
+        resolved_model.as_deref(),
         configured_access_wire,
         new_mode_wire.as_ref(),
     )

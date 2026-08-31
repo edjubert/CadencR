@@ -327,3 +327,42 @@ async fn test_provider_set_is_locked_once_session_has_history() {
         panic!("expected text message");
     }
 }
+
+#[tokio::test]
+async fn provider_set_persists_the_resolved_model_with_the_provider() {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let sdk_sessions: SdkSessions = Arc::new(Mutex::new(HashMap::new()));
+    let app_state = make_test_app_state().await;
+
+    let session_id = init_session(&tx, &mut rx, &sdk_sessions, &app_state, 1).await;
+
+    // A concrete model is required so the switch is a real change (the
+    // default provider is already claude_code, so a no-model pick would be an
+    // "unchanged" no-op that writes nothing). The switch resolves `sonnet`.
+    let envelope = make_envelope(
+        "session",
+        "provider.set",
+        serde_json::json!({
+            "session_id": session_id,
+            "provider": "claude_code",
+            "model": "sonnet",
+        }),
+    );
+    dispatch_envelope(envelope, &tx, &sdk_sessions, &app_state).await;
+
+    let db_id: i64 = session_id.parse().unwrap();
+    let (persisted_provider, persisted_model): (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT runtime_provider, model FROM agent_sessions WHERE id = ?")
+            .bind(db_id)
+            .fetch_one(&app_state.read_pool)
+            .await
+            .unwrap();
+
+    assert_eq!(persisted_provider.as_deref(), Some("claude_code"));
+    assert_eq!(persisted_model.as_deref(), Some("sonnet"));
+
+    // The in-memory handle and the row must agree: a reconnect reads the row.
+    let sessions = sdk_sessions.lock().await;
+    let handle = sessions.get(&db_id).unwrap();
+    assert_eq!(persisted_model, handle.desired_model);
+}
