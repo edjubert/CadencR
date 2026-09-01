@@ -55,7 +55,6 @@ interface RuntimeSelectionControls {
   agentCatalog: ReturnType<typeof useAgentCatalog>;
   resolvedProviderId: string;
   resolvedModelId: string;
-  isSelectionLoading: boolean;
   resolvedThinkingEffort: string | undefined;
   activeProviderId: string;
   supportedThinkingEfforts: ReturnType<typeof supportedThinkingEffortLevels>;
@@ -125,8 +124,7 @@ function useRuntimeSelection(
   catalogClaudeProfile: string | undefined,
   resolvedProviderId: string,
 ): RuntimeSelectionControls {
-  const { resolveModel, resolveModelThinkingEffort, isSelectionLoading } =
-    useResolvedModelContext();
+  const { resolveModel, resolveModelThinkingEffort } = useResolvedModelContext();
   const agentCatalog = useAgentCatalog({
     cwd: effectiveCwd,
     profile: catalogClaudeProfile,
@@ -156,7 +154,6 @@ function useRuntimeSelection(
       agentCatalog,
       resolvedProviderId,
       resolvedModelId,
-      isSelectionLoading,
       resolvedThinkingEffort,
       activeProviderId,
       supportedThinkingEfforts,
@@ -169,7 +166,6 @@ function useRuntimeSelection(
       activeProviderId,
       agentCatalog,
       enabledOptInModes,
-      isSelectionLoading,
       providerModes,
       providerAccessModes,
       resolveModelThinkingEffort,

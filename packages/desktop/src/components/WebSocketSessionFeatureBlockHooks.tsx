@@ -179,26 +179,20 @@ function useSessionInitialization({
     if (!autoInitSession) return;
     if (!isConnected || controls.initializedRef.current === sessionId) return;
     if (serverSessionId !== "" || !persistedLoaded) return;
-    // Until the selection query settles, the resolvers return catalog
-    // fallbacks. The backend treats the provider we send as pinned and skips
-    // its own resolution, so sending a fallback here would persist it.
-    if (controls.isSelectionLoading) return;
     controls.initializedRef.current = sessionId;
+    // No provider/model/effort: this effect only runs for a brand-new session,
+    // and the frontend resolvers return catalog fallbacks until the selection
+    // query settles. The backend treats any pair we send as pinned, so it must
+    // resolve this one itself — it reads the same settings, with the live
+    // catalog we do not have here.
     initSession({
       cwd,
       featureId,
-      provider: controls.resolvedProviderId,
-      model: controls.resolvedModelId,
-      thinkingEffort: controls.resolvedThinkingEffort,
       permissionMode: controls.ws.permissionMode,
     });
   }, [
     autoInitSession,
     controls.initializedRef,
-    controls.isSelectionLoading,
-    controls.resolvedModelId,
-    controls.resolvedProviderId,
-    controls.resolvedThinkingEffort,
     controls.ws.permissionMode,
     cwd,
     featureId,
