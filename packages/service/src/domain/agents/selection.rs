@@ -105,7 +105,23 @@ async fn resolve_provider(
 
     match stored {
         Some((raw, origin)) => match canonical_provider_or_error(&raw) {
-            Ok(provider_id) => (provider_id, origin.into()),
+            Ok(provider_id) => {
+                if provider_is_available(read_pool, cwd, profile, &provider_id).await {
+                    (provider_id, origin.into())
+                } else {
+                    // A stored provider whose CLI is missing would start a
+                    // session that cannot run. Surface the substitution instead
+                    // of silently honoring a dead selection.
+                    tracing::warn!(
+                        stored_provider = %provider_id,
+                        "stored provider is not available on this machine; falling back to the catalog default"
+                    );
+                    (
+                        available_default_provider(read_pool, cwd, profile).await,
+                        SelectionOrigin::ProviderDefault,
+                    )
+                }
+            }
             Err(error) => {
                 tracing::warn!(
                     stored_provider = %raw,
@@ -130,8 +146,8 @@ async fn resolve_provider(
 /// available. Resolving against the registry alone would hand new sessions a
 /// provider whose CLI is not installed on this machine.
 ///
-/// Only called on the fallback paths — a valid stored provider never pays the
-/// catalog probe.
+/// Called on the fallback paths: unset provider, unknown provider, or a stored
+/// provider whose CLI is not available on this machine.
 async fn available_default_provider(
     read_pool: &SqlitePool,
     cwd: Option<&Path>,
@@ -140,6 +156,27 @@ async fn available_default_provider(
     crate::domain::agents::providers::provider_catalog_live_for_cwd(read_pool, cwd, profile)
         .await
         .default_provider
+}
+
+/// Whether `provider_id`'s CLI is actually usable here. Probes that one
+/// adapter only — resolution must never wait on the slowest provider.
+async fn provider_is_available(
+    read_pool: &SqlitePool,
+    cwd: Option<&Path>,
+    profile: Option<&str>,
+    provider_id: &str,
+) -> bool {
+    let Some(adapter) = super::providers::runtime_adapter(provider_id) else {
+        return false;
+    };
+    let entry = super::providers::provider_catalog_entry_live_for_settings(
+        read_pool,
+        cwd,
+        profile,
+        adapter.as_adapter(),
+    )
+    .await;
+    entry.status == crate::domain::agents::runtime::ProviderStatus::Available
 }
 
 /// The invariant lives here: a stored model is only kept when it belongs to the
@@ -230,6 +267,21 @@ mod tests {
         pool
     }
 
+    /// Whether the stored `claude_code` provider's CLI is probeable on this
+    /// machine. The live catalog only lists available providers, so this is the
+    /// same signal `resolve_provider` validates against.
+    fn stored_provider_available(
+        catalog: &crate::domain::agents::runtime::AgentCatalogResponse,
+    ) -> bool {
+        catalog
+            .providers
+            .iter()
+            .any(|provider| provider.id == "claude_code")
+    }
+
+    /// The stored provider is honored with its Feature origin when its CLI is
+    /// installed; when it is not, the fallback keeps a usable provider and
+    /// reports the substitution instead of a dead selection.
     #[tokio::test]
     async fn feature_override_wins_and_reports_feature_origin() {
         let pool = pool_with_feature(None, Some("claude_code")).await;
@@ -238,8 +290,41 @@ mod tests {
             .await
             .expect("resolvable");
 
-        assert_eq!(selection.provider_id, "claude_code");
-        assert_eq!(selection.provider_origin, SelectionOrigin::Feature);
+        let catalog =
+            crate::domain::agents::providers::provider_catalog_live_for_cwd(&pool, None, None)
+                .await;
+
+        if stored_provider_available(&catalog) {
+            assert_eq!(selection.provider_id, "claude_code");
+            assert_eq!(selection.provider_origin, SelectionOrigin::Feature);
+        } else {
+            assert_eq!(selection.provider_id, catalog.default_provider);
+            assert_eq!(selection.provider_origin, SelectionOrigin::ProviderDefault);
+        }
+    }
+
+    /// A stored provider that is a *known* provider must be honored when its CLI
+    /// is installed, and dropped for the catalog default when it is not. The
+    /// review case: `claude_code` stored in settings on a Codex/OpenCode-only
+    /// machine must not be handed to a new session.
+    #[tokio::test]
+    async fn stored_provider_is_honored_only_when_its_cli_is_available() {
+        let pool = pool_with_feature(None, Some("claude_code")).await;
+
+        let (provider_id, origin) =
+            resolve_provider(&pool, "session", Some(7), Some(1), None, None).await;
+
+        let catalog =
+            crate::domain::agents::providers::provider_catalog_live_for_cwd(&pool, None, None)
+                .await;
+
+        if stored_provider_available(&catalog) {
+            assert_eq!(provider_id, "claude_code");
+            assert_eq!(origin, SelectionOrigin::Feature);
+        } else {
+            assert_eq!(provider_id, catalog.default_provider);
+            assert_eq!(origin, SelectionOrigin::ProviderDefault);
+        }
     }
 
     #[tokio::test]
