@@ -426,3 +426,47 @@ async fn provider_set_leaves_the_row_untouched_when_the_session_is_locked() {
     // A rejected switch must not have moved the persisted provider.
     assert_eq!(before, after);
 }
+
+// The race itself (a prompt activating the session between the state check and
+// the commit) is not deterministically reproducible from a black-box test, so
+// this covers the compensating write directly: snapshot a row, overwrite it,
+// restore it, and assert the row is byte-for-byte back to where it started.
+#[tokio::test]
+async fn restoring_a_persisted_selection_puts_the_row_back() {
+    use crate::domain::ws_session::handler::session_control::{
+        read_persisted_selection, restore_persisted_selection,
+    };
+
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let sdk_sessions: SdkSessions = Arc::new(Mutex::new(HashMap::new()));
+    let app_state = make_test_app_state().await;
+
+    let session_id = init_session(&tx, &mut rx, &sdk_sessions, &app_state, 1).await;
+    let db_id: i64 = session_id.parse().unwrap();
+
+    let before = read_persisted_selection(&app_state.read_pool, db_id)
+        .await
+        .expect("row readable");
+
+    sqlx::query(
+        "UPDATE agent_sessions SET runtime_provider = 'codex_cli', model = 'gpt-5.3-codex', fast_mode = 1 WHERE id = ?",
+    )
+    .bind(db_id)
+    .execute(&app_state.write_pool)
+    .await
+    .unwrap();
+
+    restore_persisted_selection(&app_state.write_pool, db_id, &before)
+        .await
+        .expect("restore succeeds");
+
+    let after = read_persisted_selection(&app_state.read_pool, db_id)
+        .await
+        .expect("row readable");
+
+    assert_eq!(after.runtime_provider, before.runtime_provider);
+    assert_eq!(after.model, before.model);
+    assert_eq!(after.permission_mode, before.permission_mode);
+    assert_eq!(after.codex_permission_mode, before.codex_permission_mode);
+    assert_eq!(after.fast_mode, before.fast_mode);
+}

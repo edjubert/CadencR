@@ -144,3 +144,50 @@ pub(crate) async fn commit_switch(
     options.model = resolved_model.clone();
     Ok((handle.feature_id, resolved_model.unwrap_or_default()))
 }
+
+/// The columns `persist_provider_selection` overwrites. Captured before the
+/// write so a switch rejected afterwards can be undone.
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+pub(crate) struct PersistedSelection {
+    pub(crate) runtime_provider: Option<String>,
+    pub(crate) model: Option<String>,
+    pub(crate) codex_permission_mode: String,
+    pub(crate) permission_mode: Option<String>,
+    pub(crate) fast_mode: bool,
+}
+
+pub(crate) async fn read_persisted_selection(
+    pool: &sqlx::SqlitePool,
+    session_id: i64,
+) -> Result<PersistedSelection, sqlx::Error> {
+    sqlx::query_as::<_, PersistedSelection>(
+        "SELECT runtime_provider, model, codex_permission_mode, permission_mode, fast_mode \
+         FROM agent_sessions WHERE id = ?",
+    )
+    .bind(session_id)
+    .fetch_one(pool)
+    .await
+}
+
+/// Put the row back exactly as it was. Writes all five columns rather than
+/// mirroring `persist_provider_selection`'s two branches: the goal is the
+/// previous state, not a variant of the new one.
+pub(crate) async fn restore_persisted_selection(
+    pool: &sqlx::SqlitePool,
+    session_id: i64,
+    previous: &PersistedSelection,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE agent_sessions SET runtime_provider = ?, model = ?, codex_permission_mode = ?, \
+         permission_mode = ?, fast_mode = ? WHERE id = ?",
+    )
+    .bind(&previous.runtime_provider)
+    .bind(&previous.model)
+    .bind(&previous.codex_permission_mode)
+    .bind(&previous.permission_mode)
+    .bind(previous.fast_mode)
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}

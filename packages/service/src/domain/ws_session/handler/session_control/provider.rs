@@ -74,6 +74,7 @@ use switch::{
     commit_switch, decide_switch, ensure_still_pending, ProviderSetError, SwitchDecision,
     SwitchSnapshot,
 };
+pub(crate) use switch::{read_persisted_selection, restore_persisted_selection};
 
 /// Reject the switch before the first prompt is even possible: unparseable
 /// payloads, unknown providers, and sessions that already have history.
@@ -258,6 +259,17 @@ async fn persist_and_commit_switch(
 ) -> Result<(i64, String), ProviderSetError> {
     ensure_still_pending(sdk_sessions, db_session_id).await?;
 
+    // Snapshot before the write: the lock cannot be held across it, so the
+    // session may still go active before `commit_switch` runs. Without this,
+    // a rejected switch would leave the row moved and a reconnect would
+    // restore a selection the session refused.
+    let previous = read_persisted_selection(&app_state.read_pool, db_session_id)
+        .await
+        .map_err(|error| {
+            error!(db_session_id, %error, "failed to read the current runtime selection");
+            ProviderSetError::new("DB_ERROR", "Failed to read the current runtime selection")
+        })?;
+
     // DB first: a write failure must leave the live handle untouched.
     persist_provider_selection(
         &app_state.write_pool,
@@ -280,7 +292,7 @@ async fn persist_and_commit_switch(
 
     // In-memory last, re-validating state: a session that went active while the
     // model resolved and the DB was written is rejected here.
-    commit_switch(
+    match commit_switch(
         sdk_sessions,
         db_session_id,
         provider,
@@ -288,6 +300,23 @@ async fn persist_and_commit_switch(
         configured_access_mode,
     )
     .await
+    {
+        Ok(committed) => Ok(committed),
+        Err(rejection) => {
+            if let Err(error) =
+                restore_persisted_selection(&app_state.write_pool, db_session_id, &previous).await
+            {
+                error!(
+                    db_session_id,
+                    %error,
+                    "failed to restore the runtime selection after a rejected switch; the row is ahead of the live session"
+                );
+            }
+            // The rejection is what the caller needs to hear, even when the
+            // restore failed — the switch did not take effect either way.
+            Err(rejection)
+        }
+    }
 }
 
 struct BroadcastArgs<'a> {
