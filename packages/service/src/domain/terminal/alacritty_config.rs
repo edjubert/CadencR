@@ -6,7 +6,7 @@
 //! be able to surface, since it means the user's real settings are silently
 //! not being honored.
 
-use std::ffi::OsStr;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -278,13 +278,29 @@ pub fn start_watcher(tx: broadcast::Sender<AlacrittyConfigChangedEvent>) {
     let Some(config_path) = default_config_path() else {
         return;
     };
-    let Some(watch_dir) = config_path.parent().map(std::path::Path::to_path_buf) else {
-        return;
+
+    // Resolve once at startup to learn every file this config chain actually
+    // touches (the root plus every `general.import`, transitively) — an
+    // import living in a different directory (e.g. `themes/font.toml`) needs
+    // its own directory watched, or edits to it would never trigger a
+    // refetch. Best-effort: a resolution failure here still starts a watcher
+    // on the root's own directory, so an existing valid config keeps live
+    // reload even if a newly-broken import can't be resolved yet. Fixed for
+    // the process lifetime: a brand-new import path added later needs a
+    // service restart to be picked up.
+    let touched = match resolve::resolve_alacritty_config(&config_path) {
+        Ok(Some((_, touched))) => touched,
+        _ => vec![config_path.clone()],
     };
-    let target_file_name = config_path
-        .file_name()
-        .map(|n| n.to_owned())
-        .unwrap_or_default();
+
+    let watched_names: HashSet<std::ffi::OsString> = touched
+        .iter()
+        .filter_map(|p| p.file_name().map(|n| n.to_owned()))
+        .collect();
+    let watch_dirs: HashSet<PathBuf> = touched
+        .iter()
+        .filter_map(|p| p.parent().map(std::path::Path::to_path_buf))
+        .collect();
 
     let mut debouncer = match new_debouncer(
         Duration::from_millis(500),
@@ -298,7 +314,7 @@ pub fn start_watcher(tx: broadcast::Sender<AlacrittyConfigChangedEvent>) {
             };
             let changed = events
                 .iter()
-                .any(|e| is_watched_config_file(&e.path, &target_file_name));
+                .any(|e| is_watched_config_file(&e.path, &watched_names));
             if changed {
                 debug!("alacritty.toml change detected");
                 let _ = tx.send(AlacrittyConfigChangedEvent {});
@@ -312,26 +328,28 @@ pub fn start_watcher(tx: broadcast::Sender<AlacrittyConfigChangedEvent>) {
         }
     };
 
-    // Watching the parent directory (not the file itself) survives editors
+    // Watching each directory (not the files themselves) survives editors
     // that save by replacing the file (write-to-temp-then-rename) rather
-    // than writing in place — a watch on the file's own inode would go
-    // stale the moment such an editor "saves."
-    if let Err(e) = debouncer
-        .watcher()
-        .watch(&watch_dir, RecursiveMode::NonRecursive)
-    {
-        warn!(dir = %watch_dir.display(), "failed to watch alacritty config dir: {e}");
-        return;
+    // than writing in place — a watch on a file's own inode would go stale
+    // the moment such an editor "saves."
+    for dir in &watch_dirs {
+        if let Err(e) = debouncer.watcher().watch(dir, RecursiveMode::NonRecursive) {
+            warn!(dir = %dir.display(), "failed to watch alacritty config dir: {e}");
+        }
     }
     let _ = WATCHER.set(debouncer);
-    debug!(dir = %watch_dir.display(), "alacritty config watcher started");
+    debug!(dirs = ?watch_dirs, "alacritty config watcher started");
 }
 
-/// Whether `path`'s file name matches `target_file_name` — the config file
-/// itself, not some unrelated file in the same directory (e.g. a
-/// `.alacritty.toml.swp` an editor drops next to it).
-fn is_watched_config_file(path: &std::path::Path, target_file_name: &OsStr) -> bool {
-    path.file_name() == Some(target_file_name)
+/// Whether `path`'s file name matches one of the config chain's own files —
+/// the root or one of its imports, not some unrelated file dropped in the
+/// same directory (e.g. a `.alacritty.toml.swp` an editor leaves behind).
+fn is_watched_config_file(
+    path: &std::path::Path,
+    watched_names: &HashSet<std::ffi::OsString>,
+) -> bool {
+    path.file_name()
+        .is_some_and(|name| watched_names.contains(name))
 }
 
 #[cfg(test)]
@@ -358,19 +376,28 @@ mod tests {
     }
 
     #[test]
-    fn matches_only_the_exact_config_file_name() {
-        let target = OsStr::new("alacritty.toml");
+    fn matches_only_files_in_the_watched_set() {
+        let watched: HashSet<std::ffi::OsString> = [
+            std::ffi::OsString::from("alacritty.toml"),
+            std::ffi::OsString::from("font.toml"),
+        ]
+        .into_iter()
+        .collect();
         assert!(is_watched_config_file(
             std::path::Path::new("/home/user/.config/alacritty/alacritty.toml"),
-            target
+            &watched
+        ));
+        assert!(is_watched_config_file(
+            std::path::Path::new("/home/user/.config/alacritty/themes/font.toml"),
+            &watched
         ));
         assert!(!is_watched_config_file(
             std::path::Path::new("/home/user/.config/alacritty/alacritty.toml.swp"),
-            target
+            &watched
         ));
         assert!(!is_watched_config_file(
-            std::path::Path::new("/home/user/.config/alacritty/other.toml"),
-            target
+            std::path::Path::new("/home/user/.config/alacritty/themes/other.toml"),
+            &watched
         ));
     }
 }
