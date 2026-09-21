@@ -76,13 +76,18 @@ function NeovimPane({ featureId }: NeovimPaneProps) {
   // Same derivation as `TerminalCoreInstance`: an unusable terminal
   // configuration is fatal, not pending. Left as "loading" the pane waits for
   // options that never arrive and offers a restart that only reconnects the
-  // socket. The service re-pushes the config when the file changes, so a
-  // repaired alacritty.toml recovers on its own.
+  // socket.
   const paneStatus = optionsError ? "error" : status;
 
   useEffect(() => {
-    if (paneStatus === "error") socket.detach();
-  }, [paneStatus, socket.detach]);
+    // Fatal for the rendering, not for the session: a dead renderer ends the
+    // Neovim session, a bad config does not. `detach()` unregisters the
+    // reconnector, so detaching here would leave the pane disconnected with no
+    // automatic `connect()` once the file is repaired. Keeping the socket
+    // attached is what makes that repair recover on its own, the service
+    // re-pushes the config and `useTerminalOptions` re-resolves.
+    if (status === "error") socket.detach();
+  }, [status, socket.detach]);
 
   const error = errorMessage ?? optionsError ?? socket.lastError;
   // The host stays mounted in every non-fatal state: `Terminal` needs an

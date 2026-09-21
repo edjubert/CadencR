@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from "react";
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -21,12 +22,29 @@ const RESOLVED_TERMINAL_OPTIONS = {
   cursor: { style: "beam" as const, blink: true },
   scrollback: 5_000,
 };
+// A config error clears through a react-query refetch, not a prop change, and
+// the pane is `memo`ed — so the mock has to re-render it from the outside the
+// way the real hook does.
 let terminalOptionsError: string | null = null;
-const terminalOptionsMock = vi.fn(() => ({
-  options: terminalOptionsError ? undefined : RESOLVED_TERMINAL_OPTIONS,
-  isLoading: false,
-  error: terminalOptionsError,
-}));
+const optionsListeners = new Set<() => void>();
+function setTerminalOptionsError(value: string | null): void {
+  terminalOptionsError = value;
+  for (const listener of optionsListeners) listener();
+}
+const terminalOptionsMock = vi.fn(() => {
+  useSyncExternalStore(
+    (onChange) => {
+      optionsListeners.add(onChange);
+      return () => optionsListeners.delete(onChange);
+    },
+    () => terminalOptionsError,
+  );
+  return {
+    options: terminalOptionsError ? undefined : RESOLVED_TERMINAL_OPTIONS,
+    isLoading: false,
+    error: terminalOptionsError,
+  };
+});
 
 vi.mock("@/components/terminal-core", () => ({
   useCelerittyTerminal: (...args: unknown[]) => celerittyTerminalMock(...(args as [])),
@@ -161,7 +179,7 @@ describe("Neovim attachment replay", () => {
 
 describe("NeovimPane appearance", () => {
   afterEach(() => {
-    terminalOptionsError = null;
+    setTerminalOptionsError(null);
   });
 
   it("renders with the terminal's resolved font instead of a pane-local stack", () => {
@@ -196,11 +214,23 @@ describe("NeovimPane appearance", () => {
     expect(screen.getByText(/alacritty.toml: expected a table/)).toBeInTheDocument();
   });
 
-  it("treats a broken terminal configuration as fatal rather than offering a restart that cannot fix it", () => {
+  it("hides the restart action on a broken configuration, which reconnecting cannot fix", () => {
+    terminalOptionsError = "alacritty.toml: expected a table";
+    render(<NeovimPane featureId={1} />);
+    expect(screen.queryByRole("button", { name: /Restart Neovim session/ })).toBeNull();
+  });
+
+  it("keeps the session attached on a broken configuration so a repaired file recovers on its own", () => {
     terminalOptionsError = "alacritty.toml: expected a table";
     detachMock.mockClear();
     render(<NeovimPane featureId={1} />);
-    expect(screen.queryByRole("button", { name: /Restart Neovim session/ })).toBeNull();
-    expect(detachMock).toHaveBeenCalled();
+    expect(detachMock).not.toHaveBeenCalled();
+    connectMock.mockClear();
+
+    act(() => setTerminalOptionsError(null));
+    expect(screen.queryByText(/alacritty.toml: expected a table/)).toBeNull();
+    expect(screen.queryByText(/Connecting to Neovim/)).toBeNull();
+    // No reconnection needed: the socket was never dropped.
+    expect(connectMock).not.toHaveBeenCalled();
   });
 });
