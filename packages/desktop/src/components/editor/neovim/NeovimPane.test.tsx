@@ -43,6 +43,7 @@ vi.mock("@/lib/fonts/mono-font-setting", () => ({
 }));
 
 const connectMock = vi.fn();
+const detachMock = vi.fn();
 const snapshotMock = vi.fn();
 const transportCloseMock = vi.fn();
 let socketError: string | null = null;
@@ -55,7 +56,7 @@ vi.mock("./useNeovimWebSocket", () => ({
       connect: connectMock,
       write: vi.fn(),
       resize: vi.fn(),
-      detach: vi.fn(),
+      detach: detachMock,
       isConnected: true,
       lastError: socketError,
     };
@@ -193,5 +194,13 @@ describe("NeovimPane appearance", () => {
     terminalOptionsError = "alacritty.toml: expected a table";
     render(<NeovimPane featureId={1} />);
     expect(screen.getByText(/alacritty.toml: expected a table/)).toBeInTheDocument();
+  });
+
+  it("treats a broken terminal configuration as fatal rather than offering a restart that cannot fix it", () => {
+    terminalOptionsError = "alacritty.toml: expected a table";
+    detachMock.mockClear();
+    render(<NeovimPane featureId={1} />);
+    expect(screen.queryByRole("button", { name: /Restart Neovim session/ })).toBeNull();
+    expect(detachMock).toHaveBeenCalled();
   });
 });

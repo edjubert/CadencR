@@ -73,9 +73,16 @@ function NeovimPane({ featureId }: NeovimPaneProps) {
     transport: socket.isConnected ? bridge.transport : undefined,
   });
 
+  // Same derivation as `TerminalCoreInstance`: an unusable terminal
+  // configuration is fatal, not pending. Left as "loading" the pane waits for
+  // options that never arrive and offers a restart that only reconnects the
+  // socket. The service re-pushes the config when the file changes, so a
+  // repaired alacritty.toml recovers on its own.
+  const paneStatus = optionsError ? "error" : status;
+
   useEffect(() => {
-    if (status === "error") socket.detach();
-  }, [status, socket.detach]);
+    if (paneStatus === "error") socket.detach();
+  }, [paneStatus, socket.detach]);
 
   const error = errorMessage ?? optionsError ?? socket.lastError;
   // The host stays mounted in every non-fatal state: `Terminal` needs an
@@ -91,7 +98,7 @@ function NeovimPane({ featureId }: NeovimPaneProps) {
         data-neovim-feature-id={featureId}
         className="relative h-full w-full outline-none"
       />
-      {(status !== "ready" || !socket.isConnected || error) && (
+      {(paneStatus !== "ready" || !socket.isConnected || error) && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-background">
           {error ? (
             <p className="text-sm text-destructive">Neovim could not start: {error}</p>
@@ -101,7 +108,7 @@ function NeovimPane({ featureId }: NeovimPaneProps) {
               <p className="text-sm text-muted-foreground">Connecting to Neovim…</p>
             </>
           )}
-          {status !== "error" && <RestartAction onRestart={socket.connect} />}
+          {paneStatus !== "error" && <RestartAction onRestart={socket.connect} />}
         </div>
       )}
     </div>
