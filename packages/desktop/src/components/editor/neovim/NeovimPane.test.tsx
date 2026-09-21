@@ -14,8 +14,32 @@ const celerittyTerminalMock = vi.fn<() => CelerittyTerminalMockResult>(() => ({
   status: "ready",
   errorMessage: null,
 }));
+
+const RESOLVED_TERMINAL_OPTIONS = {
+  font: { family: "'Iosevka Nerd Font', monospace", size: 15 },
+  colors: { foreground: "#fff", background: "#000" },
+  cursor: { style: "beam" as const, blink: true },
+  scrollback: 5_000,
+};
+let terminalOptionsError: string | null = null;
+const terminalOptionsMock = vi.fn(() => ({
+  options: terminalOptionsError ? undefined : RESOLVED_TERMINAL_OPTIONS,
+  isLoading: false,
+  error: terminalOptionsError,
+}));
+
 vi.mock("@/components/terminal-core", () => ({
   useCelerittyTerminal: (...args: unknown[]) => celerittyTerminalMock(...(args as [])),
+  useTerminalOptions: (...args: unknown[]) => terminalOptionsMock(...(args as [])),
+}));
+
+vi.mock("@/lib/fonts/mono-font-setting", () => ({
+  useMonoFont: () => ({
+    family: "JetBrainsMono Nerd Font",
+    resolved: '"JetBrainsMono Nerd Font", monospace',
+    setFamily: vi.fn(),
+    isLoading: false,
+  }),
 }));
 
 const connectMock = vi.fn();
@@ -131,5 +155,43 @@ describe("Neovim attachment replay", () => {
     expect(screen.getByRole("application")).toBeInTheDocument();
     expect(screen.getByText(/failed to start neovim/)).toBeInTheDocument();
     socketError = null;
+  });
+});
+
+describe("NeovimPane appearance", () => {
+  afterEach(() => {
+    terminalOptionsError = null;
+  });
+
+  it("renders with the terminal's resolved font instead of a pane-local stack", () => {
+    render(<NeovimPane featureId={1} />);
+    expect(celerittyTerminalMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({ font: RESOLVED_TERMINAL_OPTIONS.font }),
+      }),
+    );
+  });
+
+  it("resolves that font from the theme palette and the chosen Cadencr mono family", () => {
+    render(<NeovimPane featureId={1} />);
+    expect(terminalOptionsMock).toHaveBeenCalledWith({
+      palette: expect.objectContaining({ background: "#000" }),
+      fontFamily: '"JetBrainsMono Nerd Font", monospace',
+    });
+  });
+
+  it("keeps a steady block cursor as the shape nvim starts from", () => {
+    render(<NeovimPane featureId={1} />);
+    expect(celerittyTerminalMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({ cursor: { style: "block", blink: false } }),
+      }),
+    );
+  });
+
+  it("surfaces a broken terminal configuration instead of rendering a silent blank pane", () => {
+    terminalOptionsError = "alacritty.toml: expected a table";
+    render(<NeovimPane featureId={1} />);
+    expect(screen.getByText(/alacritty.toml: expected a table/)).toBeInTheDocument();
   });
 });

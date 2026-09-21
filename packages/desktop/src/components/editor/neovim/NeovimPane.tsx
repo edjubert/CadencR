@@ -4,19 +4,14 @@ import { Loader2Icon } from "lucide-react";
 import type { TerminalOptions } from "celeritty";
 import { Button } from "@/components/ui/button";
 import { useTheme } from "@/hooks/useTheme";
-import { useCelerittyTerminal } from "@/components/terminal-core";
+import { useCelerittyTerminal, useTerminalOptions } from "@/components/terminal-core";
+import { useMonoFont } from "@/lib/fonts/mono-font-setting";
 import { useNeovimWebSocket } from "./useNeovimWebSocket";
 import { useNeovimTransport } from "./useNeovimTransport";
 
 interface NeovimPaneProps {
   featureId: number;
 }
-
-const NEOVIM_FONT = {
-  family:
-    "'FiraCode Nerd Font', 'Fira Code', 'CaskaydiaCove Nerd Font', 'Cascadia Code', 'SF Mono', Menlo, Monaco, 'Courier New', monospace",
-  size: 13,
-};
 
 /**
  * Full-frame Neovim panel: no `EditorSubTabs`, no tab/file-tree sync — Neovim
@@ -51,14 +46,25 @@ function NeovimPane({ featureId }: NeovimPaneProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [featureId]);
 
-  const options = useMemo<TerminalOptions>(
-    () => ({
-      font: NEOVIM_FONT,
-      colors: theme.xterm,
-      cursor: { style: "block", blink: false },
-      scrollback: 10_000,
-    }),
-    [theme.xterm],
+  // Same resolution as the Terminal tab (`useTerminalOptions`): the chosen
+  // Cadencr mono family, else the user's alacritty.toml, else the default
+  // stack. A pane-local font list here meant Neovim rendered in whatever
+  // happened to be installed — dropping Nerd Font glyphs the terminal drew fine.
+  const { family, resolved } = useMonoFont();
+  const { options: terminalOptions, error: optionsError } = useTerminalOptions({
+    palette: theme.xterm,
+    fontFamily: family ? resolved : undefined,
+  });
+
+  const options = useMemo<TerminalOptions | undefined>(
+    () =>
+      terminalOptions && {
+        ...terminalOptions,
+        // Only the shape Neovim starts from: it re-declares its own cursor
+        // per mode through DECSCUSR as soon as it draws.
+        cursor: { style: "block", blink: false },
+      },
+    [terminalOptions],
   );
 
   const { status, errorMessage } = useCelerittyTerminal({
@@ -71,7 +77,7 @@ function NeovimPane({ featureId }: NeovimPaneProps) {
     if (status === "error") socket.detach();
   }, [status, socket.detach]);
 
-  const error = errorMessage ?? socket.lastError;
+  const error = errorMessage ?? optionsError ?? socket.lastError;
   // The host stays mounted in every non-fatal state: `Terminal` needs an
   // element to attach its canvas to, so gating it behind `status === "ready"`
   // would deadlock — no host, no engine, no ready. The loading state is an
