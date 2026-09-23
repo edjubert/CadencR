@@ -10,7 +10,7 @@ interface CelerittyTerminalMockResult {
   status: "loading" | "ready" | "error";
   errorMessage: string | null;
 }
-const celerittyTerminalMock = vi.fn<() => CelerittyTerminalMockResult>(() => ({
+const celerittyTerminalMock = vi.fn<(args?: unknown) => CelerittyTerminalMockResult>(() => ({
   terminal: undefined,
   status: "ready",
   errorMessage: null,
@@ -49,6 +49,11 @@ const terminalOptionsMock = vi.fn(() => {
 vi.mock("@/components/terminal-core", () => ({
   useCelerittyTerminal: (...args: unknown[]) => celerittyTerminalMock(...(args as [])),
   useTerminalOptions: (...args: unknown[]) => terminalOptionsMock(...(args as [])),
+}));
+
+const toastErrorMock = vi.fn();
+vi.mock("sonner", () => ({
+  toast: { error: (...args: unknown[]) => toastErrorMock(...args) },
 }));
 
 vi.mock("@/lib/fonts/mono-font-setting", () => ({
@@ -218,6 +223,28 @@ describe("NeovimPane appearance", () => {
     terminalOptionsError = "alacritty.toml: expected a table";
     render(<NeovimPane featureId={1} />);
     expect(screen.queryByRole("button", { name: /Restart Neovim session/ })).toBeNull();
+  });
+
+  it("keeps the live engine when the configuration breaks after the pane is up", () => {
+    render(<NeovimPane featureId={1} />);
+    celerittyTerminalMock.mockClear();
+    toastErrorMock.mockClear();
+
+    act(() => setTerminalOptionsError("alacritty.toml: expected a table"));
+
+    // Dropping the options would dispose the engine, and the replacement would
+    // start on a blank grid: no reconnection means no `attached` snapshot.
+    const lastCall = celerittyTerminalMock.mock.calls.at(-1)?.[0] as
+      | { options: unknown }
+      | undefined;
+    expect(lastCall?.options).toEqual(
+      expect.objectContaining({ font: RESOLVED_TERMINAL_OPTIONS.font }),
+    );
+    expect(screen.queryByText(/Neovim could not start/)).toBeNull();
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      expect.stringContaining("alacritty.toml: expected a table"),
+      expect.anything(),
+    );
   });
 
   it("keeps the session attached on a broken configuration so a repaired file recovers on its own", () => {
