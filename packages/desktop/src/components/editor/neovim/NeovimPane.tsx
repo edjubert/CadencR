@@ -60,7 +60,8 @@ function useNeovimAppearance(featureId: number): {
     });
   }, [error, options, featureId]);
 
-  return { options, fatalError: options ? null : error };
+  const fatalError = options ? null : error;
+  return useMemo(() => ({ options, fatalError }), [options, fatalError]);
 }
 
 /**
