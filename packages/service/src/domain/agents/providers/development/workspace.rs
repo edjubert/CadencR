@@ -559,13 +559,9 @@ mod tests {
         let before = snapshot_files(&directory);
         let request = request("preserved-import", "Preserved", directory.to_str());
         create_with_roots(&pool, &request, &roots).await.unwrap();
-        assert_eq!(snapshot_files(&directory), before);
+        assert_snapshot_unchanged(&directory, &before, "import");
         create_with_roots(&pool, &request, &roots).await.unwrap();
-        assert_eq!(
-            snapshot_files(&directory),
-            before,
-            "retry must preserve files too"
-        );
+        assert_snapshot_unchanged(&directory, &before, "retry");
     }
 
     #[tokio::test]
@@ -1004,9 +1000,26 @@ mod tests {
         String::from_utf8(output.stdout).unwrap()
     }
 
-    fn snapshot_files(
-        root: &Path,
-    ) -> std::collections::BTreeMap<std::path::PathBuf, (Vec<u8>, u32)> {
+    type FileSnapshot = std::collections::BTreeMap<std::path::PathBuf, (Vec<u8>, u32)>;
+
+    fn assert_snapshot_unchanged(root: &Path, before: &FileSnapshot, phase: &str) {
+        let after = snapshot_files(root);
+        let changed: std::collections::BTreeSet<_> = before
+            .keys()
+            .chain(after.keys())
+            .filter(|path| before.get(*path) != after.get(*path))
+            .collect();
+        // Git object bytes make assert_eq!'s full map dump exceed CI log limits.
+        // Keep the same content/mode comparison, reporting only affected paths.
+        assert!(
+            changed.is_empty(),
+            "{phase} changed {} paths: {:?}",
+            changed.len(),
+            changed.iter().take(20).collect::<Vec<_>>()
+        );
+    }
+
+    fn snapshot_files(root: &Path) -> FileSnapshot {
         fn visit(
             root: &Path,
             directory: &Path,
