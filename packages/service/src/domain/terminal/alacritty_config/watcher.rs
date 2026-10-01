@@ -42,18 +42,20 @@ struct WatchState {
 impl WatchState {
     /// The exact chain files plus each file's parent directory. `config_path`
     /// is always included so an unresolvable chain degrades to watching the
-    /// root alone and can recover on the next root edit. Paths are
-    /// canonicalized: backends like macOS FSEvents report events with the
-    /// canonical path (e.g. `/private/var` instead of `/var`, or through a
-    /// symlinked `~/.config`), and exact matching only works if both sides
-    /// use the same form.
+    /// root alone and can recover on the next root edit. Each file is kept
+    /// under BOTH its raw and its canonical form: backends like macOS
+    /// FSEvents report events with the canonical path (e.g. `/private/var`
+    /// instead of `/var`, or through a symlinked `~/.config`), while a
+    /// symlinked import's own deletion event arrives under the raw symlink
+    /// path — exact matching must accept both sides.
     fn from_touched(config_path: &Path, touched: Vec<PathBuf>) -> Self {
-        let mut files = HashSet::from([normalize(config_path)]);
+        let mut files = HashSet::from([config_path.to_path_buf(), normalize(config_path)]);
         let mut dirs = HashSet::from([config_path.parent().map(normalize).unwrap_or_default()]);
         for path in touched {
             if let Some(dir) = path.parent() {
                 dirs.insert(normalize(dir));
             }
+            files.insert(path.clone());
             files.insert(normalize(&path));
         }
         WatchState { files, dirs }
@@ -127,6 +129,11 @@ fn spawn_watcher(config_path: PathBuf, tx: broadcast::Sender<AlacrittyConfigChan
     // watch set off the event path.
     let (recompute_tx, recompute_rx) = mpsc::channel::<()>();
     let state = Arc::new(Mutex::new(recompute_state(&config_path)));
+    // The subscription thread pings clients again once it has aligned the
+    // watch set, so an edit racing the new subscriptions (a change made to a
+    // newly imported file before its directory was under watch) is still
+    // picked up by the refetch instead of silently missed.
+    let reload_tx = tx.clone();
 
     let event_files = Arc::clone(&state);
     let mut debouncer = match new_debouncer(
@@ -196,6 +203,10 @@ fn spawn_watcher(config_path: PathBuf, tx: broadcast::Sender<AlacrittyConfigChan
                     "alacritty config watch set recomputed"
                 );
                 current = next;
+                // Close the subscription-installation window: events for
+                // the newly watched files couldn't fire before this point,
+                // so clients get one more refetch now that they can.
+                let _ = reload_tx.send(AlacrittyConfigChangedEvent {});
             }
         })
     {
@@ -306,7 +317,11 @@ mod tests {
         let root = dir.path().join("alacritty.toml");
         std::fs::write(&root, "general.import = [\"does-not-exist.toml\"]\n").unwrap();
         let state = recompute_state(&root);
-        assert_eq!(state.files, files_of(&[normalize(&root).to_str().unwrap()]));
+        // The root stays under watch in both its raw and canonical forms.
+        assert_eq!(
+            state.files,
+            files_of(&[root.to_str().unwrap(), normalize(&root).to_str().unwrap()])
+        );
         // The root's directory stays subscribed, so fixing the root later
         // triggers another recompute — that's the recovery path.
         assert_eq!(
@@ -355,6 +370,18 @@ mod tests {
         false
     }
 
+    /// Drain every event already delivered to `rx`, then wait out the
+    /// debounce window so no further events can be in flight. Used between
+    /// the two phases of the end-to-end test: the subscription thread also
+    /// sends a follow-up reload ping once a new import is under watch, and
+    /// phase two must not succeed on that leftover ping.
+    fn drain_and_settle(rx: &mut broadcast::Receiver<AlacrittyConfigChangedEvent>) {
+        std::thread::sleep(Duration::from_millis(300));
+        while rx.try_recv().is_ok() {}
+        std::thread::sleep(Duration::from_millis(300));
+        while rx.try_recv().is_ok() {}
+    }
+
     #[test]
     fn a_newly_added_import_becomes_watched_and_triggers_live_reload() {
         let dir = tempfile::tempdir().unwrap();
@@ -383,6 +410,10 @@ mod tests {
             ),
             "editing the root must trigger a reload event"
         );
+        // Flush the follow-up ping the subscription thread sends once
+        // themes/ is under watch, so phase two can only pass on a real
+        // event for the imported file itself.
+        drain_and_settle(&mut rx);
 
         // Editing the newly imported file is the reviewer's exact scenario:
         // before the recompute fix, its directory was never subscribed, so
@@ -391,5 +422,26 @@ mod tests {
             write_and_expect_reload(&mut rx, &import, "[font]\nsize = 18\n"),
             "editing a newly imported file must trigger a reload event"
         );
+    }
+
+    #[test]
+    fn a_symlinked_import_is_matched_under_both_of_its_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("theme-real.toml");
+        std::fs::write(&target, "[colors.primary]\nbackground = \"#1e1e2e\"\n").unwrap();
+        let link = dir.path().join("theme-link.toml");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let root = dir.path().join("alacritty.toml");
+        std::fs::write(&root, "general.import = [\"theme-link.toml\"]\n").unwrap();
+
+        let state = recompute_state(&root);
+        // The raw symlink path must be watched too: its deletion event
+        // arrives under that path, and once the link is gone it can no
+        // longer be canonicalized to the target's path.
+        assert!(state.files.contains(&link));
+        assert!(state.files.contains(&normalize(&link)));
+        assert!(state.files.contains(&normalize(&target)));
+        assert!(is_watched_config_file(&link, &state.files));
+        assert!(is_watched_config_file(&normalize(&target), &state.files));
     }
 }
