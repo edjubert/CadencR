@@ -24,7 +24,7 @@ use super::responses::response_value;
 use super::session_permissions::{
     is_plan_approval_request_id, permission_kind_for_request_id, take_pending,
 };
-use super::timeouts::with_probe_timeout;
+use super::timeouts::{with_control_timeout, with_probe_timeout};
 use super::turn_start::{turn_start_params, TurnStartOptions};
 use crate::domain::agents::adapter::{
     AgentRuntimeSession, RuntimeAccessMode, RuntimeError, RuntimeEvent, RuntimeMcpServerStatus,
@@ -299,7 +299,7 @@ impl AgentRuntimeSession for CodexSession {
 
     async fn close(&mut self) {
         self.closing.store(true, Ordering::SeqCst);
-        let _ = with_probe_timeout(
+        let _ = with_control_timeout(
             "Codex thread/unsubscribe",
             self.client.thread_unsubscribe(&self.thread_id),
         )

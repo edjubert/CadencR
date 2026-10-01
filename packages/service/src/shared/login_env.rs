@@ -385,10 +385,29 @@ mod tests {
         assert!(script.ends_with("; env -0"));
     }
 
-    /// Single test mutating real env vars — kept serial via the unique key.
-    /// Verifies the override / fill-if-missing / blocked policy on one go.
+    /// Run real environment mutations in a child so parallel Git/process tests
+    /// never observe the fake PATH, even briefly.
     #[test]
     fn apply_env_respects_override_and_blocklist() {
+        const CHILD_MARKER: &str = "CADENCR_LOGIN_ENV_TEST_CHILD";
+        if std::env::var_os(CHILD_MARKER).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "shared::login_env::tests::apply_env_respects_override_and_blocklist",
+                    "--nocapture",
+                ])
+                .env(CHILD_MARKER, "1")
+                .output()
+                .expect("spawn isolated environment test");
+            assert!(
+                output.status.success(),
+                "isolated environment test failed:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            return;
+        }
         let _guard = env_lock().lock().unwrap();
         // Use unique-suffix keys so we can't collide with anything the
         // host environment or other tests might have set.
