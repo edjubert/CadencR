@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use super::{
-    AlacrittyConfig, AnsiPalette, ColorsConfig, CursorColors, CursorConfig, CursorStyle,
+    fill_palette_missing, AlacrittyConfig, ColorsConfig, CursorColors, CursorConfig, CursorStyle,
     FontConfig, FontFace, PrimaryColors, ScrollingConfig, DEFAULT_CURSOR_BLINKING,
     DEFAULT_CURSOR_SHAPE, DEFAULT_FONT_SIZE, DEFAULT_SCROLLBACK_HISTORY,
 };
@@ -21,78 +21,18 @@ use super::{
 /// when the file doesn't mention it, instead of filling in Alacritty's
 /// documented default immediately. Filling defaults per-layer would make an
 /// import's explicit value get silently overwritten by a later, unrelated
-/// layer that simply never mentions that field — the same bug `colors.normal`
-/// already avoids by staying `Option<AnsiPalette>` in the public struct.
-/// Defaults are only filled once, in `finalize`, after every layer merges.
+/// layer that simply never mentions that field. Defaults are only filled
+/// once, in `finalize`, after every layer merges. `ColorsConfig` is used
+/// directly: its palettes are per-color optional, so a layer that overrides
+/// a single ANSI color deserializes and merges field by field.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct PartialConfig {
     general: PartialGeneral,
     font: PartialFontConfig,
-    colors: PartialColorsConfig,
+    colors: ColorsConfig,
     cursor: PartialCursorConfig,
     scrolling: PartialScrollingConfig,
-}
-
-/// Mirrors `AnsiPalette` with every field optional, so a layer that only
-/// overrides `[colors.normal] red` deserializes and merges field by field
-/// instead of failing as an incomplete palette.
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct PartialPalette {
-    black: Option<String>,
-    red: Option<String>,
-    green: Option<String>,
-    yellow: Option<String>,
-    blue: Option<String>,
-    magenta: Option<String>,
-    cyan: Option<String>,
-    white: Option<String>,
-}
-
-impl PartialPalette {
-    /// `overlay`'s fields win wherever it sets them; `base` fills the rest.
-    fn merge(base: &PartialPalette, overlay: &PartialPalette) -> PartialPalette {
-        let pick = |overlay: &Option<String>, base: &Option<String>| {
-            overlay.clone().or_else(|| base.clone())
-        };
-        PartialPalette {
-            black: pick(&overlay.black, &base.black),
-            red: pick(&overlay.red, &base.red),
-            green: pick(&overlay.green, &base.green),
-            yellow: pick(&overlay.yellow, &base.yellow),
-            blue: pick(&overlay.blue, &base.blue),
-            magenta: pick(&overlay.magenta, &base.magenta),
-            cyan: pick(&overlay.cyan, &base.cyan),
-            white: pick(&overlay.white, &base.white),
-        }
-    }
-
-    /// Materialize the merged palette only when every color is set — the
-    /// public `ColorsConfig` is `Option<AnsiPalette>` all-or-nothing: an
-    /// incomplete palette stays `None` so the renderer inherits the
-    /// selected Cadencr theme, exactly as for a fully omitted palette.
-    fn complete(&self) -> Option<AnsiPalette> {
-        Some(AnsiPalette {
-            black: self.black.clone()?,
-            red: self.red.clone()?,
-            green: self.green.clone()?,
-            yellow: self.yellow.clone()?,
-            blue: self.blue.clone()?,
-            magenta: self.magenta.clone()?,
-            cyan: self.cyan.clone()?,
-            white: self.white.clone()?,
-        })
-    }
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct PartialColorsConfig {
-    primary: PrimaryColors,
-    cursor: CursorColors,
-    normal: PartialPalette,
-    bright: PartialPalette,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -240,7 +180,7 @@ fn merge_partial(base: PartialConfig, overlay: PartialConfig) -> PartialConfig {
             },
             size: overlay.font.size.or(base.font.size),
         },
-        colors: PartialColorsConfig {
+        colors: ColorsConfig {
             primary: PrimaryColors {
                 foreground: overlay
                     .colors
@@ -257,8 +197,8 @@ fn merge_partial(base: PartialConfig, overlay: PartialConfig) -> PartialConfig {
                 text: overlay.colors.cursor.text.or(base.colors.cursor.text),
                 cursor: overlay.colors.cursor.cursor.or(base.colors.cursor.cursor),
             },
-            normal: PartialPalette::merge(&base.colors.normal, &overlay.colors.normal),
-            bright: PartialPalette::merge(&base.colors.bright, &overlay.colors.bright),
+            normal: fill_palette_missing(overlay.colors.normal, &base.colors.normal),
+            bright: fill_palette_missing(overlay.colors.bright, &base.colors.bright),
         },
         cursor: PartialCursorConfig {
             style: PartialCursorStyle {
@@ -280,12 +220,7 @@ fn finalize(partial: PartialConfig) -> AlacrittyConfig {
             normal: partial.font.normal,
             size: partial.font.size.unwrap_or(DEFAULT_FONT_SIZE),
         },
-        colors: ColorsConfig {
-            primary: partial.colors.primary,
-            cursor: partial.colors.cursor,
-            normal: partial.colors.normal.complete(),
-            bright: partial.colors.bright.complete(),
-        },
+        colors: partial.colors,
         cursor: CursorConfig {
             style: CursorStyle {
                 shape: partial
@@ -312,6 +247,7 @@ fn finalize(partial: PartialConfig) -> AlacrittyConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::terminal::alacritty_config::AnsiPalette;
 
     fn write_temp_toml(dir: &Path, name: &str, contents: &str) -> PathBuf {
         let path = dir.join(name);
@@ -343,7 +279,7 @@ mod tests {
         assert_eq!(config.cursor.style.blinking, "Off");
         assert_eq!(config.font.size, 11.25);
         assert_eq!(config.font.normal.family, None);
-        assert_eq!(config.colors.normal, None);
+        assert_eq!(config.colors.normal, AnsiPalette::default());
         assert_eq!(touched, vec![path]);
     }
 
@@ -418,7 +354,7 @@ history = 5000
         );
         assert_eq!(config.colors.primary.background.as_deref(), Some("#1e1e2e"));
         assert_eq!(config.colors.cursor.cursor.as_deref(), Some("#f5e0dc"));
-        assert_eq!(config.colors.normal.unwrap().red, "#f38ba8");
+        assert_eq!(config.colors.normal.red.as_deref(), Some("#f38ba8"));
         assert_eq!(config.scrolling.history, 5000);
         // Not set in the file -- still the real default, not zeroed.
         assert_eq!(config.cursor.style.shape, "Block");
@@ -577,22 +513,25 @@ history = 5000
             "general.import = [\"theme.toml\"]\n[colors.normal]\nblack = \"#000000\"\ngreen = \"#00aa00\"\nyellow = \"#aaaa00\"\nblue = \"#0000aa\"\nmagenta = \"#aa00aa\"\ncyan = \"#00aaaa\"\nwhite = \"#aaaaaa\"\n",
         );
         let (config, _touched) = resolve_alacritty_config(&root_path).unwrap().unwrap();
-        let normal = config.colors.normal.expect("palette must be complete");
+        let normal = &config.colors.normal;
         assert_eq!(
-            normal.red, "#ff0000",
+            normal.red.as_deref(),
+            Some("#ff0000"),
             "the import's red must fill the field the root leaves unset"
         );
         assert_eq!(
-            normal.green, "#00aa00",
+            normal.green.as_deref(),
+            Some("#00aa00"),
             "non-overridden colors must be preserved from earlier layers"
         );
     }
 
     #[test]
-    fn incomplete_merged_palette_is_reported_as_unset() {
-        // A palette that stays partial after merging can't be expressed in
-        // the public all-or-nothing `Option<AnsiPalette>`: it becomes `None`
-        // so the renderer inherits the selected Cadencr theme.
+    fn a_lone_partial_override_survives_without_the_rest_of_the_palette() {
+        // The per-color contract: a file that overrides a single ANSI color
+        // must expose exactly that color, with every other slot `None` for
+        // the renderer to fill from its own theme. This is the case that
+        // used to be dropped entirely when the palette wasn't complete.
         let dir = tempfile::tempdir().unwrap();
         let path = write_temp_toml(
             dir.path(),
@@ -600,8 +539,10 @@ history = 5000
             "[colors.normal]\nred = \"#ff0000\"\n",
         );
         let (config, _touched) = resolve_alacritty_config(&path).unwrap().unwrap();
-        assert_eq!(config.colors.normal, None);
-        assert_eq!(config.colors.bright, None);
+        assert_eq!(config.colors.normal.red.as_deref(), Some("#ff0000"));
+        assert_eq!(config.colors.normal.black, None);
+        assert_eq!(config.colors.normal.green, None);
+        assert_eq!(config.colors.bright, AnsiPalette::default());
     }
 
     #[test]

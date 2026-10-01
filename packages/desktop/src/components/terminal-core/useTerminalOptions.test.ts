@@ -67,6 +67,20 @@ describe("terminal options", () => {
     expect(resolveTerminalOptions(response).font.family).toBe("config-font");
   });
 
+  it("applies a lone partial palette override without touching the other colors", () => {
+    const palette = { ...DEFAULT_TERMINAL_PALETTE };
+    const options = resolveTerminalOptions(
+      {
+        found: true,
+        config: { colors: { normal: { red: "#ff0000" } } },
+      },
+      { palette },
+    );
+    expect(options.colors.red).toBe("#ff0000");
+    expect(options.colors.green).toBe(DEFAULT_TERMINAL_PALETTE.green);
+    expect(options.colors.brightRed).toBe(DEFAULT_TERMINAL_PALETTE.brightRed);
+  });
+
   it("keeps loading and configuration errors explicit", () => {
     query.data = undefined;
     query.isLoading = true;
