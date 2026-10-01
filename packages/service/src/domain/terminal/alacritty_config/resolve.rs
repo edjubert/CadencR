@@ -12,9 +12,9 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use super::{
-    AlacrittyConfig, ColorsConfig, CursorColors, CursorConfig, CursorStyle, FontConfig, FontFace,
-    PrimaryColors, ScrollingConfig, DEFAULT_CURSOR_BLINKING, DEFAULT_CURSOR_SHAPE,
-    DEFAULT_FONT_SIZE, DEFAULT_SCROLLBACK_HISTORY,
+    AlacrittyConfig, AnsiPalette, ColorsConfig, CursorColors, CursorConfig, CursorStyle,
+    FontConfig, FontFace, PrimaryColors, ScrollingConfig, DEFAULT_CURSOR_BLINKING,
+    DEFAULT_CURSOR_SHAPE, DEFAULT_FONT_SIZE, DEFAULT_SCROLLBACK_HISTORY,
 };
 
 /// Mirrors `AlacrittyConfig`'s shape but leaves every leaf unset (`None`)
@@ -29,9 +29,70 @@ use super::{
 struct PartialConfig {
     general: PartialGeneral,
     font: PartialFontConfig,
-    colors: ColorsConfig,
+    colors: PartialColorsConfig,
     cursor: PartialCursorConfig,
     scrolling: PartialScrollingConfig,
+}
+
+/// Mirrors `AnsiPalette` with every field optional, so a layer that only
+/// overrides `[colors.normal] red` deserializes and merges field by field
+/// instead of failing as an incomplete palette.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct PartialPalette {
+    black: Option<String>,
+    red: Option<String>,
+    green: Option<String>,
+    yellow: Option<String>,
+    blue: Option<String>,
+    magenta: Option<String>,
+    cyan: Option<String>,
+    white: Option<String>,
+}
+
+impl PartialPalette {
+    /// `overlay`'s fields win wherever it sets them; `base` fills the rest.
+    fn merge(base: &PartialPalette, overlay: &PartialPalette) -> PartialPalette {
+        let pick = |overlay: &Option<String>, base: &Option<String>| {
+            overlay.clone().or_else(|| base.clone())
+        };
+        PartialPalette {
+            black: pick(&overlay.black, &base.black),
+            red: pick(&overlay.red, &base.red),
+            green: pick(&overlay.green, &base.green),
+            yellow: pick(&overlay.yellow, &base.yellow),
+            blue: pick(&overlay.blue, &base.blue),
+            magenta: pick(&overlay.magenta, &base.magenta),
+            cyan: pick(&overlay.cyan, &base.cyan),
+            white: pick(&overlay.white, &base.white),
+        }
+    }
+
+    /// Materialize the merged palette only when every color is set — the
+    /// public `ColorsConfig` is `Option<AnsiPalette>` all-or-nothing: an
+    /// incomplete palette stays `None` so the renderer inherits the
+    /// selected Cadencr theme, exactly as for a fully omitted palette.
+    fn complete(&self) -> Option<AnsiPalette> {
+        Some(AnsiPalette {
+            black: self.black.clone()?,
+            red: self.red.clone()?,
+            green: self.green.clone()?,
+            yellow: self.yellow.clone()?,
+            blue: self.blue.clone()?,
+            magenta: self.magenta.clone()?,
+            cyan: self.cyan.clone()?,
+            white: self.white.clone()?,
+        })
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct PartialColorsConfig {
+    primary: PrimaryColors,
+    cursor: CursorColors,
+    normal: PartialPalette,
+    bright: PartialPalette,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -80,23 +141,35 @@ pub fn resolve_alacritty_config(
     let Some(raw) = read_to_string_or_none(path)? else {
         return Ok(None);
     };
-    let mut visited = HashSet::new();
-    let (partial, touched) = resolve_layer(path, &raw, &mut visited)?;
+    // An active-recursion stack, not a global visited set: a file shared by
+    // two sibling branches must be re-read and re-applied at each of its
+    // positions — only the file currently being resolved (itself, directly
+    // or through others) is skipped, so cycles degrade without suppressing
+    // legitimate repeated applications of a shared import.
+    let mut active: Vec<PathBuf> = Vec::new();
+    let (partial, touched) = resolve_layer(path, &raw, &mut active)?;
+    // A shared import appears once per branch; the watcher only cares about
+    // the set of files, so dedupe while keeping resolution order.
+    let mut seen = HashSet::new();
+    let touched = touched
+        .into_iter()
+        .filter(|p| seen.insert(p.clone()))
+        .collect();
     Ok(Some((finalize(partial), touched)))
 }
 
 /// Resolve one file's own layer plus every file it imports, most-recently
-/// merged last so this file's own fields win. `visited` guards against import
-/// cycles (a file that imports itself, directly or through others): a path
-/// already in `visited` is skipped rather than re-read, so a cycle degrades
+/// merged last so this file's own fields win. `active` holds the files
+/// currently being resolved along this recursion chain (cycle guard): a path
+/// already on the stack is skipped rather than re-read, so a cycle degrades
 /// to "that layer contributes nothing the second time" instead of looping.
 fn resolve_layer(
     path: &Path,
     raw: &str,
-    visited: &mut HashSet<PathBuf>,
+    active: &mut Vec<PathBuf>,
 ) -> Result<(PartialConfig, Vec<PathBuf>), String> {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    if !visited.insert(canonical) {
+    if active.contains(&canonical) {
         return Ok((PartialConfig::default(), Vec::new()));
     }
 
@@ -105,6 +178,7 @@ fn resolve_layer(
     let mut touched = vec![path.to_path_buf()];
     let mut merged = PartialConfig::default();
 
+    active.push(canonical);
     let import_dir = path.parent().unwrap_or_else(|| Path::new("."));
     for import in &own.general.import {
         let import_path = resolve_import_path(import, import_dir)?;
@@ -114,10 +188,11 @@ fn resolve_layer(
                 import_path.display()
             ));
         };
-        let (import_partial, import_touched) = resolve_layer(&import_path, &import_raw, visited)?;
+        let (import_partial, import_touched) = resolve_layer(&import_path, &import_raw, active)?;
         merged = merge_partial(merged, import_partial);
         touched.extend(import_touched);
     }
+    active.pop();
 
     merged = merge_partial(merged, own);
     Ok((merged, touched))
@@ -165,7 +240,7 @@ fn merge_partial(base: PartialConfig, overlay: PartialConfig) -> PartialConfig {
             },
             size: overlay.font.size.or(base.font.size),
         },
-        colors: ColorsConfig {
+        colors: PartialColorsConfig {
             primary: PrimaryColors {
                 foreground: overlay
                     .colors
@@ -182,8 +257,8 @@ fn merge_partial(base: PartialConfig, overlay: PartialConfig) -> PartialConfig {
                 text: overlay.colors.cursor.text.or(base.colors.cursor.text),
                 cursor: overlay.colors.cursor.cursor.or(base.colors.cursor.cursor),
             },
-            normal: overlay.colors.normal.or(base.colors.normal),
-            bright: overlay.colors.bright.or(base.colors.bright),
+            normal: PartialPalette::merge(&base.colors.normal, &overlay.colors.normal),
+            bright: PartialPalette::merge(&base.colors.bright, &overlay.colors.bright),
         },
         cursor: PartialCursorConfig {
             style: PartialCursorStyle {
@@ -205,7 +280,12 @@ fn finalize(partial: PartialConfig) -> AlacrittyConfig {
             normal: partial.font.normal,
             size: partial.font.size.unwrap_or(DEFAULT_FONT_SIZE),
         },
-        colors: partial.colors,
+        colors: ColorsConfig {
+            primary: partial.colors.primary,
+            cursor: partial.colors.cursor,
+            normal: partial.colors.normal.complete(),
+            bright: partial.colors.bright.complete(),
+        },
         cursor: CursorConfig {
             style: CursorStyle {
                 shape: partial
@@ -449,6 +529,79 @@ history = 5000
         // a.toml (root) is visited first, so b.toml's re-import of a.toml is
         // the one that gets skipped -- a.toml's own fields still apply.
         assert_eq!(config.scrolling.history, 3000);
+    }
+
+    #[test]
+    fn shared_import_is_reapplied_at_each_of_its_positions() {
+        // Alacritty resolves each branch fully, so `d.toml` contributes at
+        // its position under `b.toml` AND again at its later position under
+        // `c.toml`. The later application must win over `b.toml`'s own
+        // override, exactly as it would in Alacritty itself.
+        let dir = tempfile::tempdir().unwrap();
+        write_temp_toml(dir.path(), "d.toml", "[font]\nsize = 15\n");
+        write_temp_toml(
+            dir.path(),
+            "b.toml",
+            "general.import = [\"d.toml\"]\n[font]\nsize = 20\n",
+        );
+        write_temp_toml(dir.path(), "c.toml", "general.import = [\"d.toml\"]\n");
+        let root_path = write_temp_toml(
+            dir.path(),
+            "alacritty.toml",
+            "general.import = [\"b.toml\", \"c.toml\"]\n",
+        );
+        let (config, _touched) = resolve_alacritty_config(&root_path).unwrap().unwrap();
+        assert_eq!(
+            config.font.size, 15.0,
+            "d.toml must be reapplied under c.toml, overriding b.toml's own value"
+        );
+    }
+
+    #[test]
+    fn partial_palette_in_an_import_overrides_one_color_and_keeps_the_rest() {
+        // An imported layer that overrides a single ANSI color is valid in
+        // Alacritty and must merge field by field with earlier layers
+        // instead of failing to deserialize as an incomplete palette. The
+        // root doesn't set `red` itself — an importing file's own fields
+        // always win, so the override only shows where the root leaves a
+        // gap.
+        let dir = tempfile::tempdir().unwrap();
+        write_temp_toml(
+            dir.path(),
+            "theme.toml",
+            "[colors.normal]\nred = \"#ff0000\"\n",
+        );
+        let root_path = write_temp_toml(
+            dir.path(),
+            "alacritty.toml",
+            "general.import = [\"theme.toml\"]\n[colors.normal]\nblack = \"#000000\"\ngreen = \"#00aa00\"\nyellow = \"#aaaa00\"\nblue = \"#0000aa\"\nmagenta = \"#aa00aa\"\ncyan = \"#00aaaa\"\nwhite = \"#aaaaaa\"\n",
+        );
+        let (config, _touched) = resolve_alacritty_config(&root_path).unwrap().unwrap();
+        let normal = config.colors.normal.expect("palette must be complete");
+        assert_eq!(
+            normal.red, "#ff0000",
+            "the import's red must fill the field the root leaves unset"
+        );
+        assert_eq!(
+            normal.green, "#00aa00",
+            "non-overridden colors must be preserved from earlier layers"
+        );
+    }
+
+    #[test]
+    fn incomplete_merged_palette_is_reported_as_unset() {
+        // A palette that stays partial after merging can't be expressed in
+        // the public all-or-nothing `Option<AnsiPalette>`: it becomes `None`
+        // so the renderer inherits the selected Cadencr theme.
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_temp_toml(
+            dir.path(),
+            "alacritty.toml",
+            "[colors.normal]\nred = \"#ff0000\"\n",
+        );
+        let (config, _touched) = resolve_alacritty_config(&path).unwrap().unwrap();
+        assert_eq!(config.colors.normal, None);
+        assert_eq!(config.colors.bright, None);
     }
 
     #[test]
