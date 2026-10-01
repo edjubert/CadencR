@@ -3,7 +3,8 @@ use std::time::Duration;
 
 use super::super::adapter::RuntimeError;
 
-pub(super) const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+// Match the Codex app-server SDK's default request timeout.
+pub(super) const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(super) async fn with_probe_timeout<T>(
     operation: &'static str,
