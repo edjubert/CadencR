@@ -87,16 +87,20 @@ pub struct CursorColors {
     pub cursor: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize, ToSchema, PartialEq, Clone)]
+#[derive(Debug, Deserialize, Serialize, ToSchema, PartialEq, Clone, Default)]
+#[serde(default)]
 pub struct AnsiPalette {
-    pub black: String,
-    pub red: String,
-    pub green: String,
-    pub yellow: String,
-    pub blue: String,
-    pub magenta: String,
-    pub cyan: String,
-    pub white: String,
+    /// Per-color: Alacritty lets a file override a single ANSI color
+    /// (e.g. only `[colors.normal] red`), so `None` means "not overridden
+    /// anywhere in the chain" and the consumer fills it from its own theme.
+    pub black: Option<String>,
+    pub red: Option<String>,
+    pub green: Option<String>,
+    pub yellow: Option<String>,
+    pub blue: Option<String>,
+    pub magenta: Option<String>,
+    pub cyan: Option<String>,
+    pub white: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, ToSchema, PartialEq, Default)]
@@ -104,12 +108,8 @@ pub struct AnsiPalette {
 pub struct ColorsConfig {
     pub primary: PrimaryColors,
     pub cursor: CursorColors,
-    /// `None` when the user's file doesn't override the 8 ANSI colors at
-    /// all — unlike the other fields here, there's no single sensible
-    /// "default 8-color palette" to fill in at this layer; the consumer
-    /// (Plan 3) falls back to Cadencr's own bundled theme for this field.
-    pub normal: Option<AnsiPalette>,
-    pub bright: Option<AnsiPalette>,
+    pub normal: AnsiPalette,
+    pub bright: AnsiPalette,
 }
 
 #[derive(Debug, Deserialize, Serialize, ToSchema, PartialEq, Clone)]
@@ -222,33 +222,36 @@ pub fn read_alacritty_config_response(fallback_palette: AnsiPalette) -> Alacritt
     }
 }
 
-/// Fill `colors.normal` with `fallback_palette` when the user's config
-/// doesn't override it. This is how the terminal panel gets a consistent
-/// color palette whether or not the user has an `alacritty.toml`.
+/// Fill each color `config` leaves unset with the bundled fallback. This is
+/// how the terminal panel gets a consistent color palette when there's no
+/// usable config at all — with a usable config, `normal` preserves the
+/// user's per-color overrides untouched and the renderer inherits its
+/// currently selected Cadencr theme for the rest.
 fn merge_with_fallback(config: AlacrittyConfig, fallback: &AnsiPalette) -> AlacrittyConfig {
-    let resolved = match config.colors.normal {
-        Some(existing) => existing,
-        None => AnsiPalette {
-            black: fallback.black.clone(),
-            red: fallback.red.clone(),
-            green: fallback.green.clone(),
-            yellow: fallback.yellow.clone(),
-            blue: fallback.blue.clone(),
-            magenta: fallback.magenta.clone(),
-            cyan: fallback.cyan.clone(),
-            white: fallback.white.clone(),
-        },
-    };
     AlacrittyConfig {
         font: config.font,
         colors: ColorsConfig {
             primary: config.colors.primary,
             cursor: config.colors.cursor,
-            normal: Some(resolved),
+            normal: fill_palette_missing(config.colors.normal, fallback),
             bright: config.colors.bright,
         },
         cursor: config.cursor,
         scrolling: config.scrolling,
+    }
+}
+
+/// Per-color fill from `fallback`, keeping every color the palette sets.
+fn fill_palette_missing(palette: AnsiPalette, fallback: &AnsiPalette) -> AnsiPalette {
+    AnsiPalette {
+        black: palette.black.or_else(|| fallback.black.clone()),
+        red: palette.red.or_else(|| fallback.red.clone()),
+        green: palette.green.or_else(|| fallback.green.clone()),
+        yellow: palette.yellow.or_else(|| fallback.yellow.clone()),
+        blue: palette.blue.or_else(|| fallback.blue.clone()),
+        magenta: palette.magenta.or_else(|| fallback.magenta.clone()),
+        cyan: palette.cyan.or_else(|| fallback.cyan.clone()),
+        white: palette.white.or_else(|| fallback.white.clone()),
     }
 }
 
@@ -259,19 +262,46 @@ mod tests {
     #[test]
     fn response_reports_found_true_only_on_successful_parse() {
         let fallback = AnsiPalette {
-            black: "#1a1b1d".to_string(),
-            red: "#ec707b".to_string(),
-            green: "#8bcf67".to_string(),
-            yellow: "#e2b64d".to_string(),
-            blue: "#6d9bec".to_string(),
-            magenta: "#de7ca7".to_string(),
-            cyan: "#52bfd0".to_string(),
-            white: "#c6c8cc".to_string(),
+            black: Some("#1a1b1d".to_string()),
+            red: Some("#ec707b".to_string()),
+            green: Some("#8bcf67".to_string()),
+            yellow: Some("#e2b64d".to_string()),
+            blue: Some("#6d9bec".to_string()),
+            magenta: Some("#de7ca7".to_string()),
+            cyan: Some("#52bfd0".to_string()),
+            white: Some("#c6c8cc".to_string()),
         };
         let response = read_alacritty_config_response(fallback);
         assert!(
             !(response.found && response.parse_error.is_some()),
             "a successfully parsed file must not also report a parse error"
+        );
+    }
+
+    #[test]
+    fn fallback_fills_only_the_colors_the_user_left_unset() {
+        let fallback = AnsiPalette {
+            black: Some("#1a1b1d".to_string()),
+            red: Some("#ec707b".to_string()),
+            green: Some("#8bcf67".to_string()),
+            yellow: Some("#e2b64d".to_string()),
+            blue: Some("#6d9bec".to_string()),
+            magenta: Some("#de7ca7".to_string()),
+            cyan: Some("#52bfd0".to_string()),
+            white: Some("#c6c8cc".to_string()),
+        };
+        let config = fill_palette_missing(
+            AnsiPalette {
+                red: Some("#ff0000".to_string()),
+                ..AnsiPalette::default()
+            },
+            &fallback,
+        );
+        assert_eq!(config.red.as_deref(), Some("#ff0000"), "user override wins");
+        assert_eq!(
+            config.green.as_deref(),
+            Some("#8bcf67"),
+            "unset colors take the bundled fallback"
         );
     }
 }
