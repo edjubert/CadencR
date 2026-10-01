@@ -197,7 +197,7 @@ impl AgentRuntimeSession for AcpRuntimeSession {
         Ok(())
     }
 
-    async fn close(&mut self) {
+    async fn close(&mut self) -> Result<(), RuntimeError> {
         self.closing.store(true, Ordering::SeqCst);
         // Prefer the stable lifecycle request when advertised. A connector
         // that accepts it must cancel ongoing work and release the session's
@@ -243,6 +243,7 @@ impl AgentRuntimeSession for AcpRuntimeSession {
         // even while the closed runtime remains registered for resume metadata.
         self.local_tx.take();
         self.client.shutdown().await;
+        Ok(())
     }
 
     async fn set_model(&self, model: &str) -> Result<(), RuntimeError> {

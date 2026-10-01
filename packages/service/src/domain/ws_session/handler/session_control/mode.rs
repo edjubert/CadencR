@@ -195,9 +195,10 @@ async fn rearm_claude_bypass_session(
 ) {
     let runtime_session_id = persist_and_close_query(
         &query,
-        &app_state.write_pool,
+        app_state,
         db_session_id,
         &handle.runtime_provider,
+        handle.feature_id,
     )
     .await;
     handle.config.allow_bypass_permissions = true;

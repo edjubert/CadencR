@@ -18,7 +18,7 @@ use super::protocol::{
 };
 
 mod drain;
-use drain::drain_text;
+use drain::{drain_text, report_close_error, truncate_for_log};
 mod title_state;
 pub use title_state::has_default_title;
 
@@ -224,7 +224,13 @@ async fn run_auto_name(
         }
     };
 
-    let accumulated_text = drain_text(feature_id, &provider_id, session).await;
+    let accumulated_text = match drain_text(feature_id, &provider_id, session).await {
+        Ok(text) => text,
+        Err(error) => {
+            report_close_error(ws_senders, error);
+            return None;
+        }
+    };
     debug!(
         feature_id,
         text_len = accumulated_text.len(),
@@ -279,19 +285,6 @@ async fn run_auto_name(
         "auto-named feature"
     );
     Some(name)
-}
-
-/// Clamp a string to `max` bytes at a char boundary for log output. Prevents
-/// an OpenCode message with a long payload from flooding the log line.
-pub(super) fn truncate_for_log(text: &str, max: usize) -> String {
-    if text.len() <= max {
-        return text.to_string();
-    }
-    let mut end = max;
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &text[..end])
 }
 
 fn build_prompt(user_input: &str) -> String {

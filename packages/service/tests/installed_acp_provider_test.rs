@@ -469,7 +469,7 @@ async fn a_local_acp_executable_is_selectable_and_drives_a_full_turn() {
         .await
         .expect("durable provider session id");
     assert!(first_runtime.allows_resume_persistence());
-    first_runtime.close().await;
+    first_runtime.close().await.unwrap();
 
     // Recreate the adapter too: the DB-owned resume id is available before the
     // replacement connector completes its own `initialize` negotiation.
@@ -494,7 +494,7 @@ async fn a_local_acp_executable_is_selectable_and_drives_a_full_turn() {
         .expect("durable provider resumed spawn");
     assert!(resumed_runtime.allows_resume_persistence());
     let resumed_events = collect_runtime_turn(resumed_runtime.as_mut()).await;
-    resumed_runtime.close().await;
+    resumed_runtime.close().await.unwrap();
     assert!(
         resumed_events.contains("durable-host-memory"),
         "resumed ACP runtime lost connector-owned context: {resumed_events}"
@@ -541,8 +541,8 @@ async fn a_local_acp_executable_is_selectable_and_drives_a_full_turn() {
     assert!(resumable_runtime.allows_resume_persistence());
     collect_runtime_turn(non_resumable_runtime.as_mut()).await;
     collect_runtime_turn(resumable_runtime.as_mut()).await;
-    non_resumable_runtime.close().await;
-    resumable_runtime.close().await;
+    non_resumable_runtime.close().await.unwrap();
+    resumable_runtime.close().await.unwrap();
     // The colliding descriptor was refused, and `cursor` still resolves to the
     // built-in adapter.
     let rejections = &installed::startup_load().rejections;
@@ -803,7 +803,7 @@ async fn a_local_acp_executable_is_selectable_and_drives_a_full_turn() {
         .await
         .expect("runtime should restore from the ID persisted in the DB");
     let db_resumed_events = collect_runtime_turn(db_resumed_runtime.as_mut()).await;
-    db_resumed_runtime.close().await;
+    db_resumed_runtime.close().await.unwrap();
     assert!(
         db_resumed_events.contains("durable-host-memory"),
         "DB-persisted resume ID did not restore connector context: {db_resumed_events}"

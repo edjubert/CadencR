@@ -163,4 +163,9 @@ for line in sys.stdin:
             continue
     elif method == "turn/interrupt":
         boundary(params["threadId"], "completed")
+    elif method == "thread/unsubscribe" and mode == "close-error":
+        emit({"id": msg["id"], "error": {"code": -32000, "message": "UNSUBSCRIBE_FAILED"}})
+        continue
+    elif method == "thread/unsubscribe" and mode == "close-timeout":
+        continue
     emit({"id": msg["id"], "result": result})

@@ -171,9 +171,10 @@ pub(crate) async fn handle_destroy(
     if let QueryState::Active { query, .. } = handle.state {
         persist_and_close_query(
             &query,
-            &app_state.write_pool,
+            app_state,
             db_session_id,
             &runtime_provider,
+            feature_id,
         )
         .await;
     }
@@ -311,9 +312,10 @@ pub(crate) async fn handle_clear(
             WsSessionPersistence::mark_completed_static(&app_state.write_pool, db_session_id).await;
             persist_and_close_query(
                 query,
-                &app_state.write_pool,
+                app_state,
                 db_session_id,
                 &handle.runtime_provider,
+                handle.feature_id,
             )
             .await
         }

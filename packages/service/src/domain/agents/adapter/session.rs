@@ -69,7 +69,8 @@ pub trait AgentRuntimeSession: Send + Sync {
             "compaction is not supported by this runtime",
         ))
     }
-    async fn close(&mut self);
+    /// Release local resources even when graceful provider shutdown fails.
+    async fn close(&mut self) -> Result<(), RuntimeError>;
     async fn set_model(&self, model: &str) -> Result<(), RuntimeError>;
     async fn set_permission_mode(&self, mode: RuntimePermissionMode) -> Result<(), RuntimeError>;
     /// Optional provider runtime hook for access/autonomy controls that can be
@@ -153,7 +154,9 @@ pub(crate) mod test_support {
             Ok(())
         }
 
-        async fn close(&mut self) {}
+        async fn close(&mut self) -> Result<(), RuntimeError> {
+            Ok(())
+        }
 
         async fn set_model(&self, _model: &str) -> Result<(), RuntimeError> {
             Ok(())
@@ -246,7 +249,9 @@ mod tests {
             Ok(())
         }
 
-        async fn close(&mut self) {}
+        async fn close(&mut self) -> Result<(), RuntimeError> {
+            Ok(())
+        }
 
         async fn set_model(&self, _model: &str) -> Result<(), RuntimeError> {
             Ok(())

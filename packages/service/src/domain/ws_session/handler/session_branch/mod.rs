@@ -289,9 +289,10 @@ pub(super) async fn stop_live_turn(
         WsSessionPersistence::mark_completed_static(&app_state.write_pool, db_session_id).await;
         persist_and_close_query(
             query,
-            &app_state.write_pool,
+            app_state,
             db_session_id,
             &handle.runtime_provider,
+            handle.feature_id,
         )
         .await;
         let fresh = RuntimeSpawnConfig {

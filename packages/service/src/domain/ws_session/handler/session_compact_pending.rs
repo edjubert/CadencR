@@ -100,7 +100,14 @@ pub(super) async fn spawn_pending_runtime_for_compact(
     )
     .await
     {
-        query.write().await.close().await;
+        if let Err(error) = query.write().await.close().await {
+            send_error(
+                sender,
+                envelope_id,
+                "RUNTIME_CLOSE_FAILED",
+                &error.to_string(),
+            );
+        }
         return None;
     }
 

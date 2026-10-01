@@ -84,9 +84,10 @@ async fn close_active_for_respawn(
     };
     persist_and_close_query(
         query,
-        &app_state.write_pool,
+        app_state,
         db_session_id,
         &handle.runtime_provider,
+        handle.feature_id,
     )
     .await
 }

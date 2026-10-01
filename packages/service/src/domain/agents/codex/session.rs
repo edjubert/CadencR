@@ -297,9 +297,9 @@ impl AgentRuntimeSession for CodexSession {
             .map_err(RuntimeError::from)
     }
 
-    async fn close(&mut self) {
+    async fn close(&mut self) -> Result<(), RuntimeError> {
         self.closing.store(true, Ordering::SeqCst);
-        let _ = with_control_timeout(
+        let unsubscribe = with_control_timeout(
             "Codex thread/unsubscribe",
             self.client.thread_unsubscribe(&self.thread_id),
         )
@@ -307,6 +307,11 @@ impl AgentRuntimeSession for CodexSession {
         self.temp_files.lock().await.clear();
         self.pending_prompt_receipts.clear();
         self.client.shutdown().await;
+        unsubscribe.map(|_| ()).map_err(|error| {
+            RuntimeError::new(format!(
+                "Codex session closed, but thread/unsubscribe failed: {error}"
+            ))
+        })
     }
 
     async fn set_model(&self, model: &str) -> Result<(), RuntimeError> {

@@ -95,6 +95,8 @@ async fn codex_conversation_routing_and_completion_survive_messaging() {
         "read-timeout",
         "missing-parent",
         "conflicting-parent",
+        "close-error",
+        "close-timeout",
     ] {
         let feature: Value = server
             .client
@@ -276,6 +278,50 @@ async fn codex_conversation_routing_and_completion_survive_messaging() {
                 "SELECT parent_tool_use_id FROM agent_messages WHERE session_id=? AND content='ROOT_FINAL_legacy_2'",
             ).bind(session.parse::<i64>().unwrap()).fetch_one(&server.pool).await.unwrap();
             assert!(parent.is_none(), "later root turns stay at the root");
+        }
+        if matches!(mode, "close-error" | "close-timeout") {
+            let started = tokio::time::Instant::now();
+            send(
+                &mut socket,
+                "session",
+                "destroy",
+                json!({"session_id":session}),
+            )
+            .await;
+            let mut reported = false;
+            let mut destroyed = false;
+            while !reported || !destroyed {
+                let event = next(&mut socket).await;
+                if event["action"] == "error" {
+                    let message = event["payload"]["message"].as_str().unwrap();
+                    assert!(message.contains("thread/unsubscribe failed"), "{event}");
+                    assert!(
+                        message.contains(if mode == "close-error" {
+                            "UNSUBSCRIBE_FAILED"
+                        } else {
+                            "timed out"
+                        }),
+                        "{event}"
+                    );
+                    reported = true;
+                }
+                destroyed |=
+                    event["action"] == "ended" && event["payload"]["reason"] == "destroyed";
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "close remains bounded"
+            );
+            let messages: Vec<String> = sqlx::query_scalar(
+                "SELECT content FROM agent_messages WHERE session_id=? AND message_type='error'",
+            )
+            .bind(session.parse::<i64>().unwrap())
+            .fetch_all(&server.pool)
+            .await
+            .unwrap();
+            assert!(messages
+                .iter()
+                .any(|text| text.contains("thread/unsubscribe failed")));
         }
         socket.close(None).await.unwrap();
     }

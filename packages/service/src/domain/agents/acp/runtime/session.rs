@@ -524,7 +524,7 @@ mod tests {
     async fn close_uses_session_close_when_advertised() {
         let (client, mut agent_stdout, mut agent_stdin) = build_in_memory_client().await;
         let mut session = assembled_session(&client, "s-close", true);
-        let close = tokio::spawn(async move { session.close().await });
+        let close = tokio::spawn(async move { session.close().await.unwrap() });
 
         let request = read_one_request(&mut agent_stdin).await;
         assert_eq!(request["method"], "session/close");
@@ -556,7 +556,7 @@ mod tests {
             .await;
         });
 
-        session.close().await;
+        session.close().await.unwrap();
         responder.await.unwrap();
 
         assert!(
@@ -584,7 +584,8 @@ mod tests {
 
         tokio::time::timeout(Duration::from_secs(2), session.close())
             .await
-            .expect("local teardown must beat the stream-reader deadline");
+            .expect("local teardown must beat the stream-reader deadline")
+            .unwrap();
         agent.await.unwrap();
 
         assert!(
@@ -599,7 +600,7 @@ mod tests {
     async fn close_uses_cancel_when_session_close_is_not_advertised() {
         let (client, _agent_stdout, mut agent_stdin) = build_in_memory_client().await;
         let mut session = assembled_session(&client, "s-cancel-close", false);
-        let close = tokio::spawn(async move { session.close().await });
+        let close = tokio::spawn(async move { session.close().await.unwrap() });
 
         let request = read_one_request(&mut agent_stdin).await;
         assert_eq!(request["method"], "session/cancel");
@@ -616,7 +617,7 @@ mod tests {
     async fn close_error_falls_back_to_cancel() {
         let (client, mut agent_stdout, mut agent_stdin) = build_in_memory_client().await;
         let mut session = assembled_session(&client, "s-close-fallback", true);
-        let close = tokio::spawn(async move { session.close().await });
+        let close = tokio::spawn(async move { session.close().await.unwrap() });
 
         let request = read_one_request(&mut agent_stdin).await;
         assert_eq!(request["method"], "session/close");

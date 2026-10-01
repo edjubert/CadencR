@@ -226,7 +226,9 @@ mod tests {
             Ok(())
         }
 
-        async fn close(&mut self) {}
+        async fn close(&mut self) -> Result<(), RuntimeError> {
+            Ok(())
+        }
 
         async fn set_model(&self, _model: &str) -> Result<(), RuntimeError> {
             Ok(())
@@ -338,7 +340,9 @@ mod tests {
         async fn interrupt(&self) -> Result<(), RuntimeError> {
             Ok(())
         }
-        async fn close(&mut self) {}
+        async fn close(&mut self) -> Result<(), RuntimeError> {
+            Ok(())
+        }
         async fn set_model(&self, _model: &str) -> Result<(), RuntimeError> {
             Ok(())
         }

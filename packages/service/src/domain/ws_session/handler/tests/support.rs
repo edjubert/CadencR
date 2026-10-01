@@ -101,7 +101,9 @@ impl AgentRuntimeSession for InPlaceEffortSession {
         Ok(())
     }
 
-    async fn close(&mut self) {}
+    async fn close(&mut self) -> Result<(), RuntimeError> {
+        Ok(())
+    }
 
     async fn set_model(&self, _model: &str) -> Result<(), RuntimeError> {
         Ok(())
@@ -143,7 +145,9 @@ impl AgentRuntimeSession for BlockingFollowUpSession {
         Ok(())
     }
 
-    async fn close(&mut self) {}
+    async fn close(&mut self) -> Result<(), RuntimeError> {
+        Ok(())
+    }
 
     async fn set_model(&self, _model: &str) -> Result<(), RuntimeError> {
         Ok(())
@@ -176,7 +180,9 @@ impl AgentRuntimeSession for RejectingModeSession {
         Ok(())
     }
 
-    async fn close(&mut self) {}
+    async fn close(&mut self) -> Result<(), RuntimeError> {
+        Ok(())
+    }
 
     async fn set_model(&self, _model: &str) -> Result<(), RuntimeError> {
         Ok(())

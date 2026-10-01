@@ -107,7 +107,7 @@ async fn spawn_runs_handshake_initial_config_and_prompt() {
     .await
     .unwrap();
     assert!(result, "initial prompt should complete");
-    session.close().await;
+    session.close().await.unwrap();
 
     let log = fs::read_to_string(log).unwrap();
     assert!(log.contains("initialize"));
@@ -167,7 +167,8 @@ async fn close_during_initial_prompt_closes_stream_with_runtime_retained() {
 
     tokio::time::timeout(std::time::Duration::from_secs(2), session.close())
         .await
-        .expect("runtime close exceeded the process-wide shutdown deadline");
+        .expect("runtime close exceeded the process-wide shutdown deadline")
+        .unwrap();
     tokio::time::timeout(std::time::Duration::from_millis(100), async {
         while runtime_rx.recv().await.is_some() {}
     })
