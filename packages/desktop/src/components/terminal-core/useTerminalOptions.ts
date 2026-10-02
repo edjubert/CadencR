@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
+import { toast } from "sonner";
 import {
   useAlacrittyConfigRoute,
   type AlacrittyConfigResponse,
@@ -7,6 +8,26 @@ import {
 import type { TerminalCursor, TerminalOptions, TerminalPalette } from "celeritty";
 import { DEFAULT_TERMINAL_PALETTE } from "./terminal-palette";
 import { DEFAULT_MONO_STACK } from "@/lib/fonts/constants";
+
+const WATCH_ERROR_TOAST_ID = "alacritty-config-watch-error";
+
+/**
+ * Live reload being down is not fatal - the terminal keeps the config it
+ * has - but the user must know their external edits won't show up. Every
+ * mounted terminal runs this; the fixed toast id keeps it to one toast,
+ * dismissed once the backend reports live reload working again.
+ */
+function useWatchErrorToast(watchError: string | null | undefined): void {
+  useEffect(() => {
+    if (watchError) {
+      toast.warning(`Terminal config live reload is unavailable: ${watchError}`, {
+        id: WATCH_ERROR_TOAST_ID,
+      });
+    } else {
+      toast.dismiss(WATCH_ERROR_TOAST_ID);
+    }
+  }, [watchError]);
+}
 
 export interface UseTerminalOptionsResult {
   options: TerminalOptions | undefined;
@@ -120,6 +141,7 @@ export function resolveTerminalOptions(
 export function useTerminalOptions(appearance: TerminalAppearance = {}): UseTerminalOptionsResult {
   const { data, isLoading, error: fetchError } = useAlacrittyConfigRoute();
   const { palette, fontFamily } = appearance;
+  useWatchErrorToast(data?.watch_error);
   return useMemo(() => {
     if (fetchError) {
       const message =

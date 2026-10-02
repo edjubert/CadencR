@@ -11,6 +11,8 @@ const query = vi.hoisted(() => ({
   error: null as Error | null,
 }));
 vi.mock("@/api/generated", () => ({ useAlacrittyConfigRoute: () => ({ ...query }) }));
+const toastMock = vi.hoisted(() => ({ warning: vi.fn(), dismiss: vi.fn() }));
+vi.mock("sonner", () => ({ toast: toastMock }));
 
 describe("terminal options", () => {
   beforeEach(() => {
@@ -93,5 +95,22 @@ describe("terminal options", () => {
     query.error = new Error("Fetch failed");
     rerender();
     expect(result.current.error).toBe("Fetch failed");
+  });
+
+  it("warns about unavailable live reload without blocking the terminal", () => {
+    toastMock.warning.mockClear();
+    toastMock.dismiss.mockClear();
+    query.data = { config: {}, found: true, watch_error: "failed to watch /themes: denied" };
+    const { result, rerender } = renderHook(() => useTerminalOptions());
+    expect(result.current.error).toBeNull();
+    expect(result.current.options).toBeDefined();
+    expect(toastMock.warning).toHaveBeenCalledWith(
+      "Terminal config live reload is unavailable: failed to watch /themes: denied",
+      { id: "alacritty-config-watch-error" },
+    );
+
+    query.data = { config: {}, found: true, watch_error: null };
+    rerender();
+    expect(toastMock.dismiss).toHaveBeenCalledWith("alacritty-config-watch-error");
   });
 });
