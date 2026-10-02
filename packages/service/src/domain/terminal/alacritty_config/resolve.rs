@@ -2,9 +2,9 @@
 //! the root file, recursively pulls in every imported file (Alacritty's own
 //! layering behavior), and merges them with the precedence Alacritty itself
 //! uses — later imports override earlier ones, and the importing file's own
-//! fields override every import. Returns the final `AlacrittyConfig` plus
-//! every file path touched, so the caller's file watcher can follow the whole
-//! chain instead of only the root.
+//! fields override every import. Also lists every file path the chain
+//! touches — even when it fails to resolve — so the file watcher can follow
+//! the whole chain instead of only the root.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -73,11 +73,31 @@ struct PartialScrollingConfig {
 /// *is* an error: unlike the root file, the user explicitly named it.
 ///
 /// Returns the fully merged `AlacrittyConfig` and every file path that was
-/// actually read, in resolution order (root first), for the caller's file
-/// watcher.
+/// actually read, in resolution order (root first).
 pub fn resolve_alacritty_config(
     path: &Path,
 ) -> Result<Option<(AlacrittyConfig, Vec<PathBuf>)>, String> {
+    let mut touched = Vec::new();
+    let partial = resolve_chain(path, &mut touched)?;
+    Ok(partial.map(|partial| (finalize(partial), dedupe(touched))))
+}
+
+/// Every file the chain rooted at `path` reads or tries to read, root first —
+/// including when resolution fails, so the file watcher still follows the
+/// import that broke the chain (a missing import is picked up as soon as it
+/// is created) and every file resolved before it. The failure itself is not
+/// this function's to report: `GET /api/terminal/alacritty-config` resolves
+/// the chain again and returns it as `parse_error`.
+pub fn resolve_chain_paths(path: &Path) -> Vec<PathBuf> {
+    let mut touched = Vec::new();
+    let _reported_as_parse_error = resolve_chain(path, &mut touched);
+    dedupe(touched)
+}
+
+/// Resolve the chain into one merged layer. Every path is appended to
+/// `touched` *before* it is read, so the list survives an early `Err`.
+fn resolve_chain(path: &Path, touched: &mut Vec<PathBuf>) -> Result<Option<PartialConfig>, String> {
+    touched.push(path.to_path_buf());
     let Some(raw) = read_to_string_or_none(path)? else {
         return Ok(None);
     };
@@ -87,15 +107,17 @@ pub fn resolve_alacritty_config(
     // or through others) is skipped, so cycles degrade without suppressing
     // legitimate repeated applications of a shared import.
     let mut active: Vec<PathBuf> = Vec::new();
-    let (partial, touched) = resolve_layer(path, &raw, &mut active)?;
-    // A shared import appears once per branch; the watcher only cares about
-    // the set of files, so dedupe while keeping resolution order.
+    resolve_layer(path, &raw, &mut active, touched).map(Some)
+}
+
+/// A shared import appears once per branch; the watcher only cares about
+/// the set of files, so dedupe while keeping resolution order.
+fn dedupe(paths: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut seen = HashSet::new();
-    let touched = touched
+    paths
         .into_iter()
         .filter(|p| seen.insert(p.clone()))
-        .collect();
-    Ok(Some((finalize(partial), touched)))
+        .collect()
 }
 
 /// Resolve one file's own layer plus every file it imports, most-recently
@@ -103,39 +125,41 @@ pub fn resolve_alacritty_config(
 /// currently being resolved along this recursion chain (cycle guard): a path
 /// already on the stack is skipped rather than re-read, so a cycle degrades
 /// to "that layer contributes nothing the second time" instead of looping.
+/// The caller has already recorded `path` in `touched`; each import is
+/// recorded here before it is read.
 fn resolve_layer(
     path: &Path,
     raw: &str,
     active: &mut Vec<PathBuf>,
-) -> Result<(PartialConfig, Vec<PathBuf>), String> {
+    touched: &mut Vec<PathBuf>,
+) -> Result<PartialConfig, String> {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     if active.contains(&canonical) {
-        return Ok((PartialConfig::default(), Vec::new()));
+        return Ok(PartialConfig::default());
     }
 
     let own: PartialConfig =
         toml::from_str(raw).map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
-    let mut touched = vec![path.to_path_buf()];
     let mut merged = PartialConfig::default();
 
     active.push(canonical);
     let import_dir = path.parent().unwrap_or_else(|| Path::new("."));
     for import in &own.general.import {
         let import_path = resolve_import_path(import, import_dir)?;
+        touched.push(import_path.clone());
         let Some(import_raw) = read_to_string_or_none(&import_path)? else {
             return Err(format!(
                 "imported file not found: {}",
                 import_path.display()
             ));
         };
-        let (import_partial, import_touched) = resolve_layer(&import_path, &import_raw, active)?;
+        let import_partial = resolve_layer(&import_path, &import_raw, active, touched)?;
         merged = merge_partial(merged, import_partial);
-        touched.extend(import_touched);
     }
     active.pop();
 
     merged = merge_partial(merged, own);
-    Ok((merged, touched))
+    Ok(merged)
 }
 
 /// Expand a leading `~` and resolve a relative path against the importing
@@ -568,6 +592,47 @@ history = 5000
         );
         let result = resolve_alacritty_config(&root_path);
         assert!(result.is_err(), "expected an error, got {result:?}");
+    }
+
+    #[test]
+    fn chain_paths_keep_a_missing_import_and_everything_before_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let font_path = write_temp_toml(dir.path(), "font.toml", "[font]\nsize = 14\n");
+        let root_path = write_temp_toml(
+            dir.path(),
+            "alacritty.toml",
+            "general.import = [\"font.toml\", \"themes/missing.toml\"]\n",
+        );
+        assert_eq!(
+            resolve_chain_paths(&root_path),
+            vec![
+                root_path,
+                font_path,
+                dir.path().join("themes").join("missing.toml"),
+            ]
+        );
+    }
+
+    #[test]
+    fn chain_paths_keep_a_malformed_import() {
+        let dir = tempfile::tempdir().unwrap();
+        let broken_path = write_temp_toml(dir.path(), "broken.toml", "this is not [ valid");
+        let root_path = write_temp_toml(
+            dir.path(),
+            "alacritty.toml",
+            "general.import = [\"broken.toml\"]\n",
+        );
+        assert_eq!(
+            resolve_chain_paths(&root_path),
+            vec![root_path, broken_path]
+        );
+    }
+
+    #[test]
+    fn chain_paths_of_a_missing_root_is_the_root_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let root_path = dir.path().join("alacritty.toml");
+        assert_eq!(resolve_chain_paths(&root_path), vec![root_path]);
     }
 
     #[test]

@@ -183,6 +183,12 @@ pub struct AlacrittyConfigResponse {
     /// surface this (Plan 3), not silently show defaults as if they were
     /// chosen.
     pub parse_error: Option<String>,
+    /// Set while live reload is unavailable (the file watcher failed to
+    /// start or to watch part of the import chain): `config` is still
+    /// accurate, but external edits won't show up until a restart. Unlike
+    /// `parse_error` this is not fatal — the frontend warns and keeps
+    /// rendering.
+    pub watch_error: Option<String>,
 }
 
 /// Read and parse the config at its default path, collapsing every outcome
@@ -194,31 +200,20 @@ pub struct AlacrittyConfigResponse {
 /// Parsed configs preserve omitted colors so the renderer can inherit the
 /// currently selected Cadencr theme.
 pub fn read_alacritty_config_response(fallback_palette: AnsiPalette) -> AlacrittyConfigResponse {
-    let Some(path) = default_config_path() else {
-        return AlacrittyConfigResponse {
-            config: merge_with_fallback(AlacrittyConfig::default(), &fallback_palette),
-            found: false,
-            parse_error: None,
-        };
+    let fallback = || merge_with_fallback(AlacrittyConfig::default(), &fallback_palette);
+    let resolved = default_config_path().map(|path| resolve::resolve_alacritty_config(&path));
+    let (config, found, parse_error) = match resolved {
+        // Preserve omitted colors so the renderer can inherit its current
+        // Cadencr theme rather than treating our dark fallback as explicit.
+        Some(Ok(Some((config, _touched)))) => (config, true, None),
+        None | Some(Ok(None)) => (fallback(), false, None),
+        Some(Err(e)) => (fallback(), false, Some(e)),
     };
-    match resolve::resolve_alacritty_config(&path) {
-        Ok(Some((config, _touched))) => AlacrittyConfigResponse {
-            // Preserve omitted colors so the renderer can inherit its current
-            // Cadencr theme rather than treating our dark fallback as explicit.
-            config,
-            found: true,
-            parse_error: None,
-        },
-        Ok(None) => AlacrittyConfigResponse {
-            config: merge_with_fallback(AlacrittyConfig::default(), &fallback_palette),
-            found: false,
-            parse_error: None,
-        },
-        Err(e) => AlacrittyConfigResponse {
-            config: merge_with_fallback(AlacrittyConfig::default(), &fallback_palette),
-            found: false,
-            parse_error: Some(e),
-        },
+    AlacrittyConfigResponse {
+        config,
+        found,
+        parse_error,
+        watch_error: watcher::watch_error(),
     }
 }
 

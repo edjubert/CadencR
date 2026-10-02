@@ -411,6 +411,15 @@ export interface AlacrittyConfigResponse {
    * @nullable
    */
   parse_error?: string | null;
+  /**
+   * Set while live reload is unavailable (the file watcher failed to
+   * start or to watch part of the import chain): `config` is still
+   * accurate, but external edits won't show up until a restart. Unlike
+   * `parse_error` this is not fatal — the frontend warns and keeps
+   * rendering.
+   * @nullable
+   */
+  watch_error?: string | null;
 }
 
 /**
