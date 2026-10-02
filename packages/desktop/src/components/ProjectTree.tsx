@@ -235,7 +235,9 @@ function ProjectTreeRow({
             ) : (
               <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
             )}
-            <ProjectBadge projectId={project.id} />
+            <span className="inline-flex size-3.5 shrink-0 items-center justify-center">
+              <ProjectBadge projectId={project.id} className="max-w-none" />
+            </span>
             <span className="min-w-0 truncate">{project.name}</span>
             <ProjectRowActions project={project} controller={controller} />
           </ProjectRowButton>

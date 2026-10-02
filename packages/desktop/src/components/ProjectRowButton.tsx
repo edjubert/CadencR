@@ -26,7 +26,7 @@ export const ProjectRowButton = forwardRef<HTMLButtonElement, ProjectRowButtonPr
         data-nav-type="project"
         data-nav-id={String(projectId)}
         onClick={onClick}
-        className={`group/project relative flex w-full min-w-0 items-center gap-1 rounded-md px-1.5 py-1.5 text-left text-sm outline-none transition-colors ${
+        className={`group/project relative flex w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1.5 text-left text-sm outline-none transition-colors ${
           isActive ? "text-accent-foreground font-medium" : "hover:bg-accent/50"
         }`}
         {...rest}

@@ -311,8 +311,8 @@ describe("ProjectFeatures", () => {
     const parentGutter = parentRow?.querySelector("[data-feature-hierarchy-gutter]");
     const leafGutter = leafRow?.querySelector("[data-feature-hierarchy-gutter]");
 
-    expect(parentGutter).toHaveClass("w-2");
-    expect(leafGutter).toHaveClass("w-2");
+    expect(parentRow?.firstElementChild).toBe(parentGutter);
+    expect(leafRow?.firstElementChild).toBe(leafGutter);
     expect(
       within(parentGutter as HTMLElement).getByRole("button", {
         name: "Collapse child sessions",

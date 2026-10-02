@@ -262,7 +262,7 @@ export const ProjectFeatureRow = memo(function ProjectFeatureRow(
           data-nav-id={String(feature.id)}
           data-nav-project-id={String(projectId)}
           data-feature-depth={hierarchyDepth}
-          className={`group/feature relative flex min-w-0 cursor-pointer items-center gap-0.5 rounded-md py-1.5 pl-3 pr-1.5 text-[12.5px] outline-none transition-colors hover:bg-sidebar-accent ${
+          className={`group/feature relative flex min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1.5 text-[12.5px] outline-none transition-colors hover:bg-sidebar-accent ${
             state.isActive ? "bg-sidebar-accent" : ""
           } ${state.isArchived ? "opacity-50" : ""}`}
           onClick={(e) => {
@@ -281,7 +281,7 @@ export const ProjectFeatureRow = memo(function ProjectFeatureRow(
         >
           <div
             data-feature-hierarchy-gutter
-            className="flex h-3 w-2 shrink-0 items-center justify-center"
+            className="flex size-3.5 shrink-0 items-center justify-center"
             style={{ marginInlineStart: hierarchyDepth * FEATURE_NESTING_INDENT_PX }}
           >
             {hierarchyControl}
