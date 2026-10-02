@@ -235,7 +235,10 @@ function ProjectTreeRow({
             ) : (
               <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
             )}
-            <span className="inline-flex size-3.5 shrink-0 items-center justify-center">
+            <span
+              data-sidebar-project-badge
+              className="inline-flex size-3.5 shrink-0 items-center justify-center"
+            >
               <ProjectBadge projectId={project.id} className="max-w-none" />
             </span>
             <span className="min-w-0 truncate">{project.name}</span>

@@ -12,6 +12,9 @@ minimumReleaseAgeExclude:
   # GHSA-p98j-92pf-mc4p: use the fixed sanitizer release.
   # Remove after 2026-10-07T15:29:57Z (14 days after publication).
   - "dompurify@3.4.16"
+  # GHSA-j22f-vq7h-c4qm and related devalue advisories: use the fixed release.
+  # Remove after 2026-10-02T18:45:39.495Z (14 days after publication).
+  - "devalue@5.9.3"
   # First-party dependency, published from a repository we control
   # (github.com/edjubert/celeritty). The 14-day soak exists to catch a
   # compromised upstream release; it does not apply to a package whose
@@ -33,7 +36,7 @@ overrides:
   "brace-expansion@>=2.0.0 <2.1.7": 2.1.7
   "brace-expansion@>=5.0.0 <5.0.12": 5.0.12
   "browserslist@>=4.0.0 <4.28.7": 4.28.7
-  "devalue@>=5.0.0 <5.9.2": 5.9.2
+  "devalue@>=5.0.0 <5.9.3": 5.9.3
   "dompurify@>=3.0.0 <3.4.16": 3.4.16
   "fast-uri@>=3.0.0 <3.1.8": 3.1.8
   "immutable@>=4.0.0 <4.3.9": 4.3.9

@@ -288,7 +288,9 @@ describe("ProjectFeatures", () => {
     expect(childRow).toHaveClass("bg-sidebar-accent");
   });
 
-  it("reserves the hierarchy gutter for every root feature", () => {
+  // Real layout (including an empty leaf gutter) is checked by
+  // docs/qa/sidebar-status-project-alignment.check.js in the running app.
+  it("keeps the hierarchy control before the content of every root feature", () => {
     vi.mocked(useListFeatures).mockReturnValueOnce({
       data: [
         mockFeatures[0],
