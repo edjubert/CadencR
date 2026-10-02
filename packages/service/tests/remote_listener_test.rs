@@ -61,6 +61,19 @@ async fn remote_listener_serves_over_tls_then_stops() {
     // TLS handshake completed, the host check passed on the real port, and the
     // SPA fallback served — i.e. the port-0 allowlist mismatch is fixed.
     assert_eq!(resp.status().as_u16(), 200, "SPA shell should serve");
+    let csp = resp.headers()[reqwest::header::CONTENT_SECURITY_POLICY]
+        .to_str()
+        .expect("CSP header");
+    let directives: Vec<_> = csp.split(';').map(str::trim).collect();
+    assert!(
+        directives.contains(&"script-src 'self' 'wasm-unsafe-eval'"),
+        "The remote SPA must allow terminal WASM compilation: {csp}"
+    );
+    assert!(
+        directives
+            .contains(&format!("connect-src 'self' data: wss://127.0.0.1:{}", info.port).as_str()),
+        "The remote SPA must allow bundled terminal WASM fetches: {csp}"
+    );
     let body = resp.text().await.expect("body");
     assert!(
         body.contains("cadencr"),

@@ -11,20 +11,22 @@ use axum::http::{header, HeaderName, HeaderValue};
 use axum::middleware::Next;
 use axum::response::Response;
 
-/// Same-origin-only CSP, built per-request so `connect-src` can name the exact
+/// Same-origin network CSP, built per-request so `connect-src` can name the exact
 /// `wss://<host>` origin in addition to `'self'`. Modern browsers treat
 /// same-origin `wss:` as covered by `'self'`, but that was historically
 /// inconsistent, so we spell out the WebSocket origin to keep remote streaming
-/// robust. The rest mirrors the packaged Electron renderer CSP. When the `Host`
-/// is missing or malformed we fall back to plain `'self'` (the request is about
-/// to be 421'd by the auth layer anyway).
+/// robust. CeleriTTY fetches its bundled WASM from a `data:` URL, then compiles
+/// it, so both `data:` connections and `'wasm-unsafe-eval'` are needed, just as
+/// in the packaged Electron renderer CSP. JavaScript eval stays disabled.
+/// When the `Host` is missing or malformed we omit the WebSocket origin (the
+/// request is about to be 421'd by the auth layer anyway).
 fn content_security_policy(host: Option<&str>) -> String {
     let connect = match host.filter(|h| is_plain_host(h)) {
-        Some(host) => format!("connect-src 'self' wss://{host}"),
-        None => "connect-src 'self'".to_string(),
+        Some(host) => format!("connect-src 'self' data: wss://{host}"),
+        None => "connect-src 'self' data:".to_string(),
     };
     format!(
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+        "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; \
          img-src 'self' data: blob:; font-src 'self' data:; {connect}; object-src 'none'; \
          base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
     )
@@ -118,7 +120,7 @@ mod tests {
         // The exact same-origin wss origin is named so remote WebSocket streaming
         // works even on browsers that don't treat wss as covered by 'self'.
         assert!(
-            csp.contains("connect-src 'self' wss://192.168.1.5:5006"),
+            csp.contains("connect-src 'self' data: wss://192.168.1.5:5006"),
             "CSP must name the same-origin wss endpoint: {csp}"
         );
         assert_eq!(
@@ -142,8 +144,34 @@ mod tests {
             .to_str()
             .unwrap()
             .to_string();
-        assert!(csp.contains("connect-src 'self';"), "got: {csp}");
+        assert!(csp.contains("connect-src 'self' data:;"), "got: {csp}");
         assert!(!csp.contains("wss://"), "no host => no wss entry: {csp}");
+    }
+
+    #[test]
+    fn allows_terminal_wasm_without_enabling_javascript_eval() {
+        for (host, expected_connect) in [
+            (
+                Some("laptop.tail1234.ts.net"),
+                "connect-src 'self' data: wss://laptop.tail1234.ts.net",
+            ),
+            (None, "connect-src 'self' data:"),
+            (
+                Some("evil.example/ ; script-src *"),
+                "connect-src 'self' data:",
+            ),
+        ] {
+            let csp = content_security_policy(host);
+            let directives: Vec<_> = csp.split(';').map(str::trim).collect();
+            assert!(
+                directives.contains(&"script-src 'self' 'wasm-unsafe-eval'"),
+                "Allow WASM compilation without enabling JavaScript eval or inline scripts: {csp}"
+            );
+            assert!(
+                directives.contains(&expected_connect),
+                "Allow bundled WASM fetches without adding external network origins: {csp}"
+            );
+        }
     }
 
     #[test]
