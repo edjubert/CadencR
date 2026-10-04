@@ -173,7 +173,7 @@ impl AgentRuntimeAdapter for CodexAdapter {
             .thinking_effort
             .clone()
             .or(native_effective.thinking_effort);
-        let event_rx = client.subscribe();
+        let event_rx = client.subscribe_reliable();
         let mut mcp_status_rx = client.subscribe();
         let mcp_config = launch::effective_thread_config(&config, &effective_config);
         let mcp_server_names = mcp_server_names(&mcp_config);
