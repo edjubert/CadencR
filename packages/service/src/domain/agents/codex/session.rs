@@ -7,10 +7,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use codex_app_server_sdk_rs::{AppServerEvent, CodexAppServerClient};
+use codex_app_server_sdk_rs::{AppServerEventReceiver, CodexAppServerClient};
 use serde_json::Value;
 use tempfile::TempPath;
-use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
+use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::warn;
 
 use super::event_loop::spawn_event_loop;
@@ -47,7 +47,7 @@ pub(super) struct CodexSession {
     permission_mode: Arc<RwLock<Option<RuntimePermissionMode>>>,
     access_mode: Arc<RwLock<Option<RuntimeAccessMode>>>,
     cwd: PathBuf,
-    event_rx: Option<broadcast::Receiver<AppServerEvent>>,
+    event_rx: Option<AppServerEventReceiver>,
     local_rx: Option<mpsc::UnboundedReceiver<Result<RuntimeEvent, RuntimeError>>>,
     local_tx: mpsc::UnboundedSender<Result<RuntimeEvent, RuntimeError>>,
     pending_requests: Arc<Mutex<HashMap<String, PendingCodexRequest>>>,
@@ -75,7 +75,7 @@ impl CodexSession {
     pub(super) fn new(
         client: CodexAppServerClient,
         thread_id: String,
-        event_rx: broadcast::Receiver<AppServerEvent>,
+        event_rx: AppServerEventReceiver,
         options: CodexSessionOptions,
     ) -> Self {
         let (local_tx, local_rx) = mpsc::unbounded_channel();

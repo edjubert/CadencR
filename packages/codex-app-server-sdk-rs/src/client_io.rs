@@ -1,14 +1,19 @@
+mod lines;
+
+use lines::read_bounded_line;
+
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use serde_json::Value;
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, BufReader};
+use tokio::io::{AsyncRead, BufReader};
 use tokio::process::{Child, ChildStderr};
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use crate::error::SdkError;
+use crate::event_queue::EventHub;
 use crate::protocol::{decode_inbound_message, InboundMessage};
 use crate::types::AppServerEvent;
 
@@ -16,7 +21,7 @@ pub(crate) type PendingMap = HashMap<u64, oneshot::Sender<Result<Value, SdkError
 
 pub(crate) struct ReaderState {
     pub(crate) pending: Arc<StdMutex<PendingMap>>,
-    pub(crate) events: broadcast::Sender<AppServerEvent>,
+    pub(crate) events: EventHub,
     pub(crate) max_line_bytes: usize,
 }
 
@@ -85,7 +90,7 @@ pub(crate) fn spawn_reaper(
     mut child: Child,
     mut kill_rx: oneshot::Receiver<()>,
     pending: Arc<StdMutex<PendingMap>>,
-    events: broadcast::Sender<AppServerEvent>,
+    events: EventHub,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let status = tokio::select! {
@@ -110,7 +115,7 @@ pub(crate) fn spawn_reaper(
 fn handle_message(state: &ReaderState, message: Value) {
     match decode_inbound_message(message) {
         InboundMessage::Event(event) => {
-            let _ = state.events.send(event);
+            state.events.send(event);
         }
         InboundMessage::Response { id, result } => {
             let tx = state
@@ -128,12 +133,12 @@ fn handle_message(state: &ReaderState, message: Value) {
 
 fn send_process_exited(
     pending: &Arc<StdMutex<PendingMap>>,
-    events: &broadcast::Sender<AppServerEvent>,
+    events: &EventHub,
     status: Option<i32>,
     signal: Option<i32>,
 ) {
     drain_pending_process_exited(pending);
-    let _ = events.send(AppServerEvent::ProcessExited { status, signal });
+    events.send(AppServerEvent::ProcessExited { status, signal });
 }
 
 fn drain_pending_process_exited(pending: &Arc<StdMutex<PendingMap>>) {
@@ -168,51 +173,9 @@ fn report_transport_error(state: &ReaderState, error: SdkError) {
             message
         }
     };
-    let _ = state
+    state
         .events
         .send(AppServerEvent::TransportError { message });
-}
-
-async fn read_bounded_line<R>(
-    reader: &mut R,
-    max_line_bytes: usize,
-) -> Result<Option<String>, SdkError>
-where
-    R: AsyncBufRead + Unpin,
-{
-    let mut bytes = Vec::new();
-    loop {
-        let available = reader.fill_buf().await?;
-        if available.is_empty() {
-            if bytes.is_empty() {
-                return Ok(None);
-            }
-            break;
-        }
-
-        let newline = available.iter().position(|byte| *byte == b'\n');
-        let take = newline.unwrap_or(available.len());
-        let found_newline = newline.is_some();
-        let consume = newline.map_or(take, |position| position + 1);
-
-        if bytes.len().saturating_add(take) > max_line_bytes {
-            reader.consume(consume);
-            return Err(SdkError::Protocol(format!(
-                "app-server line exceeded {max_line_bytes} bytes"
-            )));
-        }
-        bytes.extend_from_slice(&available[..take]);
-        reader.consume(consume);
-        if found_newline {
-            break;
-        }
-    }
-    if bytes.last() == Some(&b'\r') {
-        bytes.pop();
-    }
-    String::from_utf8(bytes)
-        .map(Some)
-        .map_err(|error| SdkError::Protocol(format!("invalid UTF-8 from app-server: {error}")))
 }
 
 #[cfg(unix)]
@@ -232,20 +195,19 @@ mod tests {
     use std::sync::{Arc, Mutex as StdMutex};
 
     use serde_json::{json, Value};
-    use tokio::io::{AsyncWriteExt, BufReader};
+    use tokio::io::AsyncWriteExt;
     use tokio::sync::{broadcast, oneshot};
 
     use super::{
-        drain_pending_process_exited, handle_message, read_bounded_line, spawn_reader, ReaderState,
-        SdkError,
+        drain_pending_process_exited, handle_message, spawn_reader, ReaderState, SdkError,
     };
-    use crate::client::DEFAULT_MAX_LINE_BYTES;
     use crate::types::AppServerEvent;
 
     type PendingMap = Arc<StdMutex<HashMap<u64, oneshot::Sender<Result<Value, SdkError>>>>>;
 
     fn reader_state() -> (ReaderState, broadcast::Receiver<AppServerEvent>, PendingMap) {
-        let (events, event_rx) = broadcast::channel(8);
+        let events = crate::event_queue::EventHub::new();
+        let event_rx = events.subscribe();
         let pending = Arc::new(StdMutex::new(HashMap::new()));
         (
             ReaderState {
@@ -256,38 +218,6 @@ mod tests {
             event_rx,
             pending,
         )
-    }
-
-    #[tokio::test]
-    async fn bounded_line_reads_line_without_newline() {
-        let mut reader = BufReader::new(&b"hello"[..]);
-        assert_eq!(
-            read_bounded_line(&mut reader, 1024).await.unwrap(),
-            Some("hello".to_string())
-        );
-        assert_eq!(read_bounded_line(&mut reader, 1024).await.unwrap(), None);
-    }
-
-    #[tokio::test]
-    async fn bounded_line_rejects_oversized_messages() {
-        let mut reader = BufReader::new(&b"abcdef\n"[..]);
-        let error = read_bounded_line(&mut reader, 3)
-            .await
-            .expect_err("line should exceed limit");
-        assert!(error.to_string().contains("exceeded"));
-    }
-
-    #[tokio::test]
-    async fn default_limit_accepts_base64_screenshot_sized_messages() {
-        let frame = vec![b'a'; 10 * 1024 * 1024];
-        let mut reader = BufReader::new(frame.as_slice());
-
-        let decoded = read_bounded_line(&mut reader, DEFAULT_MAX_LINE_BYTES)
-            .await
-            .expect("image-sized JSONL frame should fit within the default limit")
-            .expect("reader should return the frame");
-
-        assert_eq!(decoded.len(), frame.len());
     }
 
     #[tokio::test]
@@ -359,6 +289,63 @@ mod tests {
         assert_eq!(id, json!("approval"));
         assert_eq!(method, "tool/request");
         assert_eq!(params, json!({ "x": 1 }));
+    }
+
+    #[tokio::test]
+    async fn reader_delivers_rpc_response_while_runtime_is_stalled() {
+        let (state, _observer, pending) = reader_state();
+        let mut runtime = state.events.subscribe_reliable();
+        let (response_tx, response_rx) = oneshot::channel();
+        pending.lock().unwrap().insert(7, response_tx);
+        let (reader, mut writer) = tokio::io::duplex(4096);
+        let task = spawn_reader(state, reader);
+        let writer_task = tokio::spawn(async move {
+            for n in 0..2_000 {
+                let frame =
+                    json!({"method": "item/commandExecution/outputDelta", "params": {"n": n}});
+                writer
+                    .write_all(format!("{frame}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+            writer
+                .write_all(b"{\"id\":7,\"result\":{\"ok\":true}}\n")
+                .await
+                .unwrap();
+            writer
+                .write_all(b"{\"id\":42,\"method\":\"approval\",\"params\":{}}\n")
+                .await
+                .unwrap();
+            writer
+                .write_all(b"{\"method\":\"turn/completed\",\"params\":{}}\n")
+                .await
+                .unwrap();
+        });
+        // Simulates startup or descendant recovery: await the RPC without
+        // draining any events, even with more than 512 frames ahead of it.
+        let response = tokio::time::timeout(std::time::Duration::from_secs(5), response_rx)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(response, json!({"ok": true}));
+        writer_task.await.unwrap();
+        task.await.unwrap();
+        for n in 0..2_000 {
+            assert!(matches!(runtime.recv().await,
+                Some(AppServerEvent::Notification { params, .. }) if params["n"] == n));
+        }
+        assert!(matches!(
+            runtime.recv().await,
+            Some(AppServerEvent::ServerRequest { .. })
+        ));
+        assert!(matches!(runtime.recv().await,
+            Some(AppServerEvent::Notification { method, .. }) if method == "turn/completed"));
+        assert!(matches!(
+            runtime.recv().await,
+            Some(AppServerEvent::TransportError { .. })
+        ));
+        assert!(runtime.recv().await.is_none());
     }
 
     #[tokio::test]

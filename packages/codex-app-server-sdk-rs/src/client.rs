@@ -14,6 +14,7 @@ use crate::client_launch::profile_aware_command;
 use crate::client_state::{Inner, PendingRequestGuard};
 use crate::discovery::resolved_codex_command;
 use crate::error::SdkError;
+use crate::event_queue::EventHub;
 use crate::parse::{parse_model, parse_turn_handle};
 use crate::protocol::{app_server_args, mcp_server_status_list_params};
 use crate::types::{
@@ -79,7 +80,7 @@ impl CodexAppServerClient {
             .stderr
             .take()
             .ok_or_else(|| SdkError::Protocol("missing app-server stderr".to_string()))?;
-        let (events, _) = broadcast::channel(512);
+        let events = EventHub::new();
         let pending = Arc::new(StdMutex::new(HashMap::new()));
         let max_line_bytes = options.max_line_bytes.unwrap_or(DEFAULT_MAX_LINE_BYTES);
         let (kill_tx, kill_rx) = oneshot::channel();
@@ -122,8 +123,15 @@ impl CodexAppServerClient {
         Ok(Self { inner })
     }
 
+    /// Best-effort observer stream; slow receivers may lag. Use
+    /// `subscribe_reliable` for runtime event processing.
     pub fn subscribe(&self) -> broadcast::Receiver<AppServerEvent> {
         self.inner.events.subscribe()
+    }
+
+    /// Subscribe without losing events when runtime processing falls behind.
+    pub fn subscribe_reliable(&self) -> crate::AppServerEventReceiver {
+        self.inner.events.subscribe_reliable()
     }
 
     pub async fn initialize(&self) -> Result<Value, SdkError> {

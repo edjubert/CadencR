@@ -1,13 +1,9 @@
-mod buffer;
-
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use codex_app_server_sdk_rs::{AppServerEvent, CodexAppServerClient};
-use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
-
-use buffer::EventBuffer;
+use codex_app_server_sdk_rs::{AppServerEvent, AppServerEventReceiver, CodexAppServerClient};
+use tokio::sync::{mpsc, Mutex, RwLock};
 
 use super::event_lifecycle::SessionLifecycle;
 use super::event_state::IndexState;
@@ -23,7 +19,7 @@ use crate::domain::agents::adapter::{RuntimeError, RuntimeEvent};
 
 pub(super) fn spawn_event_loop(
     client: CodexAppServerClient,
-    source_rx: broadcast::Receiver<AppServerEvent>,
+    source_rx: AppServerEventReceiver,
     tx: mpsc::Sender<Result<RuntimeEvent, RuntimeError>>,
     pending_requests: Arc<Mutex<HashMap<String, PendingCodexRequest>>>,
     pending_prompt_receipts: Arc<PendingPromptReceipts>,
@@ -60,8 +56,7 @@ struct NotificationState {
 }
 
 impl EventLoop {
-    async fn run(&self, source_rx: broadcast::Receiver<AppServerEvent>) {
-        let mut source = EventBuffer::new(source_rx);
+    async fn run(&self, mut source: AppServerEventReceiver) {
         let mut state = NotificationState {
             command_outputs: HashMap::new(),
             index_state: IndexState::for_root_thread(&self.turns.root_thread_id),
@@ -69,15 +64,12 @@ impl EventLoop {
         };
         loop {
             match source.recv().await {
-                Ok(AppServerEvent::Notification { method, params }) => {
-                    if !self
-                        .notification(method, params, &mut state, &mut source)
-                        .await
-                    {
+                Some(AppServerEvent::Notification { method, params }) => {
+                    if !self.notification(method, params, &mut state).await {
                         return;
                     }
                 }
-                Ok(AppServerEvent::ServerRequest { id, method, params }) => {
+                Some(AppServerEvent::ServerRequest { id, method, params }) => {
                     if let Some(response) =
                         trusted_cadencr_browser_permission_response(&id, &method, &params)
                     {
@@ -105,7 +97,8 @@ impl EventLoop {
                         return;
                     }
                 }
-                Ok(AppServerEvent::TransportError { message }) => {
+                Some(AppServerEvent::TransportError { message }) => {
+                    self.pending_prompt_receipts.clear();
                     if self.closing.load(Ordering::SeqCst) {
                         return;
                     }
@@ -118,7 +111,7 @@ impl EventLoop {
                         .await;
                     return;
                 }
-                Ok(AppServerEvent::ProcessExited { status, signal }) => {
+                Some(AppServerEvent::ProcessExited { status, signal }) => {
                     if self.closing.load(Ordering::SeqCst) {
                         return;
                     }
@@ -129,7 +122,7 @@ impl EventLoop {
                         .await;
                     return;
                 }
-                Err(broadcast::error::RecvError::Closed) => {
+                None => {
                     if self.closing.load(Ordering::SeqCst) {
                         return;
                     }
@@ -141,16 +134,6 @@ impl EventLoop {
                         .await;
                     return;
                 }
-                Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                    self.pending_prompt_receipts.clear();
-                    let _ = self
-                        .tx
-                        .send(Err(RuntimeError::new(format!(
-                            "Codex event stream lost {skipped} events"
-                        ))))
-                        .await;
-                    return;
-                }
             }
         }
     }
@@ -159,7 +142,6 @@ impl EventLoop {
         method: String,
         mut params: serde_json::Value,
         state: &mut NotificationState,
-        source: &mut EventBuffer,
     ) -> bool {
         if method == "turn/started" {
             let thread_id = params
@@ -215,13 +197,7 @@ impl EventLoop {
             &mut state.index_state,
             &mut state.lifecycle,
         );
-        let mut events = match source.during(recovery).await {
-            Ok(events) => events,
-            Err(error) => {
-                let _ = self.tx.send(Err(error)).await;
-                return false;
-            }
-        };
+        let mut events = recovery.await;
         events.extend(notification_events(
             &method,
             params,
@@ -283,13 +259,9 @@ fn enrich_command_output(
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("");
             let output = command_outputs.entry(item_id.to_string()).or_default();
+            // Keep the completion fallback, but do not clone the growing output
+            // into every delta: that makes large command streams quadratic.
             output.push_str(delta);
-            if let Some(object) = params.as_object_mut() {
-                object.insert(
-                    "aggregatedOutput".to_string(),
-                    serde_json::Value::String(output.clone()),
-                );
-            }
         }
         "item/completed" => enrich_completed_command(params, command_outputs),
         _ => {}
@@ -377,7 +349,8 @@ mod tests {
             &mut outputs,
         );
 
-        assert_eq!(second["aggregatedOutput"], json!("hello world"));
+        assert!(first.get("aggregatedOutput").is_none());
+        assert!(second.get("aggregatedOutput").is_none());
 
         let mut completed = json!({
             "item": {
