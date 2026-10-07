@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import test from "node:test";
@@ -28,14 +29,19 @@ const safeVersions = {
   dompurify: ">=3.4.16",
   electron: "^42.10.0 || ^43.5.0 || >=44.0.0",
   "fast-uri": "^2.4.6 || ^3.1.8 || >=4.1.4",
+  "http-cache-semantics": ">=4.3.0",
   "js-yaml": ">=4.3.2",
+  katex: ">=0.18.2",
   "markdown-it": ">=14.3.1",
   nanoid: "^3.3.18 || >=5.1.16",
   orval: ">=8.22.0",
   postcss: ">=8.5.23",
-  sharp: ">=0.35.4",
-  "smol-toml": ">=1.7.1",
+  seroval: ">=1.6.3",
+  sharp: ">=0.35.5",
+  "smol-toml": ">=1.9.0",
+  "source-map-js": ">=1.2.2",
   svgo: ">=4.1.0",
+  tinypool: ">=2.1.2",
   undici: "^6.28.1 || ^7.29.1 || >=8.10.2",
 };
 
@@ -71,10 +77,30 @@ test("Sharp's native packages include patched binaries on every locked platform"
     for (const key of binaries) {
       const packageKey = key.split("(")[0];
       const version = packageKey.slice(packageKey.lastIndexOf("@") + 1);
-      const floor = key.startsWith("@img/sharp-libvips-") ? "1.3.3" : "0.35.4";
-      assert.ok(semver.gte(version, floor), `${key} predates the patched libheif bundle`);
+      const floor = key.startsWith("@img/sharp-libvips-") ? "1.3.4" : "0.35.5";
+      assert.ok(semver.gte(version, floor), `${key} predates the patched native image bundle`);
     }
   }
+});
+
+test("unpatched braces and sprintf-js are absent from every dependency snapshot", () => {
+  for (const section of ["packages", "snapshots"]) {
+    for (const name of ["braces", "sprintf-js"]) {
+      assert.deepEqual(versionsFor(lock[section], name), [], `${name} must stay out of ${section}`);
+    }
+  }
+});
+
+test("http-cache-semantics retains its required max-stale security patch", () => {
+  const name = "http-cache-semantics@4.3.0";
+  const path = workspace.patchedDependencies[name];
+  assert.equal(path, `patches/${name}.patch`);
+  const hash = createHash("sha256").update(read(path)).digest("hex");
+  assert.equal(lock.patchedDependencies[name], hash, "the cache patch must be locked");
+  assert.deepEqual(
+    Object.keys(lock.snapshots).filter((key) => key.startsWith(`${name}(`) || key === name),
+    [`${name}(patch_hash=${hash})`],
+  );
 });
 
 test("workspace overrides cannot reintroduce an old vulnerable transitive", () => {
