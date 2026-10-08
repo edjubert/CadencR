@@ -975,6 +975,14 @@ mod tests {
         run_git(&["init", "-q", "-b", "main"], &directory)
             .await
             .unwrap();
+        // Detached auto-maintenance after fixture commits races with snapshots
+        // of .git, creating and removing objects/maintenance.lock.
+        run_git(
+            &["config", "--local", "maintenance.auto", "false"],
+            &directory,
+        )
+        .await
+        .unwrap();
         std::fs::canonicalize(directory).unwrap()
     }
 
