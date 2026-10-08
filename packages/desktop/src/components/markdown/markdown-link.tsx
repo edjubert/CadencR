@@ -72,7 +72,15 @@ function ExternalLink({
         event.preventDefault();
         const origin = pointerDownRef.current;
         pointerDownRef.current = null;
-        if (origin && Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > 4) return;
+        // Keyboard clicks (Enter) carry detail 0 and no pointer coordinates —
+        // never treat them as drags, even after a stale pointerdown that
+        // ended without a click (e.g. press on the link, release outside).
+        if (
+          event.detail !== 0 &&
+          origin &&
+          Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > 4
+        )
+          return;
         routing.activate(href);
       }}
       onMouseEnter={() => routing.setHoverLink(href)}
