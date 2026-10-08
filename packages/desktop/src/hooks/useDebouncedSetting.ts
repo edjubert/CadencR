@@ -27,7 +27,7 @@ export function useDebouncedSetting(
   { immediateCache = true } = {},
 ): DebouncedSettingResult {
   const query = useGetWorkspaceSetting(key);
-  const { mutate, isPending: isSaving } = useSetWorkspaceSetting();
+  const { mutateAsync, isPending: isSaving } = useSetWorkspaceSetting();
   const queryClient = useQueryClient();
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flushRef = useRef<(() => void) | null>(null);
@@ -57,25 +57,24 @@ export function useDebouncedSetting(
 
       const persistValue = (): void => {
         flushRef.current = null;
-        mutate(
-          { key, data: { value } },
-          {
-            onSuccess: () => {
-              if (!immediateCache) queryClient.setQueryData(queryKey, { value });
-            },
-            onError: (err: unknown) => {
-              if (immediateCache) {
-                if (previousValue === undefined) {
-                  void queryClient.invalidateQueries({ queryKey });
-                } else {
-                  queryClient.setQueryData(queryKey, previousValue);
-                }
+        // mutateAsync with then/catch instead of per-call mutate callbacks:
+        // those callbacks do not run after unmount, and this flush can fire
+        // from the unmount cleanup.
+        void mutateAsync({ key, data: { value } })
+          .then(() => {
+            if (!immediateCache) queryClient.setQueryData(queryKey, { value });
+          })
+          .catch((err: unknown) => {
+            if (immediateCache) {
+              if (previousValue === undefined) {
+                void queryClient.invalidateQueries({ queryKey });
+              } else {
+                queryClient.setQueryData(queryKey, previousValue);
               }
-              const message = apiErrorMessage(err, "Unknown error");
-              toast.error(`Could not save setting "${key}": ${message}`);
-            },
-          },
-        );
+            }
+            const message = apiErrorMessage(err, "Unknown error");
+            toast.error(`Could not save setting "${key}": ${message}`);
+          });
       };
 
       if (debounceMs <= 0) {
@@ -86,7 +85,7 @@ export function useDebouncedSetting(
       flushRef.current = persistValue;
       timerRef.current = setTimeout(persistValue, debounceMs);
     },
-    [key, debounceMs, immediateCache, mutate, queryClient],
+    [key, debounceMs, immediateCache, mutateAsync, queryClient],
   );
 
   const value = query.data?.value ?? null;
