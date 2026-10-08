@@ -219,4 +219,24 @@ describe("focus deferral while the engine loads", () => {
     rerender();
     expect(mocks.terminal.focus).not.toHaveBeenCalled();
   });
+
+  it("cancels a pending focus when the pane is blurred before the engine is ready", () => {
+    const ref = createRef<TerminalCoreInstanceHandle>();
+    const { rerender } = renderHook(() =>
+      useTerminalCoreInstanceController({ featureId: 1, projectId: 2 }, ref),
+    );
+    act(() => ref.current?.focus());
+    act(() => ref.current?.blur());
+    mocks.engineReady = true;
+    rerender();
+    expect(mocks.terminal.focus).not.toHaveBeenCalled();
+  });
+
+  it("forwards blur to the engine once it exists", () => {
+    mocks.engineReady = true;
+    const ref = createRef<TerminalCoreInstanceHandle>();
+    renderHook(() => useTerminalCoreInstanceController({ featureId: 1, projectId: 2 }, ref));
+    act(() => ref.current?.blur());
+    expect(mocks.terminal.blur).toHaveBeenCalledOnce();
+  });
 });

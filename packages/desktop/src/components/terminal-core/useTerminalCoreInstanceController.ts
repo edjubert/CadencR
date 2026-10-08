@@ -267,6 +267,12 @@ function useDeferredEngineFocus(terminal: Terminal | undefined) {
     if (t) t.focus();
     else pendingFocusRef.current = true;
   }, []);
+  // `setActivePane` blurs every non-active pane on focus change. A pane whose
+  // engine is still loading must drop its pending focus there, otherwise the
+  // flush below would steal focus back from the pane the user is typing in.
+  const cancelPendingFocus = useCallback((): void => {
+    pendingFocusRef.current = false;
+  }, []);
   useEffect(() => {
     if (!terminal || !pendingFocusRef.current) return;
     pendingFocusRef.current = false;
@@ -275,7 +281,7 @@ function useDeferredEngineFocus(terminal: Terminal | undefined) {
     // from the tab the user moved on to.
     terminal.focus();
   }, [terminal]);
-  return focusTerminal;
+  return { focusTerminal, cancelPendingFocus };
 }
 
 export function useTerminalCoreInstanceController(
@@ -350,7 +356,7 @@ export function useTerminalCoreInstanceController(
 
   useInitialNoticeAndCommand(terminal, ptyReady, connection, refs);
 
-  const focusTerminal = useDeferredEngineFocus(terminal);
+  const { focusTerminal, cancelPendingFocus } = useDeferredEngineFocus(terminal);
 
   const handleRef = useRef<TerminalCoreInstanceHandle | null>(null);
   const setHandle = useCallback(
@@ -359,14 +365,17 @@ export function useTerminalCoreInstanceController(
         focus: () => focusTerminal(t),
         clearScreen: () => t?.clearScreen(),
         clearInput: () => connection.write("\x15"),
-        blur: () => t?.blur(),
+        blur: () => {
+          cancelPendingFocus();
+          t?.blur();
+        },
         markForKill: () => (refs.shouldKillRef.current = true),
         write: (data: string) => t?.write(data),
         getSelection: () => t?.getSelection() ?? null,
         paste: (text: string) => pasteTerminalText(hostRef.current, text),
       };
     },
-    [connection, focusTerminal, refs, hostRef],
+    [connection, focusTerminal, cancelPendingFocus, refs, hostRef],
   );
 
   useEffect(() => {
