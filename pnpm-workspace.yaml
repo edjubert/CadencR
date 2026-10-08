@@ -106,6 +106,7 @@ overrides:
 allowBuilds:
   # Keep dependency lifecycle scripts disabled by default. If a package truly
   # needs install-time native setup, review it explicitly before flipping it.
+  "@parcel/watcher": true
   electron-winstaller: false
   esbuild: false
   msw: false
