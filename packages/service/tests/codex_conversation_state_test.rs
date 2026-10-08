@@ -84,6 +84,7 @@ async fn codex_conversation_routing_and_completion_survive_messaging() {
 
     for mode in [
         "legacy",
+        "large-history",
         "upward",
         "sibling",
         "resumed",
@@ -110,6 +111,18 @@ async fn codex_conversation_routing_and_completion_survive_messaging() {
             .json()
             .await
             .unwrap();
+        if mode == "large-history" {
+            let session_id: i64 = sqlx::query_scalar(
+                "INSERT INTO agent_sessions (feature_id,agent_type,status,runtime_provider,runtime_session_id,model) \
+                 VALUES (?,'session','paused','codex_cli','11111111-1111-4111-8111-111111111111','qa-model') RETURNING id",
+            )
+            .bind(feature["id"].as_i64().unwrap())
+            .fetch_one(&server.pool)
+            .await
+            .unwrap();
+            sqlx::query("INSERT INTO agent_messages (session_id,role,message_type,content) VALUES (?,'assistant','text','PERSISTED_BEFORE_RESUME')")
+                .bind(session_id).execute(&server.pool).await.unwrap();
+        }
         let mut socket = connect(&server.base_url).await;
         send(&mut socket, "app", "subscribe.session_status", json!({})).await;
         send(
@@ -260,6 +273,16 @@ async fn codex_conversation_routing_and_completion_survive_messaging() {
         assert!(hydration
             .to_string()
             .contains(&format!("ROOT_FINAL_{mode}")));
+        if mode == "large-history" {
+            assert!(hydration.to_string().contains("PERSISTED_BEFORE_RESUME"));
+            let runtime_id: String =
+                sqlx::query_scalar("SELECT runtime_session_id FROM agent_sessions WHERE id=?")
+                    .bind(session.parse::<i64>().unwrap())
+                    .fetch_one(&server.pool)
+                    .await
+                    .unwrap();
+            assert_eq!(runtime_id, "11111111-1111-4111-8111-111111111111");
+        }
         if mode == "upward" {
             send(
                 &mut socket,
