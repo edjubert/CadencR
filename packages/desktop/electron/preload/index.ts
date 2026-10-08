@@ -1,8 +1,21 @@
 import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron";
 import type {
   BrowserBounds,
+  BrowserBookmark,
   BrowserCommentBadgeClick,
+  BrowserDownloadSnapshot,
+  BrowserFindRequest,
+  BrowserFindResult,
+  BrowserGuestShortcutBindings,
+  BrowserLibraryChange,
+  BrowserOmniboxQueryResult,
   BrowserProfileMetadata,
+  BrowserResponsiveRequest,
+  BrowserPopupRequest,
+  BrowserSiteInfo,
+  BrowserSitePermission,
+  BrowserSitePermissionDecision,
+  BrowserSitePermissionRequest,
   BrowserShortcut,
   BrowserStateSnapshot,
   BrowserTabMetadata,
@@ -233,6 +246,38 @@ contextBridge.exposeInMainWorld("cadencr", {
     ipcRenderer.invoke("browser:close-tab", tabId),
   closeBrowserTabsForScope: (scopeId: number): Promise<BrowserStateSnapshot> =>
     ipcRenderer.invoke("browser:close-tabs-for-scope", scopeId),
+  duplicateBrowserTab: (tabId: string): Promise<BrowserTabMetadata> =>
+    ipcRenderer.invoke("browser:duplicate-tab", tabId),
+  setBrowserTabPinned: (tabId: string, pinned: boolean): Promise<BrowserStateSnapshot> =>
+    ipcRenderer.invoke("browser:set-tab-pinned", tabId, pinned),
+  reorderBrowserTab: (tabId: string, targetIndex: number): Promise<BrowserStateSnapshot> =>
+    ipcRenderer.invoke("browser:reorder-tab", tabId, targetIndex),
+  closeOtherBrowserTabs: (tabId: string): Promise<BrowserStateSnapshot> =>
+    ipcRenderer.invoke("browser:close-other-tabs", tabId),
+  reopenLastClosedBrowserTab: (scopeId: number): Promise<BrowserTabMetadata | null> =>
+    ipcRenderer.invoke("browser:reopen-last-closed-tab", scopeId),
+  listBrowserDownloads: (scopeId: number): Promise<BrowserDownloadSnapshot> =>
+    ipcRenderer.invoke("browser:list-downloads", scopeId),
+  listBrowserDownloadCountsByScope: (): Promise<Record<number, number>> =>
+    ipcRenderer.invoke("browser:list-download-counts"),
+  pauseBrowserDownload: (scopeId: number, id: string): Promise<BrowserDownloadSnapshot> =>
+    ipcRenderer.invoke("browser:pause-download", scopeId, id),
+  resumeBrowserDownload: (scopeId: number, id: string): Promise<BrowserDownloadSnapshot> =>
+    ipcRenderer.invoke("browser:resume-download", scopeId, id),
+  cancelBrowserDownload: (scopeId: number, id: string): Promise<BrowserDownloadSnapshot> =>
+    ipcRenderer.invoke("browser:cancel-download", scopeId, id),
+  revealBrowserDownload: (scopeId: number, id: string): Promise<void> =>
+    ipcRenderer.invoke("browser:reveal-download", scopeId, id),
+  clearBrowserDownloads: (scopeId: number): Promise<BrowserDownloadSnapshot> =>
+    ipcRenderer.invoke("browser:clear-downloads", scopeId),
+  listBlockedBrowserPopups: (scopeId: number): Promise<BrowserPopupRequest[]> =>
+    ipcRenderer.invoke("browser:list-blocked-popups", scopeId),
+  allowBrowserPopupOnce: (requestId: string): Promise<void> =>
+    ipcRenderer.invoke("browser:allow-popup-once", requestId),
+  openBrowserPopupExternally: (requestId: string): Promise<void> =>
+    ipcRenderer.invoke("browser:open-popup-externally", requestId),
+  dismissBrowserPopup: (requestId: string): Promise<void> =>
+    ipcRenderer.invoke("browser:dismiss-popup", requestId),
   setBrowserBounds: (
     bounds: BrowserBounds,
     scopeId?: number | null,
@@ -254,14 +299,54 @@ contextBridge.exposeInMainWorld("cadencr", {
     ipcRenderer.invoke("browser:duplicate-profile", sourceId, newId),
   deleteBrowserProfile: (profileId: string): Promise<void> =>
     ipcRenderer.invoke("browser:delete-profile", profileId),
+  getBrowserSiteInfo: (tabId: string): Promise<BrowserSiteInfo> =>
+    ipcRenderer.invoke("browser:get-site-info", tabId),
+  setBrowserSitePermission: (
+    tabId: string,
+    origin: string,
+    permission: BrowserSitePermission,
+    decision: BrowserSitePermissionDecision,
+  ): Promise<BrowserSiteInfo> =>
+    ipcRenderer.invoke("browser:set-site-permission", tabId, origin, permission, decision),
+  clearBrowserSiteData: (tabId: string, origin: string): Promise<BrowserSiteInfo> =>
+    ipcRenderer.invoke("browser:clear-site-data", tabId, origin),
+  setBrowserAgentSharing: (
+    tabId: string,
+    origin: string,
+    shared: boolean,
+  ): Promise<BrowserSiteInfo> =>
+    ipcRenderer.invoke("browser:set-agent-sharing", tabId, origin, shared),
+  resolveBrowserPermissionRequest: (requestId: string, allowed: boolean): Promise<void> =>
+    ipcRenderer.invoke("browser:resolve-permission-request", requestId, allowed),
   browserBack: (tabId: string): Promise<void> => ipcRenderer.invoke("browser:back", tabId),
   browserForward: (tabId: string): Promise<void> => ipcRenderer.invoke("browser:forward", tabId),
   browserReload: (tabId: string): Promise<void> => ipcRenderer.invoke("browser:reload", tabId),
   browserStop: (tabId: string): Promise<void> => ipcRenderer.invoke("browser:stop", tabId),
   browserZoomIn: (tabId: string): Promise<void> => ipcRenderer.invoke("browser:zoom-in", tabId),
   browserZoomOut: (tabId: string): Promise<void> => ipcRenderer.invoke("browser:zoom-out", tabId),
+  browserZoomReset: (tabId: string): Promise<void> =>
+    ipcRenderer.invoke("browser:zoom-reset", tabId),
+  findInBrowserTab: (tabId: string, request: BrowserFindRequest): Promise<void> =>
+    ipcRenderer.invoke("browser:find", tabId, request),
+  stopFindingInBrowserTab: (tabId: string, focusPage: boolean): Promise<void> =>
+    ipcRenderer.invoke("browser:stop-find", tabId, focusPage),
+  setBrowserGuestShortcuts: (bindings: BrowserGuestShortcutBindings): Promise<void> =>
+    ipcRenderer.invoke("browser:set-guest-shortcuts", bindings),
+  queryBrowserOmnibox: (query: string, limit?: number): Promise<BrowserOmniboxQueryResult> =>
+    ipcRenderer.invoke("browser:query-omnibox", query, limit),
+  getBrowserBookmark: (url: string): Promise<BrowserBookmark | null> =>
+    ipcRenderer.invoke("browser:get-bookmark", url),
+  removeBrowserHistoryEntry: (id: string): Promise<void> =>
+    ipcRenderer.invoke("browser:remove-history", id),
+  clearBrowserHistory: (): Promise<void> => ipcRenderer.invoke("browser:clear-history"),
+  setBrowserBookmark: (tabId: string, bookmarked: boolean): Promise<BrowserBookmark | null> =>
+    ipcRenderer.invoke("browser:set-bookmark", tabId, bookmarked),
   toggleBrowserDevTools: (tabId: string): Promise<BrowserTabMetadata> =>
     ipcRenderer.invoke("browser:toggle-devtools", tabId),
+  setBrowserResponsive: (
+    tabId: string,
+    request: BrowserResponsiveRequest,
+  ): Promise<BrowserTabMetadata> => ipcRenderer.invoke("browser:set-responsive", tabId, request),
   getBrowserConsole: (): Promise<unknown[]> => ipcRenderer.invoke("browser:get-console"),
   getBrowserNetwork: (): Promise<unknown[]> => ipcRenderer.invoke("browser:get-network"),
   getBrowserSnapshot: (tabId: string): Promise<unknown> =>
@@ -286,8 +371,22 @@ contextBridge.exposeInMainWorld("cadencr", {
     onIpc("browser:tab-counts", cb),
   onBrowserShortcut: (cb: (shortcut: BrowserShortcut) => void): (() => void) =>
     onIpc("browser:shortcut", cb),
+  onBrowserFindResult: (cb: (result: BrowserFindResult) => void): (() => void) =>
+    onIpc("browser:find-result", cb),
+  onBrowserLibraryChanged: (cb: (change: BrowserLibraryChange) => void): (() => void) =>
+    onIpc("browser:library-changed", cb),
   onBrowserCommentBadgeClick: (cb: (event: BrowserCommentBadgeClick) => void): (() => void) =>
     onIpc("browser:comment-badge-click", cb),
+  onBrowserPermissionRequest: (cb: (request: BrowserSitePermissionRequest) => void): (() => void) =>
+    onIpc("browser:permission-request", cb),
+  onBrowserPermissionRequestCancelled: (cb: (event: { requestId: string }) => void): (() => void) =>
+    onIpc("browser:permission-request-cancelled", cb),
+  onBrowserPopupRequestsChanged: (cb: (event: { scopeId: number }) => void): (() => void) =>
+    onIpc("browser:popup-requests-changed", cb),
+  onBrowserDownloadsChanged: (cb: (snapshot: BrowserDownloadSnapshot) => void): (() => void) =>
+    onIpc("browser:downloads-changed", cb),
+  onBrowserDownloadCounts: (cb: (counts: Record<number, number>) => void): (() => void) =>
+    onIpc("browser:download-counts", cb),
   checkForUpdates: (): Promise<void> => ipcRenderer.invoke("app:check-for-updates"),
   installUpdate: (): Promise<void> => ipcRenderer.invoke("app:install-update"),
   fetchChangelog: (version: string): Promise<string | null> =>

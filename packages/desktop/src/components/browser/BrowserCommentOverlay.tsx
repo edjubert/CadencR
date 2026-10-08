@@ -4,9 +4,11 @@ import { ImageIcon, Trash2Icon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CommentForm } from "@/components/diff/DiffCommentWidget";
 import { cn } from "@/lib/utils";
+import type { BrowserResponsiveGeometry } from "@/shared/browser-responsive";
 
 import { describeElement } from "./format-context";
 import type { BrowserCommentDraft } from "./useBrowserComments";
+import { transformBrowserPageBounds } from "./BrowserResponsiveViewport";
 
 const PAD = 8;
 const WIDTH = 360;
@@ -15,6 +17,7 @@ export interface BrowserCommentOverlayProps {
   draft: BrowserCommentDraft;
   /** The viewport container the form is positioned within (the page region). */
   containerRef: React.RefObject<HTMLDivElement | null>;
+  pageGeometry?: BrowserResponsiveGeometry | null;
   onSave: (text: string) => void;
   onCancel: () => void;
   onToggleScreenshot: () => void;
@@ -54,7 +57,8 @@ function place(box: BrowserCommentDraft["box"], container: DOMRect, formHeight: 
  * changes, and after the form lays out, so it never spills past the viewport.
  */
 function BrowserCommentOverlayImpl(props: BrowserCommentOverlayProps): React.JSX.Element {
-  const { draft, containerRef, onSave, onCancel, onToggleScreenshot, onRemove } = props;
+  const { draft, containerRef, onSave, onCancel, onToggleScreenshot, onRemove, pageGeometry } =
+    props;
   const formRef = React.useRef<HTMLDivElement | null>(null);
   const [placement, setPlacement] = React.useState<Placement | null>(null);
 
@@ -62,8 +66,10 @@ function BrowserCommentOverlayImpl(props: BrowserCommentOverlayProps): React.JSX
     const container = containerRef.current?.getBoundingClientRect();
     if (!container) return;
     const formHeight = formRef.current?.offsetHeight ?? 180;
-    setPlacement(place(draft.box, container, formHeight));
-  }, [containerRef, draft.box, draft.id]);
+    setPlacement(
+      place(transformBrowserPageBounds(draft.box, pageGeometry ?? null), container, formHeight),
+    );
+  }, [containerRef, draft.box, draft.id, pageGeometry]);
 
   return (
     <div

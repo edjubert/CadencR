@@ -1,3 +1,4 @@
+mod adapter_defaults;
 mod adapter_trait;
 mod branching;
 mod config;
@@ -13,9 +14,10 @@ mod user_shell;
 pub use adapter_trait::AgentRuntimeAdapter;
 pub use branching::{BranchContext, BranchError, BranchResult, SessionBranching};
 pub use config::{
-    access_mode_wire, parse_access_mode_wire, static_config_paths, RuntimeAccessMode,
-    RuntimeMcpServerConfig, RuntimeMcpServerStatus, RuntimePermissionMode, RuntimeSpawnConfig,
-    RuntimeTokenUsage, RuntimeTokenUsageEntry, RuntimeUsage,
+    access_mode_wire, parse_access_mode_wire, static_config_paths, ResolvedRuntimeProfile,
+    RuntimeAccessMode, RuntimeConfigOverrides, RuntimeEffectiveConfig, RuntimeMcpServerConfig,
+    RuntimeMcpServerStatus, RuntimePermissionMode, RuntimeSpawnConfig, RuntimeTokenUsage,
+    RuntimeTokenUsageEntry, RuntimeUsage,
 };
 pub use error::RuntimeError;
 pub use event::RuntimeStreamScope;

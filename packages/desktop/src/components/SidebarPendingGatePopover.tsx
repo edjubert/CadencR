@@ -1,4 +1,4 @@
-import { memo, useMemo, type ReactElement, type ReactNode } from "react";
+import { memo, useMemo, type ReactElement } from "react";
 import { Loader2Icon, MessageCircleQuestionIcon, ShieldAlertIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -24,8 +24,6 @@ interface SidebarPendingGatePopoverProps {
   featureId: number;
   allowAutoOpen: boolean;
   onOpenConversation: () => void;
-  /** When set, this visual is the trigger (provider mark). Otherwise the gate icon. */
-  children?: ReactNode;
 }
 
 /** ~10 lines of text-xs / leading-snug before the body scrolls. */
@@ -43,7 +41,6 @@ export const SidebarPendingGatePopover = memo(function SidebarPendingGatePopover
   featureId,
   allowAutoOpen,
   onOpenConversation,
-  children,
 }: SidebarPendingGatePopoverProps): ReactElement {
   const { open, setOpen, setHovered, hoveredFeatureId } = usePendingGatePopoverOpen(
     featureId,
@@ -78,12 +75,11 @@ export const SidebarPendingGatePopover = memo(function SidebarPendingGatePopover
           onClick={(event) => event.stopPropagation()}
           onPointerDown={(event) => event.stopPropagation()}
         >
-          {children ??
-            (isPermissionTrigger ? (
-              <ShieldAlertIcon className="size-3.5" />
-            ) : (
-              <MessageCircleQuestionIcon className="size-3.5" />
-            ))}
+          {isPermissionTrigger ? (
+            <ShieldAlertIcon className="sidebar-pending-indicator size-3.5" />
+          ) : (
+            <MessageCircleQuestionIcon className="sidebar-pending-indicator size-3.5" />
+          )}
         </button>
       </PopoverTrigger>
       <PopoverContent

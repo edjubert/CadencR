@@ -9,74 +9,51 @@ minimumReleaseAge: 20160
 minimumReleaseAgeStrict: true
 minimumReleaseAgeIgnoreMissingTime: false
 minimumReleaseAgeExclude:
-  # Security update (PR #182): mermaid 11.16.1 is the first patched version for
-  # GHSA-3rrr-jr9j-h3q3, GHSA-6x64-9x62-f2gx, GHSA-c4c3-pg64-4m4v,
-  # GHSA-rhh3-jpg6-66xh, and GHSA-2v8p-3f2j-5mp7. Its fresh d3/iconify
-  # transitives also trip the age gate. Keep these exceptions exact and remove
-  # them after 2026-08-18T15:10:00Z, when the newest package is 14 days old.
-  - "mermaid@11.16.1"
-  - "@types/d3-geo@3.1.1"
-  - "tinyexec@1.3.0"
-  # Emergency security fix for CVE-2026-44705; tmp <0.2.6 is vulnerable.
-  - "tmp@0.2.6"
-  # Security fixes needed for the v0.10.0 build. These exact versions are
-  # allowed through the age gate so patched transitive dependencies can land
-  # immediately without weakening the policy for unrelated packages.
-  - "brace-expansion@1.1.17 || 2.1.3 || 5.0.8"
-  - "dompurify@3.4.12"
-  - "fast-uri@3.1.4"
-  - "immutable@4.3.9"
-  - "js-yaml@4.3.0"
-  - "linkify-it@5.0.2"
-  - "lodash-es@4.18.0"
-  - "markdown-it@14.2.0"
-  - "nanoid@3.3.8 || 5.0.9"
-  - "postcss@8.5.18"
-  - "svgo@4.0.2"
-  - "tar@7.5.21"
-  - "undici@7.28.0"
-  # Security updates (PR #62): vite 6.4.3 patches GHSA-fx2h-pf6j-xcff (HIGH,
-  # server.fs.deny bypass) + GHSA-v6wh-96g9-6wx3; astro 6.4.6 patches
-  # GHSA-2pvr-wf23-7pc7 (HIGH, Host-header SSRF) + GHSA-jrpj-wcv7-9fh9. The
-  # upgrade pulls fresh transitive deps (rollup 4.62.2 binaries, @clack/* 1.x,
-  # etc.) that trip the 14-day gate; excluded so the patches land now.
-  # TEMPORARY: remove all entries below once they age past minimumReleaseAge
-  # (publish dates ~2026-06-19, so safe to drop after ~2026-07-03).
-  - "vite@6.4.3"
-  - "vite@7.3.5"
-  - "astro@6.4.6"
-  - "rollup@4.62.2"
-  - "obug@2.1.3"
-  - "semver@7.8.5"
-  - "@clack/core@1.4.2"
-  - "@clack/prompts@1.6.0"
-  - "@capsizecss/unpack@4.0.1"
-  - "@emnapi/runtime@1.11.1"
-  - "@rollup/rollup-android-arm-eabi@4.62.2"
-  - "@rollup/rollup-android-arm64@4.62.2"
-  - "@rollup/rollup-darwin-arm64@4.62.2"
-  - "@rollup/rollup-darwin-x64@4.62.2"
-  - "@rollup/rollup-freebsd-arm64@4.62.2"
-  - "@rollup/rollup-freebsd-x64@4.62.2"
-  - "@rollup/rollup-linux-arm-gnueabihf@4.62.2"
-  - "@rollup/rollup-linux-arm-musleabihf@4.62.2"
-  - "@rollup/rollup-linux-arm64-gnu@4.62.2"
-  - "@rollup/rollup-linux-arm64-musl@4.62.2"
-  - "@rollup/rollup-linux-loong64-gnu@4.62.2"
-  - "@rollup/rollup-linux-loong64-musl@4.62.2"
-  - "@rollup/rollup-linux-ppc64-gnu@4.62.2"
-  - "@rollup/rollup-linux-ppc64-musl@4.62.2"
-  - "@rollup/rollup-linux-riscv64-gnu@4.62.2"
-  - "@rollup/rollup-linux-riscv64-musl@4.62.2"
-  - "@rollup/rollup-linux-s390x-gnu@4.62.2"
-  - "@rollup/rollup-linux-x64-gnu@4.62.2"
-  - "@rollup/rollup-linux-x64-musl@4.62.2"
-  - "@rollup/rollup-openbsd-x64@4.62.2"
-  - "@rollup/rollup-openharmony-arm64@4.62.2"
-  - "@rollup/rollup-win32-arm64-msvc@4.62.2"
-  - "@rollup/rollup-win32-ia32-msvc@4.62.2"
-  - "@rollup/rollup-win32-x64-gnu@4.62.2"
-  - "@rollup/rollup-win32-x64-msvc@4.62.2"
+  # GHSA-p98j-92pf-mc4p: use the fixed sanitizer release.
+  # Remove after 2026-10-07T15:29:57Z (14 days after publication).
+  - "dompurify@3.4.16"
+  # GHSA-ch52-4w7c-c8xp: 4.3.0 is outside the published affected range,
+  # but still needs the local max-stale patch declared below.
+  # Remove after 2026-10-18T02:56:05.593Z (14 days after publication).
+  - "http-cache-semantics@4.3.0"
+  # GHSA-68fv-2mgg-jv7q: reject pathological indexed source-map offsets.
+  # Remove after 2026-10-14T14:08:09.382Z (14 days after publication).
+  - "source-map-js@1.2.2"
+  # GHSA-wq5f-xc86-pv6w: include the fixed librsvg in every native bundle.
+  # Remove after 2026-10-11T13:46:24.509Z (14 days after publication).
+  - "sharp@0.35.5"
+  - "@img/sharp-darwin-arm64@0.35.5"
+  - "@img/sharp-darwin-x64@0.35.5"
+  - "@img/sharp-freebsd-wasm32@0.35.5"
+  - "@img/sharp-linux-arm@0.35.5"
+  - "@img/sharp-linux-arm64@0.35.5"
+  - "@img/sharp-linux-ppc64@0.35.5"
+  - "@img/sharp-linux-riscv64@0.35.5"
+  - "@img/sharp-linux-s390x@0.35.5"
+  - "@img/sharp-linux-x64@0.35.5"
+  - "@img/sharp-linuxmusl-arm64@0.35.5"
+  - "@img/sharp-linuxmusl-x64@0.35.5"
+  - "@img/sharp-wasm32@0.35.5"
+  - "@img/sharp-webcontainers-wasm32@0.35.5"
+  - "@img/sharp-win32-arm64@0.35.5"
+  - "@img/sharp-win32-ia32@0.35.5"
+  - "@img/sharp-win32-x64@0.35.5"
+  - "@img/sharp-libvips-darwin-arm64@1.3.4"
+  - "@img/sharp-libvips-darwin-x64@1.3.4"
+  - "@img/sharp-libvips-linux-arm@1.3.4"
+  - "@img/sharp-libvips-linux-arm64@1.3.4"
+  - "@img/sharp-libvips-linux-ppc64@1.3.4"
+  - "@img/sharp-libvips-linux-riscv64@1.3.4"
+  - "@img/sharp-libvips-linux-s390x@1.3.4"
+  - "@img/sharp-libvips-linux-x64@1.3.4"
+  - "@img/sharp-libvips-linuxmusl-arm64@1.3.4"
+  - "@img/sharp-libvips-linuxmusl-x64@1.3.4"
+  # First-party dependency, published from a repository we control
+  # (github.com/edjubert/celeritty). The 14-day soak exists to catch a
+  # compromised upstream release; it does not apply to a package whose
+  # source, CI and publishing key are ours. Keep this entry permanently
+  # rather than churning it on every release.
+  - "celeritty"
 blockExoticSubdeps: true
 trustPolicy: no-downgrade
 # Older packages often predate registry trust evidence; keep downgrade checks
@@ -86,34 +63,55 @@ trustPolicyIgnoreAfter: 525600
 overrides:
   "@stoplight/spectral-functions": 1.10.2
   "@stoplight/spectral-rulesets": 1.22.2
-  "brace-expansion@>=1.0.0 <1.1.17": 1.1.17
-  "brace-expansion@>=2.0.0 <2.1.3": 2.1.3
-  "brace-expansion@>=5.0.0 <5.0.8": 5.0.8
-  "dompurify@>=3.0.0 <3.4.12": 3.4.12
-  "fast-uri@>=3.0.0 <3.1.4": 3.1.4
+  "@xmldom/xmldom@>=0.8.0 <0.8.15": 0.8.15
+  "baseline-browser-mapping@>=2.0.0 <2.11.0": 2.11.0
+  "brace-expansion@>=1.0.0 <1.1.21": 1.1.21
+  "brace-expansion@>=2.0.0 <2.1.7": 2.1.7
+  "brace-expansion@>=5.0.0 <5.0.12": 5.0.12
+  "browserslist@>=4.0.0 <4.28.7": 4.28.7
+  "devalue@>=5.0.0 <5.9.3": 5.9.3
+  "dompurify@>=3.0.0 <3.4.16": 3.4.16
+  "fast-uri@>=3.0.0 <3.1.8": 3.1.8
+  # global-agent v4 preserves bootstrap() and removes roarr/sprintf-js,
+  # which has no published fix for GHSA-hp3w-g68c-fv3c.
+  "@electron/get@3>global-agent": 4.1.3
+  # Keep the security patch below until upstream fixes restricted cache reuse.
+  "http-cache-semantics@>=4.0.0 <4.3.0": 4.3.0
   "immutable@>=4.0.0 <4.3.9": 4.3.9
-  "js-yaml@>=4.0.0 <4.3.0": 4.3.0
+  "js-yaml@>=4.0.0 <4.3.2": 4.3.2
+  "katex@>=0.11.0 <0.18.2": 0.18.2
   "linkify-it@>=5.0.0 <5.0.2": 5.0.2
   "lodash-es@>=4.0.0 <4.18.0": 4.18.0
-  "markdown-it@>=14.0.0 <14.2.0": 14.2.0
-  "nanoid@>=3.0.0 <3.3.8": 3.3.8
+  "markdown-it@>=14.0.0 <14.3.1": 14.3.1
+  "nanoid@>=3.0.0 <3.3.18": 3.3.18
   # Upstream pins vulnerable Nano ID 4.0.2 exactly. Scope the required v5
   # replacement to its ESM consumer instead of rewriting every Nano ID edge.
-  "@excalidraw/mermaid-to-excalidraw@2.2.2>nanoid": 5.0.9
-  "postcss@>=8.0.0 <8.5.18": 8.5.18
-  "sharp@>=0.35.0 <0.35.3": 0.35.3
-  "svgo@>=4.0.0 <4.0.2": 4.0.2
+  "@excalidraw/mermaid-to-excalidraw@2.2.2>nanoid": 5.1.16
+  "postcss@>=8.0.0 <8.5.23": 8.5.23
+  # Excalidraw pins Sass 1.51.0, pulling in chokidar 3 and unpatched braces
+  # (GHSA-vfj7-8cjw-p6xm). A modern Sass removes that dependency chain.
+  "@excalidraw/excalidraw@0.18.1>sass": 1.104.0
+  "seroval@>=0.12.0 <1.6.3": 1.6.3
+  "sharp@>=0.35.0 <0.35.5": 0.35.5
+  "smol-toml@>=1.0.0 <1.9.0": 1.9.0
+  "source-map-js@>=1.0.0 <1.2.2": 1.2.2
+  "svgo@>=4.0.0 <4.1.0": 4.1.0
   "tar@>=7.0.0 <=7.5.20": 7.5.21
-  "undici@>=7.0.0 <7.28.0": 7.28.0
+  "tinypool@>=2.0.0 <2.1.2": 2.1.2
+  "undici@>=6.0.0 <6.28.1": 6.28.1
+  "undici@>=7.0.0 <7.29.1": 7.29.1
+  "undici@>=8.0.0 <8.10.2": 8.10.2
   volar-service-yaml: 0.0.71
 
 allowBuilds:
   # Keep dependency lifecycle scripts disabled by default. If a package truly
   # needs install-time native setup, review it explicitly before flipping it.
+  "@parcel/watcher": true
   electron-winstaller: false
   esbuild: false
   msw: false
   sharp: false
 
 patchedDependencies:
-  '@pierre/trees@1.0.0-beta.4': patches/@pierre__trees@1.0.0-beta.4.patch
+  "@pierre/trees@1.0.0-beta.4": patches/@pierre__trees@1.0.0-beta.4.patch
+  http-cache-semantics@4.3.0: patches/http-cache-semantics@4.3.0.patch

@@ -50,6 +50,10 @@ pub async fn resolve_target_branch(
         }
     }
 
+    if !crate::shared::git_context::has_git_metadata(repo).await? {
+        return Ok("main".to_string());
+    }
+
     // Tracking config: `branch.<head>.merge` points at the upstream this
     // branch was set up to merge into. When present it's the single best
     // signal — beats every heuristic below.

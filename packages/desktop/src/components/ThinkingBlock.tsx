@@ -21,6 +21,7 @@ interface ThinkingBlockProps {
   isStreaming?: boolean;
   expanded?: boolean;
   onExpandedChange?: (next: boolean) => void;
+  disableCache?: boolean;
 }
 
 export const ThinkingBlock = memo(function ThinkingBlock({
@@ -29,6 +30,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({
   isStreaming,
   expanded,
   onExpandedChange,
+  disableCache,
 }: ThinkingBlockProps): ReactElement | null {
   const [internalExpanded, setInternalExpanded] = useState(true);
   const isExpanded = expanded ?? internalExpanded;
@@ -90,6 +92,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({
             cacheKey={cacheKey}
             isStreaming={isStreaming}
             className="text-xs text-muted-foreground"
+            disableCache={disableCache}
           />
         </div>
       </CollapsibleSection>

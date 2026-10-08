@@ -2,7 +2,22 @@ use tracing::info;
 
 use crate::domain::agents::adapter::{RuntimeSessionWeakHandle, RuntimeSpawnConfig};
 
+use super::super::session_init_resume::persistable_resume_session_id_for_provider;
 use super::super::{QueryState, SdkSessions};
+
+pub(super) async fn runtime_allows_resume_persistence(
+    runtime: Option<&RuntimeSessionWeakHandle>,
+) -> bool {
+    let Some(runtime) = runtime.and_then(std::sync::Weak::upgrade) else {
+        // Negotiated capability belongs to the exact live runtime. If that
+        // runtime is already gone, persisting its ID would be a fail-open guess
+        // and could make the next process attempt an unusable resume.
+        return false;
+    };
+    let session = runtime.read().await;
+    let allows_persistence = session.allows_resume_persistence();
+    allows_persistence
+}
 
 pub(super) async fn transition_active_to_pending_on_stream_end(
     sdk_sessions: &SdkSessions,
@@ -35,6 +50,11 @@ pub(super) async fn transition_active_to_pending_on_stream_end(
     }
     let q = query.read().await;
     let runtime_session_id = q.session_id().await;
+    let resume_session_id = persistable_resume_session_id_for_provider(
+        &handle.runtime_provider,
+        runtime_session_id.as_deref(),
+        q.allows_resume_persistence(),
+    );
     handle.runtime_control_endpoint = q.runtime_control_endpoint();
     drop(q);
 
@@ -45,9 +65,14 @@ pub(super) async fn transition_active_to_pending_on_stream_end(
         model: handle.desired_model.clone(),
         thinking_effort: handle.desired_thinking_effort.clone(),
         system_prompt: handle.config.system_prompt.clone(),
-        resume_session_id: runtime_session_id,
+        resume_session_id,
         allow_bypass_permissions: handle.config.allow_bypass_permissions,
         env: handle.config.env.clone(),
+        env_unset: handle.config.env_unset.clone(),
+        profile: handle.config.claude_profile.clone(),
+        overrides: handle.config.overrides.clone(),
+        profile_revision: handle.config.profile_revision.clone(),
+        profile_state_identity: handle.config.profile_state_identity.clone(),
         ..RuntimeSpawnConfig::default()
     };
 
@@ -56,4 +81,12 @@ pub(super) async fn transition_active_to_pending_on_stream_end(
         "stream ended, transitioning Active -> Pending for resume"
     );
     handle.state = QueryState::Pending(options);
+}
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn missing_live_runtime_fails_closed() {
+        assert!(!super::runtime_allows_resume_persistence(None).await);
+    }
 }

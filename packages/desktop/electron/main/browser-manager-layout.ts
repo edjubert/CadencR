@@ -1,5 +1,6 @@
 import type { BrowserBounds } from "./browser-types";
 import type { BrowserWindow } from "electron";
+import { browserPageBounds } from "../../src/shared/browser-responsive";
 
 export interface BrowserWindowOffset {
   x: number;
@@ -67,13 +68,11 @@ export function offscreenBounds(bounds: BrowserBounds): BrowserBounds {
 }
 
 export function browserBounds(bounds: BrowserBounds, devtoolsOpen: boolean): BrowserBounds {
-  return devtoolsOpen
-    ? { ...bounds, height: Math.max(1, Math.floor(bounds.height * 0.62)) }
-    : bounds;
+  return browserPageBounds(bounds, devtoolsOpen);
 }
 
 export function devtoolsBounds(bounds: BrowserBounds): BrowserBounds {
-  const top = Math.floor(bounds.height * 0.62);
+  const top = browserPageBounds(bounds, true).height;
   return {
     x: bounds.x,
     y: bounds.y + top,

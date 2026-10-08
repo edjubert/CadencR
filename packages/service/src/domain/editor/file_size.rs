@@ -5,6 +5,13 @@
 /// keep the two in sync.
 pub const LARGE_FILE_OPEN_BYTES: u64 = 1_000_000;
 
+/// Bound the editor's JSON write/format bodies, including JSON escaping. The
+/// default 2 MiB limit blocks large files opened through "Edit anyway".
+/// Use the read path's 100 MiB OOM ceiling as the total request budget, not a
+/// guarantee that a 100 MiB file plus JSON escaping fits. Other APIs keep their
+/// default limit.
+pub const EDITOR_REQUEST_BODY_BYTES: usize = 100 * 1024 * 1024;
+
 #[cfg(test)]
 mod tests {
     use super::*;

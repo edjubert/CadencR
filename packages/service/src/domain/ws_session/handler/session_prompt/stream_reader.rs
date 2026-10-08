@@ -40,7 +40,7 @@ pub(crate) fn spawn_stream_reader(
         app_state,
         cleanup_session_on_end,
     };
-    crate::domain::ws_session::stream_readers::spawn(shutdown_runtime, async move {
+    crate::domain::ws_session::stream_readers::spawn(db_session_id, shutdown_runtime, async move {
         task.run().await;
     });
 }

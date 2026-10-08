@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   captureDomOutline,
   captureDomSnapshot,
+  captureElementContext,
+  capturePageImage,
   captureRegionScreenshot,
   captureScreenshot,
   evaluateInPage,
@@ -14,6 +16,7 @@ interface MockWebContents {
     attach: ReturnType<typeof vi.fn>;
     sendCommand: ReturnType<typeof vi.fn>;
   };
+  capturePage: ReturnType<typeof vi.fn>;
   executeJavaScript: ReturnType<typeof vi.fn>;
 }
 
@@ -24,6 +27,7 @@ function mockWebContents(overrides: Partial<MockWebContents> = {}): MockWebConte
       attach: vi.fn(),
       sendCommand: vi.fn(async () => ({ data: "png-data" })),
     },
+    capturePage: vi.fn(),
     executeJavaScript: vi.fn(),
     ...overrides,
   };
@@ -32,6 +36,30 @@ function mockWebContents(overrides: Partial<MockWebContents> = {}): MockWebConte
 function asWebContents(mock: MockWebContents): Electron.WebContents {
   return mock as unknown as Electron.WebContents;
 }
+
+describe("capturePageImage", () => {
+  it("treats the exact unavailable display surface rejection as an empty preview", async () => {
+    const wc = mockWebContents({
+      capturePage: vi.fn(async () => {
+        throw new Error("Current display surface not available for capture");
+      }),
+    });
+
+    await expect(capturePageImage(asWebContents(wc))).resolves.toBe("");
+  });
+
+  it("preserves every other capture failure", async () => {
+    const wc = mockWebContents({
+      capturePage: vi.fn(async () => {
+        throw new Error("Current display surface was destroyed");
+      }),
+    });
+
+    await expect(capturePageImage(asWebContents(wc))).rejects.toThrow(
+      "Current display surface was destroyed",
+    );
+  });
+});
 
 describe("captureScreenshot", () => {
   it("returns the base64 image data from CDP", async () => {
@@ -44,10 +72,10 @@ describe("captureScreenshot", () => {
 
   it("forwards a clip region to CDP", async () => {
     const wc = mockWebContents();
-    await captureScreenshot(asWebContents(wc), { x: 1, y: 2, width: 3, height: 4 });
+    await captureScreenshot(asWebContents(wc), { x: 1, y: 2, width: 3, height: 4 }, 2);
     expect(wc.debugger.sendCommand).toHaveBeenCalledWith("Page.captureScreenshot", {
       format: "png",
-      clip: { x: 1, y: 2, width: 3, height: 4, scale: 1 },
+      clip: { x: 2, y: 4, width: 6, height: 8, scale: 1 },
     });
   });
 
@@ -56,6 +84,44 @@ describe("captureScreenshot", () => {
       debugger: { isAttached: () => true, attach: vi.fn(), sendCommand: vi.fn(async () => ({})) },
     });
     await expect(captureScreenshot(asWebContents(wc))).rejects.toThrow("did not return image data");
+  });
+});
+
+describe("captureElementContext", () => {
+  it("reads the screenshot scale after the user finishes picking", async () => {
+    let resolveSelection!: (value: unknown) => void;
+    const selection = new Promise<unknown>((resolve) => {
+      resolveSelection = resolve;
+    });
+    const wc = mockWebContents({ executeJavaScript: vi.fn(() => selection) });
+    let screenshotScale = 1;
+
+    const result = captureElementContext(
+      asWebContents(wc),
+      {
+        tabId: "tab-1",
+        url: "https://example.test",
+        title: "Example",
+        capturedAt: "2026-09-08T00:00:00.000Z",
+      },
+      { consoleErrors: [], failedNetworkRequests: [] },
+      null,
+      () => screenshotScale,
+    );
+    screenshotScale = 1.2;
+    resolveSelection({
+      selectorCandidates: ["h1"],
+      tagName: "h1",
+      attributes: {},
+      boundingBox: { x: 10, y: 20, width: 30, height: 40 },
+      computedStyles: {},
+    });
+
+    await expect(result).resolves.toMatchObject({ screenshotPngBase64: "png-data" });
+    expect(wc.debugger.sendCommand).toHaveBeenCalledWith("Page.captureScreenshot", {
+      format: "png",
+      clip: { x: 12, y: 24, width: 36, height: 48, scale: 1 },
+    });
   });
 });
 

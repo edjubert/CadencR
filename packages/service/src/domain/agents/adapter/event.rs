@@ -119,6 +119,16 @@ impl RuntimeEvent {
         }
     }
 
+    /// Init and catch-all provider signals carry operational metadata, not
+    /// transcript blocks. Consume their side effects before omitting their raw
+    /// payload from the conversation projection.
+    pub fn is_operational_only(&self) -> bool {
+        matches!(
+            self.kind,
+            RuntimeEventKind::Init(_) | RuntimeEventKind::Other
+        )
+    }
+
     pub fn assistant_message(&self) -> Option<&RuntimeAssistantMessage> {
         match &self.kind {
             RuntimeEventKind::AssistantMessage { message, .. } => Some(message),
@@ -334,6 +344,31 @@ mod tests {
         RuntimeAssistantMessage, RuntimeContentBlock, RuntimeEvent, RuntimeEventKind,
         RuntimeEventMetadata, RuntimeStreamEvent,
     };
+
+    #[test]
+    fn operational_signals_do_not_hide_renderable_events_or_results() {
+        let init = RuntimeEventKind::Init(super::RuntimeInitEvent {
+            model: None,
+            mcp_servers: Vec::new(),
+            context_window: None,
+        });
+        for kind in [init, RuntimeEventKind::Other] {
+            assert!(RuntimeEvent::new(RuntimeEventMetadata::default(), kind).is_operational_only());
+        }
+        for kind in [
+            RuntimeEventKind::Result,
+            RuntimeEventKind::StreamEvent {
+                event: RuntimeStreamEvent::MessageStart {
+                    model: None,
+                    input_tokens: None,
+                },
+                parent_tool_use_id: None,
+            },
+        ] {
+            assert!(!RuntimeEvent::new(RuntimeEventMetadata::default(), kind).is_operational_only());
+        }
+        assert!(!assistant_event_with_raw().is_operational_only());
+    }
 
     fn assistant_event_with_raw() -> RuntimeEvent {
         RuntimeEvent::new(

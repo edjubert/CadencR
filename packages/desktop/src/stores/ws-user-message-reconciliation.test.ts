@@ -111,6 +111,107 @@ describe("canonical user-message reconciliation", () => {
     expect(merged.map((item) => item.id)).toEqual(["msg-9", "msg-10", "msg-11"]);
   });
 
+  it("grafts paginated children into an already-held parent without overwriting it", () => {
+    const heldParent = {
+      ...block("msg-10", "tool_call"),
+      content: "live parent content",
+      childBlocks: [block("msg-11")],
+    };
+    const pageParent = {
+      ...block("msg-10", "tool_call"),
+      content: "stale snapshot content",
+      childBlocks: [block("msg-11"), block("msg-12"), block("msg-13")],
+    };
+
+    const merged = mergeCanonicalBlocks([heldParent], [pageParent]);
+
+    expect(merged[0].content).toBe("live parent content");
+    expect(merged[0].childBlocks?.map((child) => child.id)).toEqual(["msg-11", "msg-12", "msg-13"]);
+  });
+
+  it("recursively grafts a cross-page grandchild beneath both held ancestors", () => {
+    const held = {
+      ...block("msg-1", "tool_call"),
+      childBlocks: [{ ...block("msg-2", "tool_call"), childBlocks: [block("msg-3")] }],
+    };
+    const page = {
+      ...block("msg-1", "tool_call"),
+      childBlocks: [
+        {
+          ...block("msg-2", "tool_call"),
+          childBlocks: [block("msg-3"), block("msg-44")],
+        },
+      ],
+    };
+
+    const merged = mergeCanonicalBlocks([held], [page]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0].childBlocks).toHaveLength(1);
+    expect(merged[0].childBlocks?.[0].childBlocks?.map((child) => child.id)).toEqual([
+      "msg-3",
+      "msg-44",
+    ]);
+  });
+
+  it("adds a result-derived patch to a held file-change call without replacing its args", () => {
+    const held = {
+      ...block("msg-40", "tool_call"),
+      toolName: "ApplyPatch",
+      content: '{"path":"src/a.ts"}',
+      toolArgs: '{"path":"src/a.ts"}',
+    };
+    const enriched = {
+      ...held,
+      content: '{"path":"src/a.ts","patch_text":"*** Begin Patch\\n+line"}',
+      toolArgs: '{"path":"src/a.ts","patch_text":"*** Begin Patch\\n+line"}',
+    };
+
+    const merged = mergeCanonicalBlocks([held], [enriched]);
+
+    expect(JSON.parse(merged[0].content)).toEqual({
+      path: "src/a.ts",
+      patch_text: "*** Begin Patch\n+line",
+    });
+    expect(JSON.parse(merged[0].toolArgs ?? "")).toEqual({
+      path: "src/a.ts",
+      patch_text: "*** Begin Patch\n+line",
+    });
+  });
+
+  it("keeps an existing full patch unflagged when incoming enrichment is truncated", () => {
+    const held = {
+      ...block("msg-40", "tool_call"),
+      toolName: "ApplyPatch",
+      content: '{"path":"src/a.ts","patch_text":"complete"}',
+      toolArgs: '{"path":"src/a.ts","patch_text":"complete"}',
+    };
+    const merged = mergeCanonicalBlocks(
+      [held],
+      [{ ...held, content: '{"patch_text":"partial"}', truncatedContent: true }],
+    );
+
+    expect(merged[0].content).toBe(held.content);
+    expect(merged[0].truncatedContent).toBeUndefined();
+  });
+
+  it("flags missing patch content when the only incoming enrichment is truncated", () => {
+    const held = {
+      ...block("msg-40", "tool_call"),
+      toolName: "ApplyPatch",
+      content: '{"path":"src/a.ts"}',
+      toolArgs: '{"path":"src/a.ts"}',
+    };
+    const merged = mergeCanonicalBlocks(
+      [held],
+      [{ ...held, content: '{"patch_text":"partial"}', truncatedContent: true }],
+    );
+
+    expect(merged[0].content).toBe(held.content);
+    expect(merged[0].toolArgs).toBe(held.toolArgs);
+    expect(merged[0].truncatedContent).toBe(true);
+  });
+
   it("inserts a recovered message at its database position", () => {
     const merged = upsertCanonicalUserMessage(
       [block("msg-41"), block("msg-43")],

@@ -17,6 +17,7 @@ mod permission_user_message;
 mod power;
 mod profile;
 mod provider;
+mod runtime_overrides;
 mod session_config;
 
 pub(super) use access_mode::handle_access_mode_set;
@@ -29,6 +30,9 @@ pub(crate) use permission_dispatch::handle_permission_respond;
 pub(super) use power::{handle_resume, handle_retry_worktree_setup, handle_suspend};
 pub(super) use profile::handle_profile_set;
 pub(super) use provider::handle_provider_set;
+#[cfg(test)]
+pub(super) use provider::{read_persisted_selection, restore_persisted_selection};
+pub(super) use runtime_overrides::handle_runtime_overrides_set;
 pub(super) use session_config::{handle_session_config_get, handle_session_config_set};
 
 use axum::extract::ws::Message;

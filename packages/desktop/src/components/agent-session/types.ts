@@ -25,6 +25,18 @@ import type { AgentCatalog } from "@/api/agentRuntime";
 import type { ClaudeProfileSelection } from "./useClaudeProfileSelection";
 import type { TurnLifecycle } from "@/stores/ws-turn-lifecycle";
 import type { TurnTimingState } from "@/stores/ws-turn-timing";
+import type { RuntimeSelection } from "@/shared/models";
+import type { RuntimeSessionConfigSnapshot, RuntimeSessionConfigValue } from "@/api/generated";
+
+export interface SessionConfigControls {
+  config: RuntimeSessionConfigSnapshot | null;
+  loading: boolean;
+  supported: boolean | null;
+  error: string | null;
+  pendingId: string | null;
+  onRefresh: () => void;
+  onChange: (configId: string, value: RuntimeSessionConfigValue) => void;
+}
 
 export interface AgentSessionProps {
   /** The type of agent being displayed */
@@ -133,10 +145,12 @@ export interface AgentSessionProps {
   onGateClose?: () => void;
   /** Context usage data for this session */
   contextUsage?: ContextUsageState | null;
-  /** Current model ID for the session (used for inline model switcher) */
-  currentModelId?: string;
-  /** Current runtime provider ID for the session */
-  currentProviderId?: string;
+  /**
+   * The confirmed runtime pair, or `null` while it is unknown. A single object
+   * so the icon and the label cannot disagree — they now derive from the same
+   * source rather than from two independently-updated props.
+   */
+  selection?: RuntimeSelection | null;
   /** Called when the user changes the provider before the first message */
   onProviderChange?: (providerId: string) => void;
   /**
@@ -192,6 +206,7 @@ export interface AgentSessionProps {
   runtimeProvider?: string;
   /** Opaque runtime session ID to display above the prompt bar */
   runtimeSessionId?: string;
+  sessionConfigControls?: SessionConfigControls;
   /** Override slash commands (bypasses tRPC fetch). Used by ws-session. */
   slashCommandsOverride?: SlashCommand[];
   /** Provider-owned syntax for invoking commands and skills. */

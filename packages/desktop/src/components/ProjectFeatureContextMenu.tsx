@@ -32,10 +32,16 @@ interface ProjectFeatureContextMenuProps {
   hasActivity: boolean;
   shellCount: number;
   browserCount: number;
+  downloadCount: number;
   onNavigate: (feature: Feature) => void;
   onTogglePin: (featureId: number, pinned: boolean) => void;
   onStartLabelEditAfterMenuClose: () => void;
-  onCloseActivity: (featureId: number, shellCount: number, browserCount: number) => void;
+  onCloseActivity: (
+    featureId: number,
+    shellCount: number,
+    browserCount: number,
+    downloadCount: number,
+  ) => void;
   onUnarchive: (featureId: number) => void;
   onArchiveOrDelete: (featureId: number) => void;
 }
@@ -50,6 +56,7 @@ export function ProjectFeatureContextMenu({
   hasActivity,
   shellCount,
   browserCount,
+  downloadCount,
   onNavigate,
   onTogglePin,
   onStartLabelEditAfterMenuClose,
@@ -79,9 +86,9 @@ export function ProjectFeatureContextMenu({
       {hasActivity && (
         <ContextMenuActionItem
           icon={XIcon}
-          onSelect={() => onCloseActivity(feature.id, shellCount, browserCount)}
+          onSelect={() => onCloseActivity(feature.id, shellCount, browserCount, downloadCount)}
         >
-          {`Close ${closeFeatureActivityNoun(shellCount, browserCount)}`}
+          {`Close ${closeFeatureActivityNoun(shellCount, browserCount, downloadCount)}`}
         </ContextMenuActionItem>
       )}
       <ContextMenuSeparator />

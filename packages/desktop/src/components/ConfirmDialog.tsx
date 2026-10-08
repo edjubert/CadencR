@@ -7,6 +7,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Loader2Icon } from "lucide-react";
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -16,7 +17,8 @@ interface ConfirmDialogProps {
   children?: React.ReactNode;
   confirmText?: string;
   variant?: "default" | "destructive";
-  onConfirm: () => void;
+  busy?: boolean;
+  onConfirm: () => void | null | boolean | Promise<void | boolean>;
 }
 
 export function ConfirmDialog({
@@ -27,22 +29,24 @@ export function ConfirmDialog({
   children,
   confirmText = "Confirm",
   variant = "default",
+  busy = false,
   onConfirm,
 }: ConfirmDialogProps) {
-  const handleConfirm = () => {
-    onConfirm();
-    onOpenChange(false);
+  const handleConfirm = async (): Promise<void> => {
+    if (busy) return;
+    const confirmed = await onConfirm();
+    if (confirmed !== false) onOpenChange(false);
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <DialogContent
         showCloseButton={false}
         className="sm:max-w-sm"
         onKeyDown={(e) => {
-          if (e.key === "Enter") {
+          if (e.key === "Enter" && !busy) {
             e.preventDefault();
-            handleConfirm();
+            void handleConfirm();
           }
         }}
       >
@@ -52,10 +56,16 @@ export function ConfirmDialog({
         </DialogHeader>
         {children}
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button variant={variant} onClick={handleConfirm}>
+          <Button
+            variant={variant}
+            disabled={busy}
+            aria-busy={busy}
+            onClick={() => void handleConfirm()}
+          >
+            {busy ? <Loader2Icon className="size-4 animate-spin" /> : null}
             {confirmText}
           </Button>
         </DialogFooter>

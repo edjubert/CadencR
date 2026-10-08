@@ -1,0 +1,58 @@
+/* Shape and color distinguish activity from a finished, unread response,
+ * even with animations disabled. Provider branding stays independent. */
+.sidebar-status-working {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  color: var(--color-blue-500);
+  border: 2px solid color-mix(in oklab, currentColor 25%, transparent);
+  border-top-color: currentColor;
+  border-right-color: currentColor;
+  animation: sidebar-status-spin 1s linear infinite;
+}
+
+.sidebar-status-unread {
+  display: inline-flex;
+  color: var(--acc-green);
+}
+
+@keyframes sidebar-status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.sidebar-pending-indicator {
+  filter: drop-shadow(0 0 4px color-mix(in oklab, currentColor 45%, transparent));
+}
+
+/* Sharing one fixed slot makes modifier hints replace identity without
+ * moving the title. CSS follows the existing imperative badge paint path. */
+[data-sidebar-identity-slot]:has([data-visible="true"]) .sidebar-provider-logo {
+  visibility: hidden;
+}
+
+/* Reclaim the old permanently reserved action columns for conversation names.
+ * Keyboard focus and touch users get the same actions as pointer hover. */
+.sidebar-row-actions {
+  display: none;
+}
+[data-nav-type="feature"]:is(:hover, :focus-within) .sidebar-row-actions {
+  display: inline-flex;
+}
+
+@media (hover: none) {
+  .sidebar-row-actions {
+    display: inline-flex;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-status-working {
+    animation: none;
+  }
+}
+html[data-animations="off"] .sidebar-status-working {
+  animation: none;
+}

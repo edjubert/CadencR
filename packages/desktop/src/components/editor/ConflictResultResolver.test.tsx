@@ -1,3 +1,4 @@
+import { Text } from "@codemirror/state";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@/test-utils";
 import { useEditorStore } from "@/stores/editor-store";
@@ -14,7 +15,12 @@ vi.mock("./useEditorFormat", () => ({ useEditorFormat: () => ({ beforeWrite: und
 vi.mock("./useEditorSave", () => ({
   useEditorSave: () => ({
     save: mocks.save,
+    saveForClose: mocks.save,
     saveQuiet: mocks.saveQuiet,
+    onDocChange: () => {
+      useEditorStore.getState().setDirty(7, "main", "conflict.ts", true);
+      return true;
+    },
     autoSavedVisible: false,
     isSaving: false,
     errorMessage: null,
@@ -24,16 +30,16 @@ vi.mock("./editorSaveRegistry", () => ({ registerSave: vi.fn(), unregisterSave: 
 vi.mock("./BaseCodeMirrorEditor", () => ({
   default: ({
     initialContent,
-    onChange,
+    onDocChange,
     onSave,
   }: {
     initialContent?: string;
-    onChange?: (content: string) => void;
+    onDocChange?: (content: Text) => void;
     onSave?: () => void;
   }) => (
     <div>
       <output>{initialContent}</output>
-      <button type="button" onClick={() => onChange?.("edited Result")}>
+      <button type="button" onClick={() => onDocChange?.(Text.of(["edited Result"]))}>
         Edit Result
       </button>
       <button type="button" onClick={onSave}>

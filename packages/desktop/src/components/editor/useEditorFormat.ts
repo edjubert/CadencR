@@ -5,7 +5,7 @@
  * and apply the returned text as a single edit. Errors surface as a toast — a
  * parse/config error in the formatter must never be swallowed.
  */
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { EditorView } from "@codemirror/view";
 import type { RefObject } from "react";
 import { toast } from "sonner";
@@ -27,6 +27,7 @@ interface UseEditorFormatResult {
   /** Format the buffer in place. No-op + returns false when no formatter is
    * configured. Surfaces formatter errors as a toast. */
   formatDocument: () => Promise<boolean>;
+  isFormatting: boolean;
   /** Pre-save step for `useEditorSave.beforeWrite` when format-on-save is on;
    * `undefined` (stable) otherwise so the save callback stays stable. */
   beforeWrite: (() => Promise<void>) | undefined;
@@ -53,28 +54,38 @@ export function useEditorFormat({
   largeMode,
 }: UseEditorFormatArgs): UseEditorFormatResult {
   const tooling = useProjectEditorTooling(projectId);
+  const [pendingFormats, setPendingFormats] = useState(0);
+  const isFormatting = pendingFormats > 0;
+  const requestRef = useRef(0);
   const canFormat = tooling.formatter !== "off";
 
   const formatDocument = useCallback(async (): Promise<boolean> => {
     const view = viewRef.current;
-    if (!view || tooling.formatter === "off") return false;
+    if (!view || largeMode || tooling.formatter === "off") return false;
+    const doc = view.state.doc;
+    const request = ++requestRef.current;
+    setPendingFormats((count) => count + 1);
     try {
       const { content } = await format({
         project_id: projectId,
         feature_id: featureId,
         file_path: filePath,
-        content: view.state.doc.toString(),
+        content: doc.toString(),
         formatter: tooling.formatter,
       });
-      // The view may have changed identity between request and response.
-      const live = viewRef.current;
-      if (live) applyFormatted(live, content);
+      // A formatter response only owns the exact document it was requested for.
+      if (request !== requestRef.current || viewRef.current !== view || view.state.doc !== doc) {
+        return false;
+      }
+      applyFormatted(view, content);
       return true;
     } catch (err) {
       toast.error(apiErrorMessage(err, "Failed to format document"));
       return false;
+    } finally {
+      setPendingFormats((count) => count - 1);
     }
-  }, [projectId, featureId, filePath, tooling.formatter, viewRef]);
+  }, [largeMode, projectId, featureId, filePath, tooling.formatter, viewRef]);
 
   // Manual "Format document" command (⌘⇧I). Capture-phase so it fires while
   // focus is inside the CodeMirror buffer; gated on a configured formatter.
@@ -95,5 +106,8 @@ export function useEditorFormat({
     };
   }, [canFormat, tooling.formatOnSave, largeMode, formatDocument]);
 
-  return { formatDocument, beforeWrite };
+  return useMemo(
+    () => ({ formatDocument, beforeWrite, isFormatting }),
+    [formatDocument, beforeWrite, isFormatting],
+  );
 }

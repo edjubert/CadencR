@@ -1,10 +1,22 @@
-import { isFeatureEmpty, type Feature, type IsEmptyResponse } from "@/api/generated";
+import {
+  getFeatureArchivePreview,
+  isFeatureEmpty,
+  type ArchivePreview,
+  type Feature,
+  type IsEmptyResponse,
+} from "@/api/generated";
 
 export type FeatureArchiveAction = "archive" | "delete";
 
-export function getFeatureArchiveAction(feature: Feature, empty: boolean): FeatureArchiveAction {
+type FeatureArchiveRelationPreview = Pick<ArchivePreview, "has_relations">;
+
+export function getFeatureArchiveAction(
+  feature: Feature,
+  empty: boolean,
+  hasRelations = false,
+): FeatureArchiveAction {
   if (feature.status === "archived") return "delete";
-  return empty ? "delete" : "archive";
+  return empty && !hasRelations ? "delete" : "archive";
 }
 
 export function getPendingFeatureArchiveAction(args: {
@@ -12,13 +24,28 @@ export function getPendingFeatureArchiveAction(args: {
   emptyResponse: IsEmptyResponse | undefined;
   isCheckingEmpty: boolean;
   hasEmptyCheckError: boolean;
+  relationPreview?: FeatureArchiveRelationPreview;
+  isCheckingRelations?: boolean;
+  hasRelationCheckError?: boolean;
 }): FeatureArchiveAction | null {
-  const { feature, emptyResponse, isCheckingEmpty, hasEmptyCheckError } = args;
+  const {
+    feature,
+    emptyResponse,
+    isCheckingEmpty,
+    hasEmptyCheckError,
+    relationPreview,
+    isCheckingRelations = false,
+    hasRelationCheckError = false,
+  } = args;
   if (!feature) return null;
   if (feature.status === "archived") return "delete";
-  if (isCheckingEmpty) return null;
-  if (hasEmptyCheckError) return "archive";
-  return getFeatureArchiveAction(feature, emptyResponse?.empty ?? false);
+  if (isCheckingEmpty || isCheckingRelations) return null;
+  if (hasEmptyCheckError || hasRelationCheckError) return "archive";
+  return getFeatureArchiveAction(
+    feature,
+    emptyResponse?.empty ?? false,
+    relationPreview?.has_relations ?? false,
+  );
 }
 
 export function deleteFeatureDialogTitle(feature: Feature | undefined): string {
@@ -27,6 +54,9 @@ export function deleteFeatureDialogTitle(feature: Feature | undefined): string {
 
 export async function resolveFeatureArchiveAction(feature: Feature): Promise<FeatureArchiveAction> {
   if (feature.status === "archived") return "delete";
-  const emptyResponse = await isFeatureEmpty(feature.id);
-  return getFeatureArchiveAction(feature, emptyResponse.empty);
+  const [preview, emptyResponse] = await Promise.all([
+    getFeatureArchivePreview(feature.id),
+    isFeatureEmpty(feature.id),
+  ]);
+  return getFeatureArchiveAction(feature, emptyResponse.empty, preview.has_relations);
 }

@@ -14,6 +14,7 @@ mod graph;
 mod image;
 mod stash;
 mod worktree;
+mod worktree_list;
 
 pub use blame::*;
 pub use branch::*;
@@ -23,6 +24,7 @@ pub use graph::*;
 pub use image::*;
 pub use stash::*;
 pub use worktree::*;
+pub use worktree_list::*;
 
 // ---------------------------------------------------------------------------
 // Feature-setting key constants
@@ -91,10 +93,26 @@ pub(super) fn is_dirty_worktree_remove_error(err: &AppError) -> bool {
         || message.contains("use --force")
 }
 
-/// Resolve the live git directory for a feature. A stale worktree setting can
+/// Resolve a feature path only when it has Git metadata. Optional read endpoints
+/// already use `None` for empty results; mutations reject it before running Git.
+pub async fn resolve_feature_git_path(
+    state: &AppState,
+    feature_id: i64,
+) -> Result<Option<String>, AppError> {
+    let Some(path) = resolve_feature_working_path(state, feature_id).await? else {
+        return Ok(None);
+    };
+    Ok(
+        crate::shared::git_context::has_git_metadata(Path::new(&path))
+            .await?
+            .then_some(path),
+    )
+}
+
+/// Resolve the working directory, including for projects without Git. A stale worktree setting can
 /// point at a deleted directory or at residual files left after Git detached
 /// the worktree; both cases fall back to the project path.
-pub async fn resolve_feature_git_path(
+pub async fn resolve_feature_working_path(
     state: &AppState,
     feature_id: i64,
 ) -> Result<Option<String>, AppError> {
@@ -110,6 +128,9 @@ pub async fn resolve_feature_git_path(
     let wt = repository::get_feature_setting(&state.read_pool, feature_id, SETTING_WORKTREE_PATH)
         .await?;
     if let Some(path) = wt {
+        if !crate::shared::git_context::has_git_metadata(Path::new(&project_path)).await? {
+            return Ok(Some(project_path));
+        }
         if commands::is_live_worktree(Path::new(&project_path), Path::new(&path)).await? {
             return Ok(Some(path));
         }

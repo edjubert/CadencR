@@ -14,6 +14,7 @@ use crate::domain::ws_session::protocol::{
     RuntimeSessionIdPayload, SessionErrorPayload, WsEnvelope, WsSessionAction,
 };
 
+use super::session_init_resume::persistable_resume_session_id_for_provider;
 use super::types::WsSender;
 
 /// Parse a session_id string from client payload into i64 DB key.
@@ -24,13 +25,19 @@ pub(super) fn parse_session_id(s: &str) -> Option<i64> {
 /// Persist the runtime session ID from the active runtime, close it, and return the ID.
 pub(super) async fn persist_and_close_query(
     query: &RuntimeSessionHandle,
-    pool: &sqlx::SqlitePool,
+    app_state: &crate::app_state::AppState,
     db_session_id: i64,
     runtime_provider: &str,
+    feature_id: i64,
 ) -> Option<String> {
     let mut q = query.write().await;
     let cli_sid = q.session_id().await;
-    if let Some(ref sid) = cli_sid {
+    let resume_sid = persistable_resume_session_id_for_provider(
+        runtime_provider,
+        cli_sid.as_deref(),
+        q.allows_resume_persistence(),
+    );
+    if let Some(ref sid) = resume_sid {
         debug!(
             db_session_id,
             runtime_provider = %runtime_provider,
@@ -38,15 +45,37 @@ pub(super) async fn persist_and_close_query(
             "persist_and_close: saving runtime session_id"
         );
         WsSessionPersistence::persist_runtime_session_id_static(
-            pool,
+            &app_state.write_pool,
             db_session_id,
             runtime_provider,
             sid,
         )
         .await;
     }
-    q.close().await;
-    cli_sid
+    if let Err(error) = q.close().await {
+        let message = error.to_string();
+        tracing::warn!(db_session_id, %error, "runtime close failed after local cleanup");
+        WsSessionPersistence::persist_error_message_static(
+            &app_state.write_pool,
+            db_session_id,
+            &message,
+            None,
+        )
+        .await;
+        let envelope = WsEnvelope::session_event(
+            WsSessionAction::Error,
+            SessionErrorPayload {
+                code: "RUNTIME_CLOSE_FAILED".into(),
+                message,
+                ..Default::default()
+            },
+        )
+        .expect("runtime close error should serialize");
+        for sender in app_state.ws_feature_senders.get_senders(feature_id).await {
+            let _ = sender.send(Message::Text(String::from(envelope.clone()).into()));
+        }
+    }
+    resume_sid
 }
 
 /// Send an error envelope back to the client.

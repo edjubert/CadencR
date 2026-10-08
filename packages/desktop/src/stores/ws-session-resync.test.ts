@@ -41,10 +41,14 @@ function createSession(
     featureId: 1077,
     sessionDbId: 2586,
     lastAppliedMessageId,
+    lastAppliedContentRevision: 7,
   };
 }
 
-const afterCursor = (cursor: number) => ({ after: JSON.stringify({ 2586: cursor }) });
+const afterCursor = (cursor: number, revision = 0) => ({
+  after: JSON.stringify({ 2586: cursor }),
+  after_revisions: JSON.stringify({ 2586: revision }),
+});
 
 describe("resyncMessagesOnReconnect", () => {
   beforeEach(() => {
@@ -68,7 +72,7 @@ describe("resyncMessagesOnReconnect", () => {
     const session = ctx.get().sessions.s1;
     expect(session.blocks.map((b) => b.id)).toEqual(["msg-10", "msg-11", "msg-12"]);
     expect(session.lastAppliedMessageId).toBe(12);
-    expect(apiMocks.getFeatureAgentState).toHaveBeenCalledWith(1077, afterCursor(10));
+    expect(apiMocks.getFeatureAgentState).toHaveBeenCalledWith(1077, afterCursor(10, 7));
   });
 
   it("de-dupes messages already received live while using the snapshot cursor", async () => {
@@ -87,7 +91,7 @@ describe("resyncMessagesOnReconnect", () => {
     expect(session.blocks.map((b) => b.id)).toEqual(["msg-10", "msg-11"]);
     expect(session.lastAppliedMessageId).toBe(11);
     // The overlapping fetch is reconciled rather than skipped.
-    expect(apiMocks.getFeatureAgentState).toHaveBeenCalledWith(1077, afterCursor(10));
+    expect(apiMocks.getFeatureAgentState).toHaveBeenCalledWith(1077, afterCursor(10, 7));
   });
 
   it("does not treat an explicitly stamped live DB id as a gap-free cursor", async () => {
@@ -105,7 +109,7 @@ describe("resyncMessagesOnReconnect", () => {
 
     await resyncMessagesOnReconnect(ctx, "s1");
 
-    expect(apiMocks.getFeatureAgentState).toHaveBeenCalledWith(1077, afterCursor(10));
+    expect(apiMocks.getFeatureAgentState).toHaveBeenCalledWith(1077, afterCursor(10, 7));
   });
 
   it("recovers an earlier dropped row even after a later canonical event arrived", async () => {
@@ -132,7 +136,7 @@ describe("resyncMessagesOnReconnect", () => {
     const session = ctx.get().sessions.s1;
     expect(session.blocks.map((block) => block.id)).toEqual(["msg-10", "msg-11", "msg-12"]);
     expect(session.lastAppliedMessageId).toBe(12);
-    expect(apiMocks.getFeatureAgentState).toHaveBeenCalledWith(1077, afterCursor(10));
+    expect(apiMocks.getFeatureAgentState).toHaveBeenCalledWith(1077, afterCursor(10, 7));
   });
 
   it("reconciles the former ws-user id with its canonical persisted clone", async () => {
@@ -193,7 +197,7 @@ describe("resyncMessagesOnReconnect", () => {
     await resyncMessagesOnReconnect(ctx, "s1");
 
     expect(ctx.get().sessions.s1.blocks[0].promptDeliveryState).toBe("delivery_unknown");
-    expect(apiMocks.getFeatureAgentState).toHaveBeenCalledWith(1077, afterCursor(10));
+    expect(apiMocks.getFeatureAgentState).toHaveBeenCalledWith(1077, afterCursor(10, 7));
   });
 
   it("coalesces concurrent reconnect and gap resyncs", async () => {
@@ -213,6 +217,198 @@ describe("resyncMessagesOnReconnect", () => {
       sessions: [{ sessionDbId: 2586, blocks: [], maxMessageId: 10 }],
     });
     await Promise.all([first, second]);
+  });
+
+  it("applies a late tool-call revision even when no new message row exists", async () => {
+    const tool: AgentBlockData = {
+      id: "msg-9",
+      type: "tool_call",
+      content: '{"path":"before"}',
+      toolArgs: '{"path":"before"}',
+      toolName: "Read",
+    };
+    const ctx = createCtx(createSession([tool, makeBlock("msg-10", "done")], 10));
+    apiMocks.getFeatureAgentState.mockResolvedValue({
+      sessions: [
+        {
+          sessionDbId: 2586,
+          blocks: [],
+          maxMessageId: 10,
+          maxContentRevision: 8,
+          toolCallUpdates: { "msg-9": '{"path":"after"}' },
+          truncatedToolCallUpdateIds: ["msg-9"],
+        },
+      ],
+    });
+
+    await resyncMessagesOnReconnect(ctx, "s1");
+
+    expect(ctx.get().sessions.s1.blocks[0]).toMatchObject({
+      content: '{"path":"after"}',
+      toolArgs: '{"path":"after"}',
+      truncatedContent: true,
+    });
+    expect(ctx.get().sessions.s1.lastAppliedContentRevision).toBe(8);
+    expect(apiMocks.getFeatureAgentState).toHaveBeenCalledWith(1077, afterCursor(10, 7));
+  });
+
+  it("maps a persisted tool revision onto a live block id via messageDbId", async () => {
+    const tool: AgentBlockData = {
+      id: "live-tool-call",
+      messageDbId: 9,
+      type: "tool_call",
+      content: "{}",
+    };
+    const ctx = createCtx(createSession([tool], 10));
+    apiMocks.getFeatureAgentState.mockResolvedValue({
+      sessions: [
+        {
+          sessionDbId: 2586,
+          blocks: [],
+          maxMessageId: 10,
+          maxContentRevision: 8,
+          toolCallUpdates: { "msg-9": '{"path":"after"}' },
+          truncatedToolCallUpdateIds: ["msg-9"],
+        },
+      ],
+    });
+
+    await resyncMessagesOnReconnect(ctx, "s1");
+
+    expect(ctx.get().sessions.s1.blocks[0]).toMatchObject({
+      id: "live-tool-call",
+      content: '{"path":"after"}',
+      truncatedContent: true,
+    });
+  });
+
+  it("drains bounded incremental message pages while the cursor progresses", async () => {
+    const ctx = createCtx(createSession([makeBlock("msg-10", "before")], 10));
+    const publish = vi.spyOn(ctx, "set");
+    apiMocks.getFeatureAgentState
+      .mockResolvedValueOnce({
+        sessions: [
+          {
+            sessionDbId: 2586,
+            blocks: [makeBlock("msg-11", "page one")],
+            maxMessageId: 11,
+            maxContentRevision: 7,
+            hasMoreIncrementalMessages: true,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        sessions: [
+          {
+            sessionDbId: 2586,
+            blocks: [makeBlock("msg-12", "page two")],
+            maxMessageId: 12,
+            maxContentRevision: 7,
+            hasMoreIncrementalMessages: false,
+          },
+        ],
+      });
+
+    await resyncMessagesOnReconnect(ctx, "s1");
+
+    expect(ctx.get().sessions.s1.blocks.map((block) => block.id)).toEqual([
+      "msg-10",
+      "msg-11",
+      "msg-12",
+    ]);
+    expect(apiMocks.getFeatureAgentState).toHaveBeenNthCalledWith(1, 1077, afterCursor(10, 7));
+    expect(apiMocks.getFeatureAgentState).toHaveBeenNthCalledWith(2, 1077, afterCursor(11, 7));
+    expect(publish).toHaveBeenCalledOnce();
+  });
+
+  it("continues past a bounded pending-prompt overlap without skipping new rows", async () => {
+    const pending: AgentBlockData = {
+      id: "msg-20",
+      messageDbId: 20,
+      type: "user_message",
+      content: "pending",
+      promptDeliveryState: "pending_agent",
+    };
+    const ctx = createCtx(createSession([pending, makeBlock("msg-100", "confirmed")], 100));
+    const publish = vi.spyOn(ctx, "set");
+    const page = (start: number, end: number, hasMore: boolean) => ({
+      sessions: [
+        {
+          sessionDbId: 2586,
+          blocks: Array.from({ length: end - start + 1 }, (_, index) =>
+            makeBlock(`msg-${start + index}`, `row ${start + index}`),
+          ),
+          maxMessageId: end,
+          maxContentRevision: 7,
+          hasMoreIncrementalMessages: hasMore,
+        },
+      ],
+    });
+    apiMocks.getFeatureAgentState
+      .mockResolvedValueOnce(page(20, 59, true))
+      .mockResolvedValueOnce(page(60, 99, true))
+      .mockResolvedValueOnce(page(100, 139, true))
+      .mockResolvedValueOnce(page(140, 141, false));
+
+    await resyncMessagesOnReconnect(ctx, "s1");
+
+    expect(apiMocks.getFeatureAgentState).toHaveBeenCalledTimes(4);
+    expect(apiMocks.getFeatureAgentState).toHaveBeenNthCalledWith(1, 1077, afterCursor(19, 7));
+    expect(apiMocks.getFeatureAgentState).toHaveBeenNthCalledWith(2, 1077, afterCursor(59, 7));
+    expect(apiMocks.getFeatureAgentState).toHaveBeenNthCalledWith(3, 1077, afterCursor(99, 7));
+    expect(apiMocks.getFeatureAgentState).toHaveBeenNthCalledWith(4, 1077, afterCursor(139, 7));
+    expect(ctx.get().sessions.s1.lastAppliedMessageId).toBe(141);
+    expect(ctx.get().sessions.s1.blocks.some((block) => block.id === "msg-141")).toBe(true);
+    expect(publish).toHaveBeenCalledOnce();
+  });
+
+  it("grafts every child when bounded reconnect pages split a persisted task subtree", async () => {
+    const parent: AgentBlockData = {
+      id: "msg-10",
+      messageDbId: 10,
+      type: "tool_call",
+      toolUseId: "task-1",
+      content: "live parent",
+      childBlocks: [],
+    };
+    const pending: AgentBlockData = {
+      id: "msg-20",
+      messageDbId: 20,
+      type: "user_message",
+      content: "pending",
+      promptDeliveryState: "pending_agent",
+    };
+    const ctx = createCtx(createSession([parent, pending, makeBlock("msg-100", "confirmed")], 100));
+    const parentPage = (start: number, end: number, hasMore: boolean) => ({
+      sessions: [
+        {
+          sessionDbId: 2586,
+          blocks: [
+            {
+              ...parent,
+              content: "persisted parent",
+              childBlocks: Array.from({ length: end - start + 1 }, (_, index) =>
+                makeBlock(`msg-${start + index}`, `child ${start + index}`),
+              ),
+            },
+          ],
+          maxMessageId: end,
+          maxContentRevision: 7,
+          hasMoreIncrementalMessages: hasMore,
+        },
+      ],
+    });
+    apiMocks.getFeatureAgentState
+      .mockResolvedValueOnce(parentPage(20, 59, true))
+      .mockResolvedValueOnce(parentPage(60, 99, true))
+      .mockResolvedValueOnce(parentPage(100, 104, false));
+
+    await resyncMessagesOnReconnect(ctx, "s1");
+
+    const restoredParent = ctx.get().sessions.s1.blocks.find((block) => block.id === "msg-10");
+    expect(restoredParent?.content).toBe("live parent");
+    expect(restoredParent?.childBlocks).toHaveLength(85);
+    expect(new Set(restoredParent?.childBlocks?.map((child) => child.id)).size).toBe(85);
   });
 
   it("hydrates from a full snapshot before the initial cursor exists", async () => {

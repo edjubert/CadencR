@@ -6,6 +6,7 @@ import { useZoom } from "@/hooks/useZoom";
 import { useShortcutsHelpStore } from "@/stores/shortcuts-help-store";
 import { formatCombo } from "@/lib/shortcuts/format";
 import { getRegistryShortcut } from "@/lib/shortcuts/resolve";
+import { SidebarProviderLogosSetting } from "./SidebarProviderLogosSetting";
 import { IconTile } from "./IconTile";
 import { SettingsCard } from "./SettingsCard";
 import { SettingsRow } from "./SettingsRow";
@@ -24,7 +25,11 @@ export function InterfaceSection(): React.JSX.Element {
   const openShortcutsHelp = useShortcutsHelpStore((s) => s.setOpen);
 
   return (
-    <SettingsSection id="interface" title="Interface & Zoom" subtitle="UI scaling for this device">
+    <SettingsSection
+      id="interface"
+      title="Interface & Zoom"
+      subtitle="Sidebar · UI scaling · Keyboard"
+    >
       <SettingsCard>
         <SettingsRow
           align="start"
@@ -85,6 +90,7 @@ export function InterfaceSection(): React.JSX.Element {
             </Button>
           }
         />
+        <SidebarProviderLogosSetting />
       </SettingsCard>
     </SettingsSection>
   );

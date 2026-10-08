@@ -6,8 +6,8 @@ use cadencr_service::domain::mcp::control::control_router;
 use tower::ServiceExt;
 
 use support::mcp_control::{
-    seeded_control_pool, spawn_request_from_body, spawn_request_with_optional_provider_model,
-    spawn_request_with_optional_provider_optional_model, spawn_request_with_provider_model,
+    fake_codex_project, seeded_control_pool, spawn_request_from_body,
+    spawn_request_with_optional_provider_model, spawn_request_with_provider_model,
 };
 
 async fn response_text(response: axum::response::Response) -> String {
@@ -78,19 +78,29 @@ async fn project_spawn_session_rejects_unknown_model_for_inherited_provider() {
 #[tokio::test]
 async fn project_spawn_session_normalizes_common_provider_aliases() {
     let pool = seeded_control_pool().await;
+    let _codex = fake_codex_project(&pool).await;
     let app = control_router().with_state(AppState::with_pool(pool.clone()));
 
     let response = app
-        .oneshot(spawn_request_with_optional_provider_optional_model(
-            serde_json::json!({ "mode": "skip" }),
-            true,
-            Some("codex"),
-            None,
-        ))
+        .oneshot(spawn_request_from_body(serde_json::json!({
+            "source_feature_id": 42,
+            "source_session_id": 777,
+            "target_project_id": 7,
+            "title": "Investigate flaky login test",
+            "initial_message": "Please investigate and report findings.",
+            "branch": { "mode": "skip" },
+            "provider": "codex",
+            "profile": "default",
+            "permission_mode": "default",
+            "codex_permission_mode": "autoReview",
+            "source_note": "delegated by project MCP",
+            "link_to_current_session": true
+        })))
         .await
         .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
+    let status = response.status();
+    let body_text = response_text(response).await;
+    assert_eq!(status, StatusCode::OK, "{body_text}");
     let provider: String = sqlx::query_scalar(
         "SELECT runtime_provider FROM agent_sessions WHERE id != 777 ORDER BY id DESC LIMIT 1",
     )

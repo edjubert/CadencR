@@ -2,7 +2,7 @@ import { memo, useEffect, useState } from "react";
 import { CodeIcon, EyeIcon, Loader2Icon, AlertTriangleIcon } from "lucide-react";
 import { CodeBlockShell } from "@/components/CodeBlockShell";
 import { MermaidDiagramView } from "@/components/MermaidDiagramView";
-import { cachedHighlight } from "@/components/Markdown";
+import { highlightCode } from "@/components/markdown/highlight-cache";
 import { useTheme } from "@/hooks/useTheme";
 import { apiErrorMessage } from "@/lib/api-errors";
 
@@ -115,7 +115,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ code }: MermaidDiagramProp
       )}
       {showSource ? (
         <pre className="overflow-x-auto p-3 text-xs leading-relaxed">
-          <code className="hljs">{cachedHighlight("text", code) ?? code}</code>
+          <code className="hljs">{highlightCode("text", code) ?? code}</code>
         </pre>
       ) : state.status === "loading" ? (
         <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">

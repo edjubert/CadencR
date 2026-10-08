@@ -38,6 +38,20 @@ function metadata(): BrowserTabMetadata {
     sessionProfileId: "fresh",
     isActive: true,
     devToolsOpen: false,
+    pinned: false,
+    suspended: false,
+    zoomPercent: 100,
+    responsive: {
+      enabled: false,
+      preset: "mobile",
+      width: 390,
+      height: 844,
+      deviceScaleFactor: 3,
+      mobile: true,
+      touch: true,
+      colorScheme: "system",
+      status: "ready",
+    },
     scopeId: 1,
   };
 }
@@ -48,12 +62,14 @@ describe("selectElementContext", () => {
   it("re-arms the picker in the replacement document after a page refresh", async () => {
     const contents = Object.assign(new EventEmitter(), {
       executeJavaScript: vi.fn(async () => undefined),
+      getZoomFactor: vi.fn(() => 1.2),
       isDestroyed: vi.fn(() => false),
       isLoading: vi.fn(() => true),
     });
     const tab = {
       metadata: metadata(),
       view: { webContents: contents },
+      webContents: contents,
       devtoolsView: null,
       consoleEntries: [],
       networkEntries: [],
@@ -78,6 +94,11 @@ describe("selectElementContext", () => {
       title: "Refreshed",
     });
     expect(captureElementContext.mock.calls[1][3]).toBe("anchor-1");
+    const screenshotScale = captureElementContext.mock.calls[1][4];
+    expect(screenshotScale).toBeTypeOf("function");
+    expect(screenshotScale()).toBe(1.2);
+    contents.getZoomFactor.mockReturnValue(1.4);
+    expect(screenshotScale()).toBe(1.4);
     expect(contents.executeJavaScript).toHaveBeenCalledOnce();
     expect(contents.listenerCount("did-start-navigation")).toBe(0);
     expect(contents.listenerCount("destroyed")).toBe(0);

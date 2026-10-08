@@ -1,6 +1,9 @@
-use axum::extract::ws::Message;
-use tracing::{debug, error, info};
-
+use super::super::send_runtime_session_id;
+use super::mcp_servers::{refresh_mcp_servers_for_active_session, send_mcp_servers_if_init};
+use super::stream_reader_background_agents::track_background_agents;
+use super::stream_reader_forward::{forward_immediate_event, ForwardOutcome};
+use super::stream_reader_resume::runtime_allows_resume_persistence;
+use super::stream_reader_task::{StreamReaderState, StreamReaderTask};
 use crate::domain::agents::adapter::{AgentRuntimeAdapter, RuntimeEvent, RuntimeTurnStartedSource};
 use crate::domain::runtime_stream::{
     capture_runtime_session_id, permission_request_payload, persist_usage,
@@ -10,13 +13,8 @@ use crate::domain::ws_session::persistence::{PendingUserInput, WsSessionPersiste
 use crate::domain::ws_session::protocol::{
     permission_request_envelope, PermissionRequestPayload, WsEnvelope,
 };
-
-use super::super::send_runtime_session_id;
-use super::mcp_servers::{refresh_mcp_servers_for_active_session, send_mcp_servers_if_init};
-use super::stream_reader_background_agents::track_background_agents;
-use super::stream_reader_forward::{forward_immediate_event, ForwardOutcome};
-use super::stream_reader_task::{StreamReaderState, StreamReaderTask};
-
+use axum::extract::ws::Message;
+use tracing::{debug, error, info};
 impl StreamReaderTask {
     /// Process one runtime event. A closed owner socket is no longer fatal:
     /// every send becomes best-effort because the agent must keep running on
@@ -80,12 +78,16 @@ impl StreamReaderTask {
         let _ = self.send_mcp_servers_if_init(&runtime_event).await;
 
         if self.handle_provider_error(&runtime_event).await {
-            state.turn_state.mark_error_surfaced();
+            state
+                .turn_state
+                .mark_error_surfaced(runtime_event.parent_tool_use_id());
             return;
         }
 
         if self.handle_unknown_message(&runtime_event).await {
-            state.turn_state.mark_error_surfaced();
+            state
+                .turn_state
+                .mark_error_surfaced(runtime_event.parent_tool_use_id());
             return;
         }
 
@@ -100,7 +102,9 @@ impl StreamReaderTask {
                 )
                 .await
         {
-            state.turn_state.mark_error_surfaced();
+            state
+                .turn_state
+                .mark_error_surfaced(runtime_event.parent_tool_use_id());
         }
 
         if self.handle_non_result_signal(state, &runtime_event).await {
@@ -172,8 +176,19 @@ impl StreamReaderTask {
         else {
             return;
         };
+        let durable =
+            super::super::session_init_resume::persistable_resume_session_id_for_provider(
+                &self.runtime_provider,
+                Some(&runtime_sid),
+                runtime_allows_resume_persistence(self.runtime_session_handle.as_ref()).await,
+            )
+            .is_some();
         state.runtime_session_id = Some(runtime_sid.clone());
         state.usage_state.set_root_session_id(runtime_sid.as_str());
+        if !durable {
+            send_runtime_session_id(&self.sender, runtime_sid.as_str());
+            return;
+        }
         info!(self.db_session_id, runtime_session_id = %runtime_sid, "stream_reader: persisting runtime session_id to DB");
         WsSessionPersistence::persist_runtime_session_id_static(
             &self.write_pool,

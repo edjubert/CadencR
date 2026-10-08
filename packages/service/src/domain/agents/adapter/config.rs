@@ -214,6 +214,42 @@ pub struct RuntimeMcpServerStatus {
     pub status: String,
 }
 
+/// Fully resolved provider profile used to start (or resume) a runtime.
+///
+/// `identity` is the stable persisted selection, while `revision` changes when
+/// the selected profile's effective configuration changes. `state_identity`
+/// identifies provider state which must remain compatible across resume (for
+/// example Codex's effective `CODEX_HOME`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedRuntimeProfile {
+    pub identity: String,
+    pub revision: String,
+    pub env: HashMap<String, String>,
+    pub env_unset: Vec<String>,
+    pub state_identity: Option<String>,
+}
+
+/// User-authored overrides layered over a provider profile's native config.
+/// `None` means inherit; notably, `Some(false)` is an explicit fast-mode
+/// override and must never be collapsed into inheritance.
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+)]
+pub struct RuntimeConfigOverrides {
+    pub model: Option<String>,
+    pub thinking_effort: Option<String>,
+    pub fast_mode: Option<bool>,
+}
+
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+)]
+pub struct RuntimeEffectiveConfig {
+    pub model: Option<String>,
+    pub thinking_effort: Option<String>,
+    pub fast_mode: bool,
+}
+
 pub struct RuntimeSpawnConfig {
     pub cwd: PathBuf,
     pub permission_mode: Option<RuntimePermissionMode>,
@@ -233,6 +269,14 @@ pub struct RuntimeSpawnConfig {
     /// to apply this (Claude Code merges it into the CLI subprocess env;
     /// ACP-backed providers may ignore it when configuration is handled elsewhere).
     pub env: Option<HashMap<String, String>>,
+    /// Stable provider-owned profile identity selected for this runtime.
+    pub profile: Option<String>,
+    /// Environment keys which must be removed after the inherited environment
+    /// and profile overlay have been composed.
+    pub env_unset: Vec<String>,
+    pub overrides: RuntimeConfigOverrides,
+    pub profile_revision: Option<String>,
+    pub profile_state_identity: Option<String>,
 }
 
 impl Default for RuntimeSpawnConfig {
@@ -250,6 +294,11 @@ impl Default for RuntimeSpawnConfig {
             mcp_servers: None,
             permission_handler: None,
             env: None,
+            profile: None,
+            env_unset: Vec::new(),
+            overrides: RuntimeConfigOverrides::default(),
+            profile_revision: None,
+            profile_state_identity: None,
         }
     }
 }

@@ -30,7 +30,9 @@ pub async fn get_blame(
     // non-git directory) have no blame to report. Running `git blame` on them
     // fails with "no such path in HEAD" and spams the user with toast errors
     // on every editor open. Cheaper to ask up front.
-    if !is_path_tracked(&project_root, &relative).await {
+    if !crate::shared::git_context::has_git_metadata(&project_root).await?
+        || !is_path_tracked(&project_root, &relative).await
+    {
         return Ok(BlameResponse { lines: vec![] });
     }
     let output = crate::shared::git_cli::run_git_safe_background(

@@ -89,6 +89,10 @@ export function handleTurnComplete(ctx: StoreAccessors, sessionId: string, paylo
     return;
   }
   const state = session.streamingState;
+  // A dropped `content_block_stop` must not retain raw structured chunks past
+  // the turn. Complete JSON has already published at its scanner boundary;
+  // anything left here is malformed/incomplete and cannot become authoritative.
+  state.structuredToolStreams.clear();
   // A seq gap was detected mid-turn: now that no more deltas can arrive, the
   // persisted transcript is authoritative — overwrite any truncated blocks.
   if (state.tailRepairNeeded) {

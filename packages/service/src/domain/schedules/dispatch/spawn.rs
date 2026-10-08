@@ -111,6 +111,8 @@ async fn insert_session(
     runtime: &ScheduleRuntime,
 ) -> Result<i64, AppError> {
     let now = Utc::now().to_rfc3339();
+    let overrides = serde_json::to_string(&runtime.overrides)
+        .map_err(|error| AppError::Internal(format!("serialize runtime overrides: {error}")))?;
     // `codex_permission_mode` is NOT NULL: every other provider stores the
     // literal 'default', so the COALESCE is required, not cosmetic.
     // `permission_mode` is nullable and the spawn path falls back to the
@@ -118,8 +120,8 @@ async fn insert_session(
     Ok(sqlx::query_scalar(
         "INSERT INTO agent_sessions
          (feature_id, agent_type, status, runtime_provider, model, profile, thinking_effort,
-          permission_mode, codex_permission_mode, started_at)
-         VALUES (?, 'session', 'paused', ?, ?, ?, ?, ?, COALESCE(?, 'default'), ?)
+          permission_mode, codex_permission_mode, runtime_overrides, started_at)
+         VALUES (?, 'session', 'paused', ?, ?, ?, ?, ?, COALESCE(?, 'default'), ?, ?)
          RETURNING id",
     )
     .bind(feature_id)
@@ -129,6 +131,7 @@ async fn insert_session(
     .bind(runtime.thinking_level.as_deref())
     .bind(runtime.permission_mode.as_deref())
     .bind(runtime.codex_permission_mode.as_deref())
+    .bind(overrides)
     .bind(now)
     .fetch_one(&state.write_pool)
     .await?)
@@ -235,21 +238,27 @@ mod tests {
                 profile: None,
                 permission_mode: None,
                 codex_permission_mode: None,
+                overrides: crate::domain::agents::adapter::RuntimeConfigOverrides {
+                    model: Some("haiku".into()),
+                    ..Default::default()
+                },
             },
         )
         .await
         .unwrap();
 
-        let stored: (String, Option<String>, String) = sqlx::query_as(
-            "SELECT runtime_provider, model, codex_permission_mode FROM agent_sessions WHERE id = ?",
+        let stored: (String, Option<String>, String, String) = sqlx::query_as(
+            "SELECT runtime_provider, model, codex_permission_mode, runtime_overrides FROM agent_sessions WHERE id = ?",
         )
         .bind(session_id)
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(
-            stored,
-            ("claude_code".into(), Some("haiku".into()), "default".into())
-        );
+        assert_eq!(stored.0, "claude_code");
+        assert_eq!(stored.1.as_deref(), Some("haiku"));
+        assert_eq!(stored.2, "default");
+        let overrides: crate::domain::agents::adapter::RuntimeConfigOverrides =
+            serde_json::from_str(&stored.3).unwrap();
+        assert_eq!(overrides.model.as_deref(), Some("haiku"));
     }
 }

@@ -3,66 +3,13 @@ impl WsSessionPersistence {
         pool: &SqlitePool,
         session_id: i64,
     ) -> Result<Option<SessionRow>, sqlx::Error> {
-        let row: Option<(
-            i64,
-            i64,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            String,
-            Option<String>,
-            Option<String>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<String>,
-            i64,
-        )> = sqlx::query_as(
-            "SELECT id, feature_id, runtime_provider, runtime_session_id, model, profile, permission_mode, codex_permission_mode, status, pending_permission, pending_questions, input_tokens, output_tokens, context_window, thinking_effort, fast_mode FROM agent_sessions WHERE id = ?",
+        let row: Option<SessionRow> = sqlx::query_as(
+            "SELECT id, feature_id, runtime_provider, runtime_session_id, model, profile, permission_mode, codex_permission_mode, status, pending_permission, pending_questions, input_tokens, output_tokens, context_window, thinking_effort, fast_mode, runtime_overrides FROM agent_sessions WHERE id = ?",
         )
         .bind(session_id)
         .fetch_optional(pool)
         .await?;
-        Ok(row.map(
-            |(
-                id,
-                feature_id,
-                runtime_provider,
-                runtime_session_id,
-                model,
-                profile,
-                permission_mode,
-                codex_permission_mode,
-                status,
-                pending_permission,
-                pending_questions,
-                input_tokens,
-                output_tokens,
-                context_window,
-                thinking_effort,
-                fast_mode,
-            )| SessionRow {
-                id,
-                feature_id,
-                runtime_provider,
-                runtime_session_id,
-                model,
-                profile,
-                permission_mode,
-                codex_permission_mode,
-                status,
-                pending_permission,
-                pending_questions,
-                input_tokens,
-                output_tokens,
-                context_window,
-                thinking_effort,
-                fast_mode: fast_mode != 0,
-            },
-        ))
+        Ok(row)
     }
 
     pub async fn get_session_row(pool: &SqlitePool, session_id: i64) -> Option<SessionRow> {
@@ -126,7 +73,8 @@ mod session_queries_tests {
                 pending_permission TEXT,
                 pending_questions TEXT,
                 thinking_effort TEXT,
-                fast_mode INTEGER NOT NULL DEFAULT 0
+                fast_mode INTEGER NOT NULL DEFAULT 0,
+                runtime_overrides TEXT
             )"#,
         )
         .execute(&pool)
@@ -182,12 +130,29 @@ mod session_queries_tests {
         assert_eq!(row.model.as_deref(), Some("opus"));
         assert_eq!(row.permission_mode.as_deref(), Some("plan"));
         assert_eq!(row.status, "paused");
+        assert!(row.runtime_overrides.is_none());
+
+        WsSessionPersistence::update_runtime_overrides_static(
+            &pool,
+            id,
+            &crate::domain::agents::adapter::RuntimeConfigOverrides::default(),
+        )
+        .await
+        .unwrap();
+        let resumed = WsSessionPersistence::get_session_row(&pool, id)
+            .await
+            .unwrap();
+        let restored: crate::domain::agents::adapter::RuntimeConfigOverrides =
+            serde_json::from_str(resumed.runtime_overrides.as_deref().unwrap()).unwrap();
+        assert_eq!(restored, Default::default());
     }
 
     #[tokio::test]
     async fn test_get_session_row_missing() {
         let pool = setup_test_db().await;
-        assert!(WsSessionPersistence::get_session_row(&pool, 999).await.is_none());
+        assert!(WsSessionPersistence::get_session_row(&pool, 999)
+            .await
+            .is_none());
     }
 
     #[tokio::test]
@@ -220,13 +185,11 @@ mod session_queries_tests {
             .await
             .unwrap();
 
-        sqlx::query(
-            "UPDATE agent_sessions SET permission_mode = 'acceptEdits' WHERE id = ?",
-        )
-        .bind(id)
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("UPDATE agent_sessions SET permission_mode = 'acceptEdits' WHERE id = ?")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
 
         let row = WsSessionPersistence::get_session_row(&pool, id)
             .await
@@ -263,12 +226,14 @@ mod session_queries_tests {
         .await
         .unwrap();
 
-        sqlx::query("INSERT INTO session_runtime_ids (session_id, runtime_session_id) VALUES (?, ?)")
-            .bind(session_id.0)
-            .bind("archived-cli-sess")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO session_runtime_ids (session_id, runtime_session_id) VALUES (?, ?)",
+        )
+        .bind(session_id.0)
+        .bind("archived-cli-sess")
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let found = WsSessionPersistence::get_latest_runtime_session_id(&pool, 1).await;
         assert_eq!(found, Some("archived-cli-sess".to_string()));

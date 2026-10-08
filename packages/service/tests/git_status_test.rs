@@ -156,3 +156,129 @@ async fn status_no_remote() {
     assert_eq!(body["has_remote"], false);
     assert_eq!(body["behind_remote"], 0);
 }
+
+/// A plain project is an expected context, not a failing repository. Exercise
+/// the same read endpoints mounted by the sidebar, Git tab and session header.
+#[tokio::test]
+async fn non_git_project_read_endpoints_return_empty_results() {
+    let server = start_test_server().await;
+    let plain = server.tmp_dir.path().join("plain-project");
+    std::fs::create_dir(&plain).unwrap();
+    std::fs::write(plain.join("notes.txt"), "ordinary project\n").unwrap();
+    sqlx::query("UPDATE projects SET path = ? WHERE id = 1")
+        .bind(plain.to_string_lossy().as_ref())
+        .execute(&server.pool)
+        .await
+        .unwrap();
+    // Retain a stale working-directory setting: it must not cause Git reads.
+    sqlx::query(
+        "UPDATE feature_settings SET value = ? WHERE feature_id = 1 AND key = 'worktree_path'",
+    )
+    .bind(plain.to_string_lossy().as_ref())
+    .execute(&server.pool)
+    .await
+    .unwrap();
+
+    for (path, expected) in [
+        ("branch?project_id=1", serde_json::json!({"branch": null})),
+        ("branches?project_id=1", serde_json::json!([])),
+        ("worktrees?project_id=1", serde_json::json!([])),
+        ("feature-worktrees?project_id=1", serde_json::json!([])),
+        (
+            "worktree/info?project_id=1&feature_id=1",
+            serde_json::json!(null),
+        ),
+        (
+            "stats?feature_id=1",
+            serde_json::json!({"files_changed": 0, "insertions": 0, "deletions": 0}),
+        ),
+        (
+            "diff?feature_id=1&mode=worktree",
+            serde_json::json!({"diff": ""}),
+        ),
+        (
+            "changed-files?feature_id=1&mode=worktree",
+            serde_json::json!([]),
+        ),
+        ("files?feature_id=1", serde_json::json!([])),
+        ("file-blob-shas?feature_id=1", serde_json::json!([])),
+        ("stashes?feature_id=1", serde_json::json!([])),
+        (
+            "has-uncommitted-changes?project_id=1&feature_id=1",
+            serde_json::json!({"has_changes": false}),
+        ),
+        ("uncommitted-files?feature_id=1", serde_json::json!([])),
+        (
+            "blame?project_id=1&feature_id=1&file_path=notes.txt",
+            serde_json::json!({"lines": []}),
+        ),
+    ] {
+        let response = server
+            .client
+            .get(format!("{}/api/git/{path}", server.base_url))
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(status, 200, "{path}: {body}");
+        assert_eq!(body, expected, "{path}");
+    }
+    let response = server
+        .client
+        .get(format!("{}/api/git/status?feature_id=1", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["current_branch"], "");
+    assert_eq!(body["has_remote"], false);
+    assert_eq!(body["uncommitted_count"], 0);
+
+    let response = server
+        .client
+        .get(format!("{}/api/git/pr?feature_id=1", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let pr: serde_json::Value = response.json().await.unwrap();
+    assert!(
+        pr["error"].is_null(),
+        "plain projects must not show a forge error: {pr}"
+    );
+    assert!(pr["pr"].is_null());
+
+    // The working-directory resolver must keep supporting non-Git consumers,
+    // in particular custom actions, while the Git resolver returns no path.
+    let state = cadencr_service::app_state::AppState::with_pool(server.pool.clone());
+    assert_eq!(
+        cadencr_service::domain::git::service::resolve_feature_working_path(&state, 1)
+            .await
+            .unwrap()
+            .as_deref(),
+        plain.to_str()
+    );
+    assert!(
+        cadencr_service::domain::git::service::resolve_feature_git_path(&state, 1)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn uncommitted_files_missing_feature_still_returns_404() {
+    let server = start_test_server().await;
+    let response = server
+        .client
+        .get(format!(
+            "{}/api/git/uncommitted-files?feature_id=9999",
+            server.base_url
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 404);
+}

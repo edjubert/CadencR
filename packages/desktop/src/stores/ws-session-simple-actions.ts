@@ -11,11 +11,13 @@ import {
   createModeSet,
   createModelSet,
   createProfileSet,
+  createRuntimeOverridesSet,
   createProviderSet,
   createSessionClear,
   createSessionCompact,
   createSessionDelete,
   type GateCloseReason,
+  type RuntimeConfigOverridePatch,
   type WsEnvelope,
 } from "@/lib/ws-envelope";
 import { clearReconnect, unregisterReconnector } from "@/lib/ws-reconnect";
@@ -55,6 +57,7 @@ type SimpleSessionActions = Pick<
   | "setThinkingEffort"
   | "setFastMode"
   | "setProfile"
+  | "setRuntimeOverrides"
   | "setPermissionMode"
   | "setAccessMode"
   | "approvePlan"
@@ -150,9 +153,9 @@ function createConfigurationActions(deps: SimpleSessionActionDeps) {
   const { ctx, sendRaw } = deps;
   const { get, set, getSession } = ctx;
   return {
-    setProvider(sessionId: string, providerId: string) {
+    setProvider(sessionId: string, providerId: string, modelId?: string) {
       const session = getSession(sessionId);
-      sendRaw(sessionId, createProviderSet(session.serverSessionId, providerId));
+      sendRaw(sessionId, createProviderSet(session.serverSessionId, providerId, modelId));
     },
 
     setModel(sessionId: string, modelId: string, providerId: string) {
@@ -163,11 +166,8 @@ function createConfigurationActions(deps: SimpleSessionActionDeps) {
     setThinkingEffort(sessionId: string, thinkingEffort?: string) {
       const session = getSession(sessionId);
       sendRaw(sessionId, createEffortSet(session.serverSessionId, thinkingEffort));
-      set(
-        updateSession(get(), sessionId, {
-          currentThinkingEffort: thinkingEffort,
-        }),
-      );
+      // No optimistic update: `currentThinkingEffort` is set only once the
+      // backend confirms via `effortSetOk` (see ws-envelope-handler.ts).
     },
 
     async setFastMode(sessionId: string, enabled: boolean): Promise<void> {
@@ -190,6 +190,23 @@ function createConfigurationActions(deps: SimpleSessionActionDeps) {
       const session = getSession(sessionId);
       if (!session.serverSessionId) return;
       sendRaw(sessionId, createProfileSet(session.serverSessionId, profile));
+    },
+    async setRuntimeOverrides(sessionId: string, patch: RuntimeConfigOverridePatch) {
+      const session = getSession(sessionId);
+      if (!session.serverSessionId || session.runtimeOverridesPending) return;
+      set(updateSession(get(), sessionId, { runtimeOverridesPending: true }));
+      try {
+        const payload = await get().sendRequest(
+          sessionId,
+          createRuntimeOverridesSet(session.serverSessionId, patch),
+        );
+        const error = parseErrorPayload(payload);
+        if (error?.message || payload === null) {
+          throw new Error(error?.message ?? "Runtime override update timed out");
+        }
+      } finally {
+        set(updateSession(get(), sessionId, { runtimeOverridesPending: false }));
+      }
     },
 
     setPermissionMode(sessionId: string, mode: PermissionMode) {
@@ -273,14 +290,14 @@ function createWorkflowActions(deps: SimpleSessionActionDeps) {
         });
     },
 
-    requestSlashCommands(sessionId: string, cwd: string, provider: string) {
+    requestSlashCommands(sessionId: string, cwd: string, provider: string, profile?: string) {
       const session = getSession(sessionId);
-      const nextKey = buildSlashCommandsKey(cwd, provider);
+      const nextKey = buildSlashCommandsKey(cwd, provider, profile);
       const sameTarget = session.slashCommandsKey === nextKey;
       if (sameTarget && session.slashCommandsLoading) {
         return;
       }
-      const envelope = createCommandsGet(cwd, provider);
+      const envelope = createCommandsGet(cwd, provider, profile);
       set(
         updateSession(get(), sessionId, {
           slashCommands: sameTarget ? session.slashCommands : [],

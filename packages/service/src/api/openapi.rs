@@ -5,7 +5,10 @@ use utoipa::OpenApi;
 
 use crate::app_state::AppState;
 use crate::domain::agents::claude_code::routes as claude_code_routes;
+use crate::domain::agents::codex::routes as codex_routes;
 use crate::domain::agents::discovery::routes as discovery_routes;
+use crate::domain::agents::providers::development::routes as provider_development_routes;
+use crate::domain::agents::providers::installed::managed::routes as managed_provider_routes;
 use crate::domain::agents::providers::installed::routes as installed_provider_routes;
 use crate::domain::custom_actions::models as custom_actions_models;
 use crate::domain::custom_actions::routes as custom_actions_routes;
@@ -15,12 +18,15 @@ use crate::domain::editor::mutation_routes as editor_mutation_routes;
 use crate::domain::editor::routes as editor_routes;
 use crate::domain::feature_layouts::models as feature_layouts_models;
 use crate::domain::feature_layouts::routes as feature_layouts_routes;
+use crate::domain::features::archive_routes as features_archive_routes;
 use crate::domain::features::auto_name_route as features_auto_name_route;
 use crate::domain::features::models as features_models;
 use crate::domain::features::routes as features_routes;
 use crate::domain::imports::models as imports_models;
 use crate::domain::imports::routes as imports_routes;
 use crate::domain::lsp::routes as lsp_routes;
+use crate::domain::neovim::protocol as neovim_protocol;
+use crate::domain::neovim::routes as neovim_routes;
 use crate::domain::ports::models as ports_models;
 use crate::domain::ports::routes as ports_routes;
 use crate::domain::projects::icon as projects_icon;
@@ -35,6 +41,7 @@ use crate::domain::schedules::recurrence as schedules_recurrence;
 use crate::domain::schedules::routes as schedules_routes;
 use crate::domain::sessions::models as sessions_models;
 use crate::domain::sessions::routes as sessions_routes;
+use crate::domain::terminal::alacritty_config as terminal_alacritty_config;
 use crate::domain::terminal::routes as terminal_routes;
 use crate::domain::themes::chrome as themes_chrome;
 use crate::domain::themes::models as themes_models;
@@ -101,6 +108,8 @@ use crate::domain::ws_session::routes as ws_routes;
         features_routes::delete_feature_handler,
         features_routes::update_feature_title_handler,
         features_routes::update_feature_status_handler,
+        features_archive_routes::archive_preview_handler,
+        features_archive_routes::archive_feature_handler,
         features_routes::update_feature_label_handler,
         features_routes::update_feature_pinned_handler,
         features_routes::is_empty_handler,
@@ -160,12 +169,31 @@ use crate::domain::ws_session::routes as ws_routes;
         sessions_routes::get_message_preview_handler,
         terminal_routes::list_terminal_sessions_handler,
         terminal_routes::kill_terminal_sessions_handler,
+        terminal_routes::alacritty_config_route,
         super::get_agent_catalog,
+        super::get_agent_profiles,
+        codex_routes::list_profiles_handler,
+        codex_routes::create_profile_handler,
+        codex_routes::update_profile_handler,
+        codex_routes::delete_profile_handler,
+        codex_routes::set_active_profile_handler,
+        codex_routes::validate_profile_handler,
+        super::get_agent_selection,
         discovery_routes::binary_discovery_handler,
+        provider_development_routes::create_provider_workspace_handler,
         installed_provider_routes::installed_providers_handler,
         installed_provider_routes::install_provider_handler,
         installed_provider_routes::set_provider_enabled_handler,
         installed_provider_routes::remove_provider_handler,
+        managed_provider_routes::inventory_handler,
+        managed_provider_routes::install_handler,
+        managed_provider_routes::update_handler,
+        managed_provider_routes::rollback_handler,
+        managed_provider_routes::enabled_handler,
+        managed_provider_routes::remove_handler,
+        managed_provider_routes::refresh_blocklist_handler,
+        managed_provider_routes::catalog_handler,
+        managed_provider_routes::refresh_catalog_handler,
         claude_code_routes::list_profiles_handler,
         claude_code_routes::upsert_profile_handler,
         claude_code_routes::delete_profile_handler,
@@ -199,6 +227,10 @@ use crate::domain::ws_session::routes as ws_routes;
         push_routes::vapid_key_handler,
         push_routes::subscribe_handler,
         push_routes::unsubscribe_handler,
+        neovim_routes::start_route,
+        neovim_routes::stop_route,
+        neovim_routes::detect_route,
+        neovim_routes::open_file_route,
     ),
     components(schemas(
         HealthResponse,
@@ -217,11 +249,26 @@ use crate::domain::ws_session::routes as ws_routes;
         themes_models::ThemeIssue,
         themes_models::XtermPalette,
         themes_models::CreateThemeRequest,
+        themes_models::CreateThemeResponse,
         themes_models::WriteThemeRequest,
         themes_models::WriteThemeResponse,
         themes_models::DeleteThemeResponse,
         crate::domain::themes::workspace::ThemeWorkspace,
         crate::domain::agents::runtime::AgentCatalogResponse,
+        crate::domain::agents::runtime::ProviderCatalogResponseEntry,
+        crate::domain::agents::runtime::ProviderProfileCapability,
+        crate::domain::agents::runtime::ProviderProfileEntry,
+        crate::domain::agents::runtime::ProviderProfilesResponse,
+        crate::domain::agents::adapter::RuntimeConfigOverrides,
+        crate::domain::agents::adapter::RuntimeEffectiveConfig,
+        crate::domain::agents::codex::profiles::CodexProfileView,
+        crate::domain::agents::codex::profiles::ProfileDraft,
+        crate::domain::agents::codex::profiles::ProfileUpdate,
+        crate::domain::agents::codex::profiles::ValidationResult,
+        codex_routes::ProfilesResponse,
+        codex_routes::SetActiveProfileRequest,
+        codex_routes::SuccessResponse,
+        crate::domain::agents::runtime::ProviderOrigin,
         crate::domain::agents::runtime::ProviderCatalogEntry,
         crate::domain::agents::runtime::ModelCatalogEntry,
         crate::domain::agents::runtime::ProviderStatus,
@@ -229,11 +276,42 @@ use crate::domain::ws_session::routes as ws_routes;
         discovery_routes::ProviderDiscovery,
         discovery_routes::DiscoveredCandidate,
         discovery_routes::DiscoveredSource,
+        crate::domain::agents::providers::development::CreateProviderWorkspaceRequest,
+        crate::domain::agents::providers::development::ProviderWorkspace,
         installed_provider_routes::InstalledProvidersResponse,
         installed_provider_routes::InstalledProviderEntry,
         installed_provider_routes::InstalledProviderRejection,
         installed_provider_routes::SetInstalledProviderEnabledRequest,
         installed_provider_routes::InstalledProviderMutationResponse,
+        managed_provider_routes::InstallManagedProviderRequest,
+        managed_provider_routes::UpdateManagedProviderRequest,
+        managed_provider_routes::RollbackManagedProviderRequest,
+        managed_provider_routes::SetManagedProviderEnabledRequest,
+        managed_provider_routes::RefreshManagedBlocklistResponse,
+        crate::domain::agents::providers::installed::managed::catalog::ManagedCatalogResponse,
+        crate::domain::agents::providers::installed::managed::catalog::ManagedCatalogCacheStatus,
+        crate::domain::agents::providers::installed::managed::service::ManagedProvidersInventory,
+        crate::domain::agents::providers::installed::managed::service::ManagedBlocklistInventory,
+        crate::domain::agents::providers::installed::managed::service::ManagedBlocklistCacheStatus,
+        crate::domain::agents::providers::installed::managed::service::ManagedBlocklistRefreshInventory,
+        crate::domain::agents::providers::installed::managed::service::ManagedBlocklistRefreshOutcome,
+        crate::domain::agents::providers::installed::managed::service::ManagedTrustInventory,
+        crate::domain::agents::providers::installed::managed::service::ManagedTrustConfigurationStatus,
+        crate::domain::agents::providers::installed::managed::service::ManagedProviderInventoryEntry,
+        crate::domain::agents::providers::installed::managed::history::ManagedHistoryEntry,
+        crate::domain::agents::providers::installed::managed::history::ManagedHistoryAction,
+        crate::domain::agents::providers::installed::managed::quarantine::ManagedQuarantineRecord,
+        crate::domain::agents::providers::installed::managed::quarantine::ManagedFailureStage,
+        crate::domain::agents::providers::installed::managed::process_policy::ManagedProcessPolicyOutcome,
+        crate::domain::agents::providers::installed::managed::process_policy::ManagedProcessControlOutcome,
+        crate::domain::agents::providers::installed::managed::SignedManagedProviderIndex,
+        crate::domain::agents::providers::installed::managed::ManagedProviderIndex,
+        crate::domain::agents::providers::installed::managed::ManagedProviderPackage,
+        crate::domain::agents::providers::installed::managed::ManagedProviderHost,
+        crate::domain::agents::providers::installed::managed::ManagedAppCompatibility,
+        crate::domain::agents::providers::installed::managed::ManagedPackageAssets,
+        crate::domain::agents::providers::installed::managed::ManagedIndexSignature,
+        crate::domain::agents::providers::installed::managed::ManagedSignatureAlgorithm,
         crate::domain::agents::providers::installed::descriptor::ProviderDescriptor,
         crate::domain::agents::providers::installed::descriptor::AcpAgentEntry,
         crate::domain::agents::providers::installed::descriptor::AcpDistribution,
@@ -288,6 +366,9 @@ use crate::domain::ws_session::routes as ws_routes;
         features_models::FeatureStatus,
         features_models::CreateFeatureRequest,
         features_models::CreateFeatureResponse,
+        features_models::ArchivePreview,
+        features_models::ArchiveRequest,
+        features_models::ArchiveResponse,
         features_models::UpdateTitleRequest,
         features_models::UpdateStatusRequest,
         features_models::UpdateLabelRequest,
@@ -351,9 +432,6 @@ use crate::domain::ws_session::routes as ws_routes;
         diff_comments_models::UpdateDiffCommentRequest,
         diff_comments_models::UpdatedResponse,
         diff_comments_models::DeletedResponse,
-        diff_comments_models::DiffViewedFile,
-        diff_comments_models::MarkViewedRequest,
-        diff_comments_routes::SuccessResponse,
         sessions_models::AgentSessionRow,
         sessions_models::AgentBlock,
         sessions_models::SessionState,
@@ -371,6 +449,17 @@ use crate::domain::ws_session::routes as ws_routes;
         sessions_models::RefreshSessionResponse,
         terminal_routes::TerminalSessionInfo,
         terminal_routes::KillTerminalsResponse,
+        terminal_alacritty_config::AlacrittyConfigResponse,
+        terminal_alacritty_config::AlacrittyConfig,
+        terminal_alacritty_config::FontConfig,
+        terminal_alacritty_config::FontFace,
+        terminal_alacritty_config::ColorsConfig,
+        terminal_alacritty_config::PrimaryColors,
+        terminal_alacritty_config::CursorColors,
+        terminal_alacritty_config::AnsiPalette,
+        terminal_alacritty_config::CursorConfig,
+        terminal_alacritty_config::CursorStyle,
+        terminal_alacritty_config::ScrollingConfig,
         claude_code_routes::ProfileView,
         claude_code_routes::ProfilesResponse,
         claude_code_routes::UpsertProfileRequest,
@@ -412,6 +501,9 @@ use crate::domain::ws_session::routes as ws_routes;
         push_models::PushUnsubscribeRequest,
         push_models::PushSubscriptionKeys,
         push_models::PushSubscriptionResponse,
+        neovim_protocol::NeovimStartResponse,
+        neovim_protocol::NeovimDetectResponse,
+        neovim_protocol::OpenFileRequest,
         ws_protocol::WsSessionAction,
         ws_protocol::PermissionDecision,
         ws_protocol::SessionInitPayload,
@@ -439,6 +531,8 @@ use crate::domain::ws_session::routes as ws_routes;
         ws_protocol::SessionConfigSnapshotPayload,
         ws_protocol::FastModeSetOkPayload,
         ws_protocol::ProfileChangedPayload,
+        ws_protocol::RuntimeOverridesChangedPayload,
+        ws_protocol::RuntimeOverridesSetPayload,
         ws_protocol::RuntimeSessionIdPayload,
         ws_protocol::BranchRewoundPayload,
         ws_protocol::BranchForkedPayload,
@@ -447,6 +541,9 @@ use crate::domain::ws_session::routes as ws_routes;
         ws_protocol::CommandsGetPayload,
         ws_protocol::CommandsListPayload,
         ws_protocol::CommandsUpdatedPayload,
+        super::AgentSelectionResponse,
+        crate::domain::agents::ResolvedSelection,
+        crate::domain::agents::SelectionOrigin,
     ))
 )]
 struct ApiDoc;

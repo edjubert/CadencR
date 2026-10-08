@@ -8,6 +8,7 @@ mod events;
 mod jsonl_surgery;
 mod model_alias;
 mod post_plan_approval;
+mod profile_adapter;
 pub mod profiles;
 mod prompt_receipts;
 pub(crate) mod question_answers;

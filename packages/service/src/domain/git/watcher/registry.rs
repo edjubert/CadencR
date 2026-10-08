@@ -50,7 +50,7 @@ impl GitWatcherRegistry {
         )
         .await;
 
-        if !worktree_path.exists() {
+        if !crate::shared::git_context::has_git_metadata(&worktree_path).await? {
             return Ok(snapshot);
         }
 
@@ -171,6 +171,45 @@ mod tests {
             .current_dir(dir)
             .status()
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn plain_folder_subscription_does_not_start_a_git_watcher() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(":memory:")
+            .await
+            .unwrap();
+        for sql in [
+            "CREATE TABLE projects (id INTEGER PRIMARY KEY, path TEXT)",
+            "CREATE TABLE features (id INTEGER PRIMARY KEY, project_id INTEGER, type TEXT, title TEXT)",
+            "CREATE TABLE feature_settings (feature_id INTEGER, key TEXT, value TEXT)",
+            "INSERT INTO features VALUES (1, 1, 'ws-session', 'Plain project')",
+        ] {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+        }
+        sqlx::query("INSERT INTO projects VALUES (1, ?)")
+            .bind(dir.path().to_string_lossy().as_ref())
+            .execute(&pool)
+            .await
+            .unwrap();
+        let state = AppState::with_pool(pool);
+        let (tx, _rx) = mpsc::unbounded_channel::<Message>();
+        let snapshot = state
+            .git_watcher
+            .subscribe(&state, 1, tx.clone())
+            .await
+            .unwrap();
+        assert_eq!(snapshot.current_branch, "");
+        assert_eq!(state.git_watcher.handle_count().await, 0);
+
+        // Detection is not cached: initializing Git later enables the watcher
+        // on the next subscription without recreating the project.
+        git_init(dir.path());
+        state.git_watcher.subscribe(&state, 1, tx).await.unwrap();
+        assert_eq!(state.git_watcher.handle_count().await, 1);
+        state.git_watcher.shutdown().await;
     }
 
     #[tokio::test]

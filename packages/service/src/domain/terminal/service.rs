@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
@@ -7,35 +6,19 @@ use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, Pt
 use tokio::sync::{broadcast, watch};
 use tracing::{info, warn};
 
-const SCROLLBACK_CAP: usize = 50 * 1024; // 50KB
+mod output;
+use output::publish_output;
+pub use output::ScrollbackBuffer;
 
-/// Ring buffer that keeps the last ~50KB of terminal output.
-pub struct ScrollbackBuffer {
-    buf: VecDeque<u8>,
-}
-
-impl ScrollbackBuffer {
-    fn new() -> Self {
-        Self {
-            buf: VecDeque::with_capacity(SCROLLBACK_CAP),
-        }
-    }
-
-    pub fn append(&mut self, data: &[u8]) {
-        let overflow = (self.buf.len() + data.len()).saturating_sub(SCROLLBACK_CAP);
-        if overflow > 0 {
-            self.buf.drain(..overflow);
-        }
-        self.buf.extend(data);
-    }
-
-    pub fn contents(&self) -> String {
-        let (a, b) = self.buf.as_slices();
-        let mut v = Vec::with_capacity(a.len() + b.len());
-        v.extend_from_slice(a);
-        v.extend_from_slice(b);
-        String::from_utf8_lossy(&v).into_owned()
-    }
+/// What a PTY is used for. Every PTY lives in the same `PtyManager` map keyed
+/// only by feature, so listing/killing "a feature's terminals" must filter on
+/// this — otherwise a feature's Neovim process (its own PTY, tagged with the
+/// same `feature_id`) gets surfaced to a client asking for shell sessions to
+/// attach to, or killed by a "close all terminals" action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PtyKind {
+    Terminal,
+    Neovim,
 }
 
 /// Handle for a single PTY session.
@@ -57,6 +40,17 @@ pub struct PtyHandle {
     /// new one — the broadcast channel already supports multiple subscribers.
     pub feature_id: i64,
     pub shell_process_group_leader: Option<i32>,
+    pub kind: PtyKind,
+}
+
+impl PtyHandle {
+    /// Output publication takes this same lock, making replay and subscription
+    /// one boundary: bytes appear either in scrollback or in the receiver.
+    pub(crate) fn subscribe_with_scrollback(&self) -> (String, broadcast::Receiver<String>) {
+        let scrollback = self.scrollback.lock().unwrap_or_else(|e| e.into_inner());
+        let receiver = self.data_tx.subscribe();
+        (scrollback.contents(), receiver)
+    }
 }
 
 /// A live PTY belonging to a feature, surfaced so another client can attach.
@@ -75,6 +69,7 @@ pub(super) struct PtyReconnect {
     pub alive: bool,
     pub scrollback: String,
     pub cwd: String,
+    pub data_rx: broadcast::Receiver<String>,
 }
 
 /// Manages all PTY sessions. Stored in AppState.
@@ -98,6 +93,29 @@ impl PtyManager {
         cols: u16,
         rows: u16,
     ) -> anyhow::Result<(String, Arc<PtyHandle>)> {
+        self.create_pty_with_command(
+            feature_id,
+            CommandBuilder::new_default_prog(),
+            cwd,
+            cols,
+            rows,
+            PtyKind::Terminal,
+        )
+    }
+
+    /// Spawn a new PTY running `cmd`. The caller supplies the program and its
+    /// arguments; this method still applies the environment every Cadencr PTY
+    /// gets — working directory, `TERM`, and removal of the service launch
+    /// token — so a caller-supplied command can never inherit it.
+    pub fn create_pty_with_command(
+        &self,
+        feature_id: i64,
+        mut cmd: CommandBuilder,
+        cwd: &str,
+        cols: u16,
+        rows: u16,
+        kind: PtyKind,
+    ) -> anyhow::Result<(String, Arc<PtyHandle>)> {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtySize {
             rows,
@@ -106,13 +124,10 @@ impl PtyManager {
             pixel_height: 0,
         })?;
 
-        let mut cmd = CommandBuilder::new_default_prog();
         cmd.cwd(cwd);
         cmd.env_remove(crate::shared::security::SERVICE_AUTH_TOKEN_ENV);
-        // Ensure the shell knows it's running inside an xterm-compatible terminal.
-        // Without this, programs (e.g. zsh-autosuggestions) emit wrong escape
-        // sequences, causing duplicate/garbled output.  node-pty set this
-        // automatically; portable_pty does not.
+        // Ensure the program knows it's running inside an xterm-compatible
+        // terminal. Without this, programs emit wrong escape sequences.
         cmd.env("TERM", "xterm-256color");
 
         let mut child = pair.slave.spawn_command(cmd)?;
@@ -142,6 +157,7 @@ impl PtyManager {
             cwd: cwd.to_string(),
             feature_id,
             shell_process_group_leader,
+            kind,
         });
 
         self.terminals.insert(pty_id.clone(), Arc::clone(&handle));
@@ -152,20 +168,16 @@ impl PtyManager {
         let data_tx_reader = data_tx;
         tokio::task::spawn_blocking(move || {
             let mut buf = [0u8; 4096];
+            let mut decoder = output::Utf8Output::default();
             loop {
                 let n = match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => n,
                     Err(_) => break,
                 };
-                let data = String::from_utf8_lossy(&buf[..n]).into_owned();
-                scrollback
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .append(&buf[..n]);
-                // send() only fails when there are no receivers — that's fine
-                let _ = data_tx_reader.send(data);
+                publish_output(&scrollback, &data_tx_reader, decoder.push(&buf[..n]));
             }
+            publish_output(&scrollback, &data_tx_reader, decoder.finish());
         });
 
         // Child watcher task: signals alive channel and schedules cleanup.
@@ -179,7 +191,7 @@ impl PtyManager {
                 Err(_) => -1,
             };
             info!(pty_id = %pid, exit_code, "PTY child exited");
-            let _ = alive_tx.send(Some(exit_code));
+            alive_tx.send_replace(Some(exit_code));
 
             tokio::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_secs(300)).await;
@@ -254,7 +266,9 @@ impl PtyManager {
             .terminals
             .iter()
             .filter(|entry| {
-                entry.value().feature_id == feature_id && entry.value().alive.borrow().is_none()
+                entry.value().feature_id == feature_id
+                    && entry.value().kind == PtyKind::Terminal
+                    && entry.value().alive.borrow().is_none()
             })
             .map(|entry| entry.key().clone())
             .collect::<Vec<_>>();
@@ -305,20 +319,17 @@ impl PtyManager {
         feature_id: i64,
     ) -> Option<PtyReconnect> {
         let handle = self.terminals.get(pty_id)?;
-        if handle.feature_id != feature_id {
+        if handle.feature_id != feature_id || handle.kind != PtyKind::Terminal {
             return None;
         }
         let alive = handle.alive.borrow().is_none();
-        let scrollback = handle
-            .scrollback
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .contents();
+        let (scrollback, data_rx) = handle.subscribe_with_scrollback();
         Some(PtyReconnect {
             handle: Arc::clone(handle.value()),
             alive,
             scrollback,
             cwd: handle.cwd.clone(),
+            data_rx,
         })
     }
 
@@ -336,7 +347,9 @@ impl PtyManager {
     pub fn feature_ptys(&self, feature_id: i64) -> Vec<PtySession> {
         self.terminals
             .iter()
-            .filter(|entry| entry.value().feature_id == feature_id)
+            .filter(|entry| {
+                entry.value().feature_id == feature_id && entry.value().kind == PtyKind::Terminal
+            })
             .map(|entry| PtySession {
                 pty_id: entry.key().clone(),
                 cwd: entry.value().cwd.clone(),
@@ -350,6 +363,55 @@ impl PtyManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn exit_status_survives_without_a_subscriber() {
+        let manager = PtyManager::new();
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.args(["-c", "exit 7"]);
+        let (_, handle) = manager
+            .create_pty_with_command(1, command, &temp_existing_dir(), 80, 24, PtyKind::Neovim)
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while handle.alive.borrow().is_none() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("exit must be retained without watch receivers");
+        assert_eq!(*handle.alive.subscribe().borrow(), Some(7));
+    }
+
+    #[tokio::test]
+    async fn output_snapshot_and_subscription_do_not_overlap() {
+        let manager = PtyManager::new();
+        let (id, handle) = manager.create_pty(1, &temp_existing_dir(), 80, 24).unwrap();
+        // Serialize this deterministic publisher with the real reader just as
+        // an actual read is serialized with a concurrent reconnect snapshot.
+        publish_output(
+            &handle.scrollback,
+            &handle.data_tx,
+            "before-snapshot".to_string(),
+        );
+        let reconnect = manager.reconnect_for_feature(&id, 1).unwrap();
+        let snapshot = reconnect.scrollback;
+        let mut receiver = reconnect.data_rx;
+        publish_output(
+            &handle.scrollback,
+            &handle.data_tx,
+            "after-snapshot".to_string(),
+        );
+        assert!(snapshot.contains("before-snapshot"));
+        assert!(!snapshot.contains("after-snapshot"));
+        let mut found_after = false;
+        while let Ok(chunk) = receiver.try_recv() {
+            assert!(!chunk.contains("before-snapshot"));
+            found_after |= chunk.contains("after-snapshot");
+        }
+        assert!(found_after);
+        manager.kill_pty(&id).unwrap();
+    }
 
     fn temp_existing_dir() -> String {
         std::env::temp_dir().to_string_lossy().into_owned()
@@ -422,6 +484,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn feature_ptys_excludes_neovim_ptys() {
+        // A feature's Neovim process is spawned through this same manager
+        // (`NeovimManager::start` calls `create_pty_with_command` too), tagged
+        // with the same `feature_id` as its terminal shells. If it leaked into
+        // `feature_ptys`, a client listing "this feature's terminal sessions"
+        // to attach to would adopt Neovim's raw PTY as a shell — which is
+        // exactly what made a fresh Terminal tab show Neovim's own screen.
+        let manager = PtyManager::new();
+        let cwd = temp_existing_dir();
+        let (shell_id, _) = manager.create_pty(7, &cwd, 80, 24).expect("spawn shell");
+        let mut nvim_cmd = CommandBuilder::new("/bin/sh");
+        nvim_cmd.arg("-c");
+        nvim_cmd.arg("sleep 60");
+        let (nvim_id, _) = manager
+            .create_pty_with_command(7, nvim_cmd, &cwd, 80, 24, PtyKind::Neovim)
+            .expect("spawn neovim-tagged pty");
+
+        let sessions = manager.feature_ptys(7);
+        assert_eq!(sessions.len(), 1, "only the terminal shell is listed");
+        assert_eq!(sessions[0].pty_id, shell_id);
+        assert!(!sessions.iter().any(|s| s.pty_id == nvim_id));
+
+        assert!(
+            manager.reconnect_for_feature(&nvim_id, 7).is_none(),
+            "reconnecting to a Neovim-tagged pty via the terminal socket must be refused"
+        );
+
+        manager.kill_all();
+    }
+
+    #[tokio::test]
     async fn kill_feature_ptys_only_kills_that_feature() {
         let manager = PtyManager::new();
         let cwd = temp_existing_dir();
@@ -442,6 +535,31 @@ mod tests {
 
         // The other feature's shell is untouched, so its child is still running.
         assert_eq!(manager.feature_ptys(99).len(), 1, "other feature untouched");
+
+        manager.kill_all();
+    }
+
+    #[tokio::test]
+    async fn kill_feature_ptys_leaves_neovim_running() {
+        // "Close all terminals" (sidebar action, feature archive/delete) must
+        // not take the feature's Neovim process down with it.
+        let manager = PtyManager::new();
+        let cwd = temp_existing_dir();
+        let (_shell_id, _) = manager.create_pty(7, &cwd, 80, 24).expect("spawn shell");
+        let mut nvim_cmd = CommandBuilder::new("/bin/sh");
+        nvim_cmd.arg("-c");
+        nvim_cmd.arg("sleep 60");
+        let (nvim_id, _) = manager
+            .create_pty_with_command(7, nvim_cmd, &cwd, 80, 24, PtyKind::Neovim)
+            .expect("spawn neovim-tagged pty");
+
+        let killed = manager.kill_feature_ptys(7);
+        assert_eq!(killed, 1, "only the terminal shell is killed");
+        assert_eq!(
+            manager.get_cwd(&nvim_id),
+            Some(cwd.clone()),
+            "the neovim-tagged pty is still tracked, i.e. was never killed"
+        );
 
         manager.kill_all();
     }
@@ -501,6 +619,51 @@ mod tests {
         assert!(
             saw_login_shell,
             "PTY shell should be started as a login shell"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_pty_with_command_runs_the_supplied_program() {
+        let manager = PtyManager::new();
+        let cwd = temp_existing_dir();
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.arg("-c");
+        cmd.arg("printf 'CADENCR_CUSTOM_CMD=ran\\n'");
+
+        let (pty_id, handle) = manager
+            .create_pty_with_command(11, cmd, &cwd, 80, 24, PtyKind::Terminal)
+            .expect("custom-command PTY should spawn");
+
+        assert_eq!(handle.feature_id, 11);
+        let saw_output = wait_for_scrollback(&manager, &pty_id, "CADENCR_CUSTOM_CMD=ran").await;
+        manager.kill_all();
+        assert!(
+            saw_output,
+            "the supplied command should have run in the PTY"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_pty_with_command_still_scrubs_the_service_auth_token() {
+        let _guard = crate::shared::test_env::async_env_lock().lock().await;
+        let _auth =
+            crate::shared::test_env::EnvVarGuard::set("CADENCR_AUTH_TOKEN", "service-secret");
+
+        let manager = PtyManager::new();
+        let cwd = temp_existing_dir();
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.arg("-c");
+        cmd.arg("printf 'AUTH=%s\\n' \"${CADENCR_AUTH_TOKEN-unset}\"");
+
+        let (pty_id, _) = manager
+            .create_pty_with_command(12, cmd, &cwd, 80, 24, PtyKind::Terminal)
+            .expect("custom-command PTY should spawn");
+
+        let scrubbed = wait_for_scrollback(&manager, &pty_id, "AUTH=unset").await;
+        manager.kill_all();
+        assert!(
+            scrubbed,
+            "a caller-supplied command must not inherit the service launch token"
         );
     }
 

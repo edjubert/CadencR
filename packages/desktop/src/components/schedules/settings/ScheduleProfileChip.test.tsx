@@ -43,18 +43,18 @@ describe("ScheduleProfileChip", () => {
 
   it("offers the profiles once they resolve", () => {
     renderChip();
-    expect(screen.getByRole("combobox", { name: "Claude profile" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Profile" })).toBeInTheDocument();
   });
 
   it("renders nothing for a provider that has no profile axis", () => {
     renderChip(PROVIDER_IDS.CODEX_CLI);
-    expect(screen.queryByRole("combobox", { name: "Claude profile" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Profile" })).not.toBeInTheDocument();
   });
 
   it("stays hidden once resolved with only the default profile", () => {
     mockUseClaudeCodeProfiles.mockReturnValue(profilesResult([]));
     renderChip();
-    expect(screen.queryByRole("combobox", { name: "Claude profile" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Profile" })).not.toBeInTheDocument();
     expect(screen.queryByText("Loading profiles…")).not.toBeInTheDocument();
   });
 

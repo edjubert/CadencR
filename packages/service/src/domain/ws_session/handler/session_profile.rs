@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 
 use crate::app_state::AppState;
-use crate::domain::agents::claude_code;
-use crate::domain::ws_session::persistence::WsSessionPersistence;
+use crate::domain::agents::providers::runtime_adapter;
 use crate::domain::ws_session::protocol::PromptSendPayload;
 
 use super::types::{QueryState, SdkHandle};
@@ -10,6 +9,9 @@ use super::types::{QueryState, SdkHandle};
 pub(super) struct SessionProfileUpdate {
     pub(super) name: String,
     env: Option<HashMap<String, String>>,
+    env_unset: Vec<String>,
+    revision: String,
+    state_identity: Option<String>,
 }
 
 pub(super) fn prompt_profile(payload: &PromptSendPayload) -> Option<&str> {
@@ -23,64 +25,64 @@ pub(super) async fn resolve_provider_profile(
     _app_state: &AppState,
     provider: &str,
     profile: &str,
+    cwd: &std::path::Path,
 ) -> Result<SessionProfileUpdate, String> {
-    if provider != claude_code::PROVIDER_ID {
-        return Ok(SessionProfileUpdate {
-            name: profile.to_string(),
-            env: None,
-        });
-    }
-    let (name, env) = claude_code::profiles::resolve_profile_env_by_name(Some(profile))
-        .map_err(|error| error.to_string())?;
-    Ok(SessionProfileUpdate { name, env })
+    let adapter = runtime_adapter(provider)
+        .ok_or_else(|| format!("provider '{provider}' is not available"))?;
+    let resolved = adapter
+        .resolve_profile(Some(profile), cwd)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("provider '{provider}' does not support profiles"))?;
+    Ok(SessionProfileUpdate {
+        name: resolved.identity,
+        env: (!resolved.env.is_empty()).then_some(resolved.env),
+        env_unset: resolved.env_unset,
+        revision: resolved.revision,
+        state_identity: resolved.state_identity,
+    })
 }
 
 pub(super) fn desired_profile_name(handle: &SdkHandle) -> Option<&str> {
-    if handle.runtime_provider == claude_code::PROVIDER_ID {
-        return handle.desired_claude_profile.as_deref();
-    }
-    None
+    handle.desired_claude_profile.as_deref()
 }
 
 pub(super) fn apply_profile_update(handle: &mut SdkHandle, update: &SessionProfileUpdate) -> bool {
-    if handle.runtime_provider != claude_code::PROVIDER_ID {
-        return false;
-    }
     let changed = handle.desired_claude_profile.as_deref() != Some(update.name.as_str())
         || handle.config.claude_profile.as_deref() != Some(update.name.as_str())
-        || handle.config.env != update.env;
+        || handle.config.env != update.env
+        || handle.config.profile_revision.as_deref() != Some(update.revision.as_str())
+        || handle.config.profile_state_identity != update.state_identity;
     handle.desired_claude_profile = Some(update.name.clone());
     handle.config.claude_profile = Some(update.name.clone());
     handle.config.env = update.env.clone();
+    handle.config.env_unset = update.env_unset.clone();
+    handle.config.profile_revision = Some(update.revision.clone());
+    handle.config.profile_state_identity = update.state_identity.clone();
+    handle.config.runtime_overrides_dirty |= changed;
     if let QueryState::Pending(options) = &mut handle.state {
         options.env = update.env.clone();
+        options.env_unset = update.env_unset.clone();
+        options.profile = Some(update.name.clone());
+        options.profile_revision = Some(update.revision.clone());
+        options.profile_state_identity = update.state_identity.clone();
     }
+    tracing::debug!(profile_revision = %update.revision, state_identity = ?update.state_identity, "resolved provider profile update");
     changed
 }
 
-pub(super) async fn resolve_initial_claude_profile(
-    app_state: &AppState,
-    db_session_id: i64,
-    stored_profile: Option<&str>,
-) -> (String, Option<HashMap<String, String>>) {
-    if let Some(profile) = stored_profile
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+pub(super) fn validate_resume_profile_state(
+    handle: &SdkHandle,
+    update: &SessionProfileUpdate,
+) -> Result<(), String> {
+    let has_runtime_state = handle.resume_session_id.is_some()
+        || matches!(handle.state, QueryState::Active { .. })
+        || matches!(&handle.state, QueryState::Pending(options) if options.resume_session_id.is_some());
+    if has_runtime_state
+        && handle.config.profile_state_identity.is_some()
+        && handle.config.profile_state_identity != update.state_identity
     {
-        return claude_code::profiles::resolve_profile_env_by_name(Some(profile))
-            .unwrap_or_else(|error| {
-            tracing::warn!(
-                db_session_id,
-                profile,
-                %error,
-                "stored Claude profile could not be resolved; keeping session profile without env"
-            );
-            (profile.to_string(), None)
-        });
+        return Err("selected profile uses a different provider state home; fork a new conversation instead of resuming this one".to_string());
     }
-
-    let (profile, env) = claude_code::profiles::resolve_active_profile_env();
-    WsSessionPersistence::update_profile_static(&app_state.write_pool, db_session_id, &profile)
-        .await;
-    (profile, env)
+    Ok(())
 }

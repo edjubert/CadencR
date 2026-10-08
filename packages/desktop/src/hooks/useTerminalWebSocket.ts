@@ -105,17 +105,31 @@ export interface UseTerminalWebSocketOptions {
    * a second snapshot read.
    */
   requestedCwd?: string;
+  shouldKillOnUnmount?: () => boolean;
   onData: (data: string) => void;
   onExit: (code: number) => void;
   onReady: (ptyId: string, cwd: string) => void;
   onReconnected: (scrollback: string, alive: boolean, cwd: string | null) => void;
-  onError: (message: string) => void;
+  /**
+   * `kind` separates a refusal from the backend (`"protocol"` — e.g. it can't
+   * attach to the PTY we asked for) from losing the socket (`"transport"`),
+   * which already has a reconnect scheduled and needs no other recovery.
+   */
+  onError: (message: string, kind: "protocol" | "transport") => void;
 }
 
 interface UseTerminalWebSocketReturn {
   /** Initiate the WebSocket connection. Call after terminal is fitted to pass accurate dimensions. */
   connect: (cols: number, rows: number) => void;
-  write: (data: string) => void;
+  /** Close the WebSocket without sending a kill signal to the backend — the PTY is left alive for a future reconnect. */
+  disconnect: () => void;
+  /**
+   * Drop the remembered PTY id so the next `connect` spawns a fresh shell
+   * instead of trying to reattach. Used when the backend tells us the PTY we
+   * were holding on to is gone.
+   */
+  forgetPty: () => void;
+  write: (data: string) => boolean;
   resize: (cols: number, rows: number) => void;
   kill: () => void;
   isConnected: boolean;
@@ -146,6 +160,7 @@ function buildWsUrl(options: BuildOptions, cols?: number, rows?: number): string
 
 interface TerminalConnectionRefs {
   connRef: { current: WsConnection | null };
+  generationRef: { current: number };
   dimsRef: { current: { cols: number; rows: number } | null };
   lastForcedAtRef: { current: number };
   latestPtyIdRef: { current: string | undefined };
@@ -162,21 +177,27 @@ function handleTerminalMessage(data: string, refs: TerminalConnectionRefs): void
         break;
       case "ready":
         refs.latestPtyIdRef.current = message.pty_id;
+        if (refs.dimsRef.current) {
+          refs.connRef.current?.sendJson({ type: "resize", ...refs.dimsRef.current });
+        }
         callbacks.onReady(message.pty_id, message.cwd);
         break;
       case "exit":
         callbacks.onExit(message.code);
         break;
       case "reconnected":
+        if (message.alive && refs.dimsRef.current) {
+          refs.connRef.current?.sendJson({ type: "resize", ...refs.dimsRef.current });
+        }
         callbacks.onReconnected(message.scrollback, message.alive, message.cwd);
         if (!message.alive) refs.latestPtyIdRef.current = undefined;
         break;
       case "error":
-        callbacks.onError(message.message);
+        callbacks.onError(message.message, "protocol");
         break;
     }
   } catch {
-    refs.optionsRef.current.onError("Failed to parse terminal message");
+    refs.optionsRef.current.onError("Failed to parse terminal message", "protocol");
   }
 }
 
@@ -186,6 +207,7 @@ function useTerminalConnector(
 ) {
   const refs: TerminalConnectionRefs = {
     connRef: useRef<WsConnection | null>(null),
+    generationRef: useRef(0),
     dimsRef: useRef<{ cols: number; rows: number } | null>(null),
     lastForcedAtRef: useRef(0),
     latestPtyIdRef: useRef<string | undefined>(options.ptyId),
@@ -195,6 +217,7 @@ function useTerminalConnector(
   const reconnectKey = useRef(`terminal:${crypto.randomUUID()}`).current;
   const doConnect = useCallback(
     (cols: number, rows: number) => {
+      const generation = ++refs.generationRef.current;
       refs.dimsRef.current = { cols, rows };
       refs.connRef.current?.close(1000, "reconnect");
       const buildOptions: BuildOptions = {
@@ -211,23 +234,27 @@ function useTerminalConnector(
         url: buildWsUrl(buildOptions, cols, rows),
         protocols: getWsProtocols(),
         onOpen: () => {
+          if (generation !== refs.generationRef.current) return;
           setIsConnected(true);
           resetReconnectState(reconnectKey);
           refs.lastForcedAtRef.current = 0;
           toast.dismiss(TERMINAL_DROPPED_TOAST_ID);
           useConnectionStatusStore.getState().reportSource(reconnectKey, "connected");
         },
-        onMessage: (data) => handleTerminalMessage(data, refs),
+        onMessage: (data) => {
+          if (generation === refs.generationRef.current) handleTerminalMessage(data, refs);
+        },
         onError: (intentional) => {
-          if (intentional) return;
+          if (intentional || generation !== refs.generationRef.current) return;
           useConnectionStatusStore
             .getState()
             .reportSource(reconnectKey, "reconnecting", "Terminal WebSocket error");
         },
         onClose: (intentional, event) => {
+          if (generation !== refs.generationRef.current) return;
           setIsConnected(false);
-          if (intentional) return;
-          refs.optionsRef.current.onError("Connection lost. Reconnecting…");
+          if (intentional || generation !== refs.generationRef.current) return;
+          refs.optionsRef.current.onError("Connection lost. Reconnecting…", "transport");
           useConnectionStatusStore
             .getState()
             .reportSource(reconnectKey, "reconnecting", "Terminal WebSocket dropped");
@@ -240,7 +267,10 @@ function useTerminalConnector(
     },
     [reconnectKey, setIsConnected],
   );
-  return useMemo(() => ({ doConnect, reconnectKey, refs }), [doConnect, reconnectKey]);
+  return useMemo(
+    () => ({ doConnect, reconnectKey, refs, setIsConnected }),
+    [doConnect, reconnectKey, setIsConnected],
+  );
 }
 
 type TerminalConnector = ReturnType<typeof useTerminalConnector>;
@@ -284,6 +314,10 @@ function useTerminalSocketActions(connector: TerminalConnector) {
   );
   useEffect(
     () => () => {
+      refs.generationRef.current += 1;
+      if (refs.optionsRef.current.shouldKillOnUnmount?.()) {
+        refs.connRef.current?.sendJson({ type: "kill" });
+      }
       refs.connRef.current?.close(1000, "unmount");
       unregisterReconnector(reconnectKey);
       useConnectionStatusStore.getState().clearSource(reconnectKey);
@@ -295,7 +329,9 @@ function useTerminalSocketActions(connector: TerminalConnector) {
       const connection = refs.connRef.current;
       if (devFrozen.current || !connection || !connection.sendJson({ type: "write", data })) {
         reportDroppedWrite(data, connector);
+        return false;
       }
+      return true;
     },
     [connector, refs.connRef],
   );
@@ -319,7 +355,22 @@ function useTerminalSocketActions(connector: TerminalConnector) {
       console.warn("[terminal] dropped kill");
     }
   }, [refs.connRef]);
-  return useMemo(() => ({ connect, kill, resize, write }), [connect, kill, resize, write]);
+  const disconnect = useCallback(() => {
+    refs.generationRef.current += 1;
+    const connection = refs.connRef.current;
+    refs.connRef.current = null;
+    connector.setIsConnected(false);
+    unregisterReconnector(reconnectKey);
+    useConnectionStatusStore.getState().clearSource(reconnectKey);
+    connection?.close(1000, "disconnect");
+  }, [connector, reconnectKey, refs]);
+  const forgetPty = useCallback(() => {
+    refs.latestPtyIdRef.current = undefined;
+  }, [refs]);
+  return useMemo(
+    () => ({ connect, disconnect, forgetPty, kill, resize, write }),
+    [connect, disconnect, forgetPty, kill, resize, write],
+  );
 }
 
 export function useTerminalWebSocket(

@@ -97,6 +97,10 @@ async fn handle_session_action(
         "profile.set" => {
             session_control::handle_profile_set(envelope, sender, sdk_sessions, app_state).await
         }
+        "runtime_overrides.set" => {
+            session_control::handle_runtime_overrides_set(envelope, sender, sdk_sessions, app_state)
+                .await
+        }
         "interrupt" => {
             session_control::handle_interrupt(envelope, sender, sdk_sessions, app_state).await
         }

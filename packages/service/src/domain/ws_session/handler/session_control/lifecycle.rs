@@ -171,9 +171,10 @@ pub(crate) async fn handle_destroy(
     if let QueryState::Active { query, .. } = handle.state {
         persist_and_close_query(
             &query,
-            &app_state.write_pool,
+            app_state,
             db_session_id,
             &runtime_provider,
+            feature_id,
         )
         .await;
     }
@@ -311,9 +312,10 @@ pub(crate) async fn handle_clear(
             WsSessionPersistence::mark_completed_static(&app_state.write_pool, db_session_id).await;
             persist_and_close_query(
                 query,
-                &app_state.write_pool,
+                app_state,
                 db_session_id,
                 &handle.runtime_provider,
+                handle.feature_id,
             )
             .await
         }
@@ -340,6 +342,11 @@ pub(crate) async fn handle_clear(
         thinking_effort: handle.desired_thinking_effort.clone(),
         system_prompt: handle.config.system_prompt.clone(),
         env: handle.config.env.clone(),
+        env_unset: handle.config.env_unset.clone(),
+        profile: handle.config.claude_profile.clone(),
+        overrides: handle.config.overrides.clone(),
+        profile_revision: handle.config.profile_revision.clone(),
+        profile_state_identity: handle.config.profile_state_identity.clone(),
         ..RuntimeSpawnConfig::default()
     };
     handle.state = QueryState::Pending(fresh_options);

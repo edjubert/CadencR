@@ -96,6 +96,7 @@ pub fn workspace_spec(key: &str) -> Option<SettingSpec> {
         | "onboarding_intro_shown" => SettingSpec::new(BOOL, Some("false")),
         // These default on.
         "editor_auto_save"
+        | "sidebar_provider_logos"
         | "animations_enabled"
         | "browser_mcp_enabled"
         | "project_mcp_enabled" => SettingSpec::new(BOOL, Some("true")),
@@ -115,12 +116,19 @@ pub fn workspace_spec(key: &str) -> Option<SettingSpec> {
         "browser_default_mode" => {
             SettingSpec::new(ValueKind::Enum(&["normal", "private"]), Some("normal"))
         }
+        "browser_search_engine" => SettingSpec::new(
+            ValueKind::Enum(&["google", "duckduckgo", "bing", "brave"]),
+            Some("google"),
+        ),
         "editor_file_tree_icon_set" => SettingSpec::new(
             ValueKind::Enum(&["minimal", "standard", "complete"]),
             Some("standard"),
         ),
         "git_diff_view_mode" => {
             SettingSpec::new(ValueKind::Enum(&["unified", "split"]), Some("unified"))
+        }
+        "editor_vim_mode_level" => {
+            SettingSpec::new(ValueKind::Enum(&["0", "1", "2", "3"]), Some("0"))
         }
         "agent_stream_verbosity_mode" => SettingSpec::new(
             ValueKind::Enum(&["maximal", "auto_collapse", "collapsed", "compact"]),
@@ -192,6 +200,16 @@ mod tests {
     }
 
     #[test]
+    fn browser_search_engine_spec_matches_frontend_options() {
+        let spec = workspace_spec("browser_search_engine").unwrap();
+        for valid in ["google", "duckduckgo", "bing", "brave"] {
+            assert!(spec.is_valid(valid), "expected {valid} to be valid");
+        }
+        assert!(!spec.is_valid("ask-jeeves"));
+        assert_eq!(spec.default, Some("google"));
+    }
+
+    #[test]
     fn git_diff_view_mode_spec_validates_and_defaults() {
         let spec = workspace_spec("git_diff_view_mode").unwrap();
         assert!(spec.is_valid("unified"));
@@ -249,6 +267,26 @@ mod tests {
             );
             assert!(project_spec(key).is_some(), "{key} missing project spec");
         }
+    }
+
+    #[test]
+    fn editor_vim_mode_level_accepts_0_to_3_and_rejects_others() {
+        let spec = workspace_spec("editor_vim_mode_level").expect("key must be registered");
+        assert_eq!(spec.default, Some("0"));
+        for valid in ["0", "1", "2", "3"] {
+            assert!(spec.is_valid(valid), "expected {valid} to be valid");
+        }
+        assert!(!spec.is_valid("4"));
+        assert!(!spec.is_valid("true"));
+    }
+
+    #[test]
+    fn sidebar_provider_logos_default_on_and_validate() {
+        let spec = workspace_spec("sidebar_provider_logos").unwrap();
+        assert_eq!(spec.default, Some("true"));
+        assert!(spec.is_valid("true"));
+        assert!(spec.is_valid("false"));
+        assert!(!spec.is_valid("hidden"));
     }
 
     #[test]

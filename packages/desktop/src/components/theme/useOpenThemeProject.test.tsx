@@ -83,6 +83,21 @@ describe("useOpenThemeProject", () => {
     });
   });
 
+  it("uses the workspace returned by creation without a second project request", async () => {
+    const { result } = renderOpen();
+    result.current.open(theme(), {
+      project_id: 7,
+      feature_id: 12,
+      cwd: "/themes/vamp",
+      created: true,
+    });
+
+    await waitFor(() => expect(navigate).toHaveBeenCalled());
+    expect(workspace).not.toHaveBeenCalled();
+    expect(setFeatureSetting).toHaveBeenCalledTimes(1);
+    expect(openTabs(12)).toEqual(["theme.json"]);
+  });
+
   it("puts the theme on, so editing it is visible everywhere", async () => {
     const { result } = renderOpen();
     result.current.open(theme());

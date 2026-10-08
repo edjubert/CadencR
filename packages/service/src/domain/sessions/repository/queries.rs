@@ -19,7 +19,8 @@ pub async fn get_sessions(
         r#"SELECT id, feature_id, agent_type, runtime_provider, runtime_session_id, status, started_at, ended_at,
            subprocess_id, model, profile, pending_questions, has_file_changes,
            permission_mode, codex_permission_mode, pending_permission,
-           input_tokens, output_tokens, context_window, was_compacted, draft_prompt
+           input_tokens, output_tokens, context_window, was_compacted, draft_prompt,
+           message_revision
            FROM agent_sessions WHERE feature_id = ? ORDER BY id DESC"#,
     )
     .bind(feature_id)

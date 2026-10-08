@@ -6,8 +6,8 @@ use serde_json::Value;
 
 use super::branching::SessionBranching;
 use super::config::{
-    access_mode_wire, parse_access_mode_wire, RuntimeAccessMode, RuntimePermissionMode,
-    RuntimeSpawnConfig,
+    ResolvedRuntimeProfile, RuntimeAccessMode, RuntimeConfigOverrides, RuntimeEffectiveConfig,
+    RuntimePermissionMode, RuntimeSpawnConfig,
 };
 use super::error::RuntimeError;
 use super::event_types::RuntimeEvent;
@@ -20,6 +20,48 @@ use super::user_shell::RuntimeUserShellStrategy;
 
 #[async_trait]
 pub trait AgentRuntimeAdapter: Send + Sync {
+    /// Resolve local profile settings for selection, even before the CLI is
+    /// installed. The revision may cover only stored settings; runtime launch
+    /// refreshes it through `resolve_profile` before using native configuration.
+    async fn resolve_profile_for_selection(
+        &self,
+        selection: Option<&str>,
+        cwd: &Path,
+    ) -> Result<Option<ResolvedRuntimeProfile>, RuntimeError> {
+        self.resolve_profile(selection, cwd).await
+    }
+    fn supports_profile_config_inheritance(&self) -> bool {
+        false
+    }
+    async fn resolve_profile_effective_config(
+        &self,
+        _selection: Option<&str>,
+        _cwd: &Path,
+        overrides: &RuntimeConfigOverrides,
+    ) -> Result<RuntimeEffectiveConfig, RuntimeError> {
+        Ok(RuntimeEffectiveConfig {
+            model: overrides.model.clone(),
+            thinking_effort: overrides.thinking_effort.clone(),
+            fast_mode: overrides.fast_mode.unwrap_or(false),
+        })
+    }
+    /// Public, secret-free profile metadata for generic selection surfaces.
+    async fn profile_catalog(
+        &self,
+        _cwd: Option<&Path>,
+    ) -> Result<Option<super::super::runtime::ProviderProfilesResponse>, RuntimeError> {
+        Ok(None)
+    }
+    /// Resolve a persisted profile selection in provider-owned configuration.
+    /// `None` requests the provider's current default. Providers without a
+    /// profile concept return `Ok(None)`.
+    async fn resolve_profile(
+        &self,
+        _selection: Option<&str>,
+        _cwd: &Path,
+    ) -> Result<Option<ResolvedRuntimeProfile>, RuntimeError> {
+        Ok(None)
+    }
     fn is_valid_resume_session_id(&self, _session_id: &str) -> bool {
         true
     }
@@ -44,6 +86,14 @@ pub trait AgentRuntimeAdapter: Send + Sync {
     /// The default accepts any string. Override to apply validation (e.g. UUID-only).
     fn resolve_resume_session_id(&self, runtime_session_id: Option<&str>) -> Option<String> {
         runtime_session_id.map(ToOwned::to_owned)
+    }
+
+    /// Resolve a newly observed runtime ID that is safe to persist for a later
+    /// process. Providers whose resume support is negotiated at runtime can
+    /// reject persistence without discarding an already-stored ID that must
+    /// fail visibly during the next handshake.
+    fn persistable_resume_session_id(&self, runtime_session_id: Option<&str>) -> Option<String> {
+        self.resolve_resume_session_id(runtime_session_id)
     }
 
     /// Static catalog entry (available immediately at startup).
@@ -183,9 +233,8 @@ pub trait AgentRuntimeAdapter: Send + Sync {
         if paths.is_empty() {
             return Ok(());
         }
-        let label = self.catalog_entry().label;
-        crate::domain::agents::config_migration::copy_provider_config_paths(
-            &label,
+        super::adapter_defaults::copy_worktree_config(
+            &self.catalog_entry().label,
             source_project_path,
             worktree_path,
             &paths,
@@ -202,6 +251,14 @@ pub trait AgentRuntimeAdapter: Send + Sync {
         ))
     }
 
+    async fn runtime_slash_commands_for_profile(
+        &self,
+        cwd: &str,
+        _profile: Option<&str>,
+    ) -> Result<Vec<RuntimeSlashCommand>, RuntimeError> {
+        self.runtime_slash_commands(cwd).await
+    }
+
     /// Provider-owned syntax for invoking the normalized command catalog.
     /// Shared UI consumes this policy without branching on provider identity.
     fn prompt_command_policy(&self) -> RuntimePromptCommandPolicy {
@@ -216,26 +273,12 @@ pub trait AgentRuntimeAdapter: Send + Sync {
         RuntimeUserShellStrategy::Unsupported
     }
 
-    /// Whether `refresh_runtime_slash_commands` performs a real
-    /// re-resolve (vs. a no-op default). The WS `commands.get` handler
-    /// reads this to decide whether to advertise `refreshing: true`
-    /// and spawn a background refresh task. Default `false` — providers
-    /// that can re-resolve (today: OpenCode via an ephemeral ACP probe)
-    /// override.
+    /// Whether slash-command refresh performs a real re-resolve.
     fn supports_runtime_slash_command_refresh(&self) -> bool {
         false
     }
 
-    /// Force a fresh re-resolve of the slash-command catalog (typically
-    /// by spawning a short-lived discovery probe). Used by the WS
-    /// `commands.get` handler to background-refresh the cached snapshot
-    /// every time the FE opens the `/` menu, so the picker stays in
-    /// sync with on-disk command changes without the user having to
-    /// reload the session.
-    ///
-    /// Default implementation is a no-op error so providers that don't
-    /// opt in don't pay the cost of `runtime_slash_commands` (which
-    /// for some adapters spawns a subprocess).
+    /// Force a fresh re-resolve of the slash-command catalog.
     async fn refresh_runtime_slash_commands(
         &self,
         _cwd: &str,
@@ -286,14 +329,9 @@ pub trait AgentRuntimeAdapter: Send + Sync {
         false
     }
 
-    /// Whether switching the access mode from `from` to `to` still needs a
-    /// runtime respawn to fully take effect — e.g. because it flips a process
-    /// launch flag (Cursor's sandbox / `--force`) that a live hook can't
-    /// change. Returning `false` lets the orchestrator skip the respawn when
-    /// [`applies_access_mode_in_place`] already covers the whole change.
-    ///
-    /// The default returns `true` so respawn-based providers keep their
-    /// current behavior; `from` is the mode the runtime was last spawned with.
+    /// Whether an access-mode change still requires respawning (for example
+    /// when it changes launch flags). `from` is the last spawned mode.
+    /// Defaults to true; in-place adapters may opt out.
     fn access_mode_change_needs_respawn(
         &self,
         _from: Option<&RuntimeAccessMode>,
@@ -307,25 +345,10 @@ pub trait AgentRuntimeAdapter: Send + Sync {
         read_pool: &sqlx::SqlitePool,
     ) -> Option<RuntimeAccessMode> {
         let setting_key = self.access_mode_setting_key()?;
-        let configured = crate::domain::settings::resolve_setting(
-            read_pool,
-            setting_key.as_ref(),
-            None,
-            None,
-            Some(access_mode_wire(&RuntimeAccessMode::Default)),
-        )
-        .await;
-        Some(
-            configured
-                .as_deref()
-                .and_then(parse_access_mode_wire)
-                .unwrap_or(RuntimeAccessMode::Default),
-        )
+        Some(super::adapter_defaults::configured_access_mode(read_pool, setting_key.as_ref()).await)
     }
 
-    /// Wire string the chip lands on for this provider after a session
-    /// switches to it (post-`provider.set`). Mirrors `defaultEditModeFor` in
-    /// `lib/provider-modes.ts`. Default matches the FE catalog's fallback.
+    /// Initial mode after `provider.set`; matches the frontend catalog fallback.
     fn default_permission_mode_wire(&self) -> Cow<'static, str> {
         Cow::Borrowed("acceptEdits")
     }
@@ -335,16 +358,9 @@ pub trait AgentRuntimeAdapter: Send + Sync {
         self.default_permission_mode_wire()
     }
 
-    /// If the post-plan target mode (chosen by
-    /// `post_plan_approval_mode_wire`) is rejected by the live CLI,
-    /// return a fallback wire string the orchestrator should retry with.
-    /// Returning `None` means propagate the error.
-    ///
-    /// The motivating case is Claude Code's `auto` mode: the catalog
-    /// advertises auto-capable aliases optimistically (we can't always
-    /// tell from the CLI metadata alone whether a given resolved model
-    /// actually supports it), so we observe the rejection at runtime and
-    /// fall back to `acceptEdits`. Other providers default to `None`.
+    /// Fallback after the CLI rejects the post-plan mode. `None` propagates
+    /// the error. Claude uses this when an advertised auto-capable alias
+    /// proves unsupported at runtime.
     fn post_plan_approval_fallback_mode_wire(
         &self,
         _failed_mode_wire: &str,
@@ -401,6 +417,7 @@ mod tests {
             crate::domain::agents::runtime::ProviderCatalogEntry {
                 id: "dummy".to_string(),
                 label: "Dummy".to_string(),
+                icon_data: None,
                 status: crate::domain::agents::runtime::ProviderStatus::Available,
                 status_message: None,
                 models: vec![],
@@ -423,6 +440,10 @@ mod tests {
     async fn adapter_defaults_are_provider_neutral() {
         let adapter = DummyAdapter;
         assert!(adapter.is_valid_resume_session_id("anything"));
+        assert_eq!(
+            adapter.persistable_resume_session_id(Some("anything")),
+            Some("anything".to_string())
+        );
         assert!(adapter
             .parse_permission_request(&json!({"type": "none"}))
             .is_none());

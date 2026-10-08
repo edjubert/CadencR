@@ -3,13 +3,40 @@ use utoipa::ToSchema;
 
 pub use crate::domain::agents::runtime::ProviderSettings as ProjectProviderSettings;
 
-/// `projects.kind` for the project Cadencr creates to hold a user theme.
-///
-/// It is listed and worked in like any project the user added (the column
-/// defaults to `user`, so nothing they added is affected). The marker exists so
-/// the theme that owns the project can find it again — to open it, to rename it
-/// when the theme is renamed, and to delete it with the theme.
+/// Legacy `projects.kind` used by theme projects created before durable
+/// authoring metadata. New theme projects remain `kind = 'user'` and use
+/// [`ProjectAuthoringTarget::Theme`] plus `plugin_id`; this constant exists only
+/// so old rows can still be found without reclassifying them.
 pub const THEME_PROJECT_KIND: &str = "theme";
+
+/// The plugin content authored by an otherwise ordinary user project.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ProjectAuthoringTarget {
+    Theme,
+    Provider,
+}
+
+impl ProjectAuthoringTarget {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Theme => "theme",
+            Self::Provider => "provider",
+        }
+    }
+}
+
+impl TryFrom<&str> for ProjectAuthoringTarget {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "theme" => Ok(Self::Theme),
+            "provider" => Ok(Self::Provider),
+            _ => Err(format!("unknown project authoring target {value:?}")),
+        }
+    }
+}
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Project {
@@ -18,6 +45,10 @@ pub struct Project {
     pub path: String,
     pub branch_prefix: Option<String>,
     pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authoring_target: Option<ProjectAuthoringTarget>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -67,6 +98,8 @@ mod tests {
             path: "/tmp/test".to_string(),
             branch_prefix: Some("feat/".to_string()),
             created_at: "2024-01-01T00:00:00".to_string(),
+            authoring_target: None,
+            plugin_id: None,
         };
         let json = serde_json::to_string(&project).unwrap();
         assert!(json.contains("Test Project"));

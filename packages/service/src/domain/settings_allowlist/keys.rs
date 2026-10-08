@@ -56,6 +56,9 @@ pub const PROJECT_ALLOWED_KEYS: &[&str] = &[
 pub const WORKSPACE_ALLOWED_KEYS: &[&str] = &[
     // Active Claude Code env profile name
     "claude_code_active_profile",
+    // Structured Codex app-server profiles and the stable id selected by default.
+    "codex_profiles",
+    "codex_active_profile",
     // Onboarding-set CLI binary paths (consumed by `apply_binary_overrides_from_settings`).
     "claude_cli_path",
     "opencode_cli_path",
@@ -69,6 +72,7 @@ pub const WORKSPACE_ALLOWED_KEYS: &[&str] = &[
     "cursor_access_mode",
     // UI chrome
     "sidebar_left_width",
+    "sidebar_provider_logos",
     "sidebar_collapsed",
     "sidebar_right_collapsed",
     "loader_style",
@@ -131,6 +135,10 @@ pub const WORKSPACE_ALLOWED_KEYS: &[&str] = &[
     "model_auto_name",
     "agent_runtime_session",
     "agent_runtime_auto_name",
+    // Custom system prompt for session auto-naming. Free-form; empty or unset
+    // means the built-in default (DEFAULT_AUTO_NAME_SYSTEM_PROMPT in
+    // domain/ws_session/auto_name). Empty write = reset to default.
+    "auto_name_system_prompt",
     // First-run onboarding overlay state.
     // `onboarding_step` is one of the values defined in
     // packages/desktop/src/lib/onboarding-step.ts; missing/unset is treated as
@@ -169,11 +177,13 @@ pub const WORKSPACE_ALLOWED_KEYS: &[&str] = &[
     // the animation completes (or the user clicks to skip).
     "onboarding_intro_shown",
     // Browser workspace preferences. `browser_default_mode` is "normal" or
-    // "private" (see packages/desktop/src/lib/browser-settings.ts) and seeds
-    // the Browser tab's first tab + toolbar toggle. `browser_mcp_enabled` is
-    // "true"/"false" (default enabled) and gates whether the `cadencr-browser`
-    // MCP is attached to agent turns — read in the session-prompt spawn path.
+    // "private" and `browser_search_engine` selects the address-bar search
+    // provider (see packages/desktop/src/lib/browser-settings.ts).
+    // `browser_mcp_enabled` is "true"/"false" (default enabled) and gates
+    // whether the `cadencr-browser` MCP is attached to agent turns — read in
+    // the session-prompt spawn path.
     "browser_default_mode",
+    "browser_search_engine",
     // JSON array of domains whose links open in Cadencr's own browser tab
     // (instead of the system browser). Default seeded by the frontend with
     // localhost/127.0.0.1. See packages/desktop/src/lib/link-routing.ts.
@@ -196,6 +206,8 @@ pub const WORKSPACE_ALLOWED_KEYS: &[&str] = &[
     // canonical key constants to keep this allowlist in sync with their source.
     crate::remote::REMOTE_ENABLED_SETTING,
     crate::remote::REMOTE_TUNNEL_HOST_SETTING,
+    // Neovim Power Mode intensity (Phase 1a). One of "off", "basic", "arcade".
+    "editor_vim_mode_level",
 ];
 
 /// Prefixes whose suffix is a free-form `<provider>_<model-id>` identifier.
@@ -208,3 +220,18 @@ pub const WORKSPACE_ALLOWED_KEYS: &[&str] = &[
 /// any non-empty suffix and reject only whitespace/control characters (which no
 /// real model id contains) rather than maintaining a brittle character set.
 pub(super) const WORKSPACE_MODEL_PREFIXES: &[&str] = &["thinking_effort_model_"];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn editor_vim_mode_level_is_in_workspace_allowlist() {
+        assert!(
+            WORKSPACE_ALLOWED_KEYS
+                .iter()
+                .any(|&k| k == "editor_vim_mode_level"),
+            "editor_vim_mode_level must be in WORKSPACE_ALLOWED_KEYS"
+        );
+    }
+}

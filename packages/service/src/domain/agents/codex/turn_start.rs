@@ -11,7 +11,9 @@ pub(super) struct TurnStartOptions<'a> {
     pub(super) access_mode: Option<&'a RuntimeAccessMode>,
     pub(super) model: Option<String>,
     pub(super) effort: Option<String>,
-    pub(super) fast_mode: bool,
+    pub(super) collaboration_model: Option<String>,
+    pub(super) collaboration_effort: Option<String>,
+    pub(super) fast_mode: Option<bool>,
 }
 
 pub(super) fn turn_start_params(
@@ -21,8 +23,8 @@ pub(super) fn turn_start_params(
 ) -> Value {
     let collaboration_mode = collaboration_mode(
         options.permission_mode,
-        options.model.as_deref(),
-        options.effort.as_deref(),
+        options.collaboration_model.as_deref(),
+        options.collaboration_effort.as_deref(),
     );
     let mut params = json!({
         "threadId": thread_id,
@@ -31,7 +33,6 @@ pub(super) fn turn_start_params(
         "approvalPolicy": approval_policy(options.permission_mode, options.access_mode),
         "approvalsReviewer": approvals_reviewer(options.access_mode),
         "sandboxPolicy": sandbox_policy(options.permission_mode, options.access_mode, options.cwd),
-        "summary": "detailed",
     });
     if let Some(model) = options.model {
         params["model"] = Value::String(model);
@@ -39,7 +40,9 @@ pub(super) fn turn_start_params(
     if let Some(effort) = options.effort {
         params["effort"] = Value::String(effort);
     }
-    params["serviceTier"] = super::fast_service_tier_value(options.fast_mode);
+    if let Some(fast_mode) = options.fast_mode {
+        params["serviceTier"] = super::fast_service_tier_value(fast_mode);
+    }
     if let Some(collaboration_mode) = collaboration_mode {
         params["collaborationMode"] = collaboration_mode;
     }
@@ -81,7 +84,7 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn turn_start_requests_detailed_reasoning_summaries_and_effort() {
+    fn turn_start_preserves_native_summary_config_and_applies_explicit_effort() {
         let params = turn_start_params(
             "thread",
             vec![serde_json::json!({ "type": "text", "text": "hello" })],
@@ -91,11 +94,13 @@ mod tests {
                 access_mode: None,
                 model: Some("gpt-5.6-sol".to_string()),
                 effort: Some("ultra".to_string()),
-                fast_mode: true,
+                collaboration_model: Some("gpt-5.6-sol".to_string()),
+                collaboration_effort: Some("ultra".to_string()),
+                fast_mode: Some(true),
             },
         );
 
-        assert_eq!(params["summary"], "detailed");
+        assert!(params.get("summary").is_none());
         assert_eq!(params["effort"], "ultra");
         assert_eq!(params["model"], "gpt-5.6-sol");
         assert_eq!(params["serviceTier"], "priority");
@@ -116,7 +121,9 @@ mod tests {
                 access_mode: None,
                 model: Some("gpt-5.5".to_string()),
                 effort: Some("high".to_string()),
-                fast_mode: false,
+                collaboration_model: Some("gpt-5.5".to_string()),
+                collaboration_effort: Some("high".to_string()),
+                fast_mode: Some(false),
             },
         );
 
@@ -145,7 +152,9 @@ mod tests {
                 access_mode: None,
                 model: None,
                 effort: Some("high".to_string()),
-                fast_mode: false,
+                collaboration_model: None,
+                collaboration_effort: Some("high".to_string()),
+                fast_mode: Some(false),
             },
         );
 
@@ -165,7 +174,9 @@ mod tests {
                 access_mode: None,
                 model: Some("gpt-5.5".to_string()),
                 effort: Some("high".to_string()),
-                fast_mode: false,
+                collaboration_model: Some("gpt-5.5".to_string()),
+                collaboration_effort: Some("high".to_string()),
+                fast_mode: Some(false),
             },
         );
 

@@ -11,7 +11,7 @@ use super::SettingWarning;
 /// Top-level keys whose value is a nested object the store persists verbatim
 /// (e.g. `profiles.<name>.<ENV_KEY>`). They are not part of the flat scalar
 /// projection, so they are skipped silently rather than warned on.
-const STRUCTURED_KEYS: &[&str] = &["profiles"];
+const STRUCTURED_KEYS: &[&str] = &["profiles", "codex_profiles"];
 
 fn is_structured_key(key: &str) -> bool {
     STRUCTURED_KEYS.contains(&key)
@@ -203,11 +203,12 @@ mod tests {
         // A recognized nested section (`profiles`) is absent from the flat scalar
         // projection but must NOT produce a warning (it is preserved on write).
         let (map, warnings) = parse_object(
-            r#"{"theme_current":"aurora","profiles":{"bedrock":{"AWS_REGION":"us-east-1"}}}"#,
+            r#"{"theme_current":"aurora","profiles":{"bedrock":{"AWS_REGION":"us-east-1"}},"codex_profiles":{"id":{"env":{"OPENAI_API_KEY":"secret"}}}}"#,
         )
         .unwrap();
         assert_eq!(map.get("theme_current").map(String::as_str), Some("aurora"));
         assert!(!map.contains_key("profiles"));
+        assert!(!map.contains_key("codex_profiles"));
         assert!(warnings.is_empty());
     }
 

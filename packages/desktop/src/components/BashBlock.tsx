@@ -1,4 +1,4 @@
-import { memo, useMemo, type ReactElement, type ReactNode } from "react";
+import { memo, useLayoutEffect, useMemo, type ReactElement, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   ChevronRightIcon,
@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { getGetMessageFullContentQueryKey, getMessageFullContent } from "@/api/generated";
 import { apiErrorMessage } from "@/lib/api-errors";
+import { suppressAutoScrollPin } from "@/lib/agent-scroll-suppression";
 import { cn } from "@/lib/utils";
 import { parseAnsi } from "@/lib/ansi-to-html";
 import { copyToClipboard } from "@/lib/clipboard";
@@ -174,6 +175,7 @@ export const BashBlock = memo(function BashBlock({
           <CollapsibleBlock
             totalCount={totalLines}
             visibleCount={maxLines}
+            hasMore={truncatedContent}
             unit="lines"
             onHeaderClick={toggleBodyOpen}
             className={isError ? "border-destructive/40" : "border-border"}
@@ -201,7 +203,7 @@ export const BashBlock = memo(function BashBlock({
             headerTrailing={<BashHeaderToggle isBodyOpen={isBodyOpen} onToggle={toggleBodyOpen} />}
           >
             {({ showAll }) =>
-              hasOutput ? (
+              hasOutput || truncatedContent ? (
                 <BashBodyContent
                   content={content ?? ""}
                   maxLines={maxLines}
@@ -262,14 +264,22 @@ function BashBodyContent({
     );
   }
   return (
-    <ParsedBashBodyContent
-      content={content}
-      displayedContent={content}
-      maxLines={maxLines}
-      showAll={showAll}
-      running={running}
-      runningFooter={runningFooter}
-    />
+    <>
+      {showAll && truncatedContent && messageId === undefined && (
+        <p role="alert" className="mb-2 text-destructive">
+          Earlier output is unavailable until this message is synchronized. Reopen the conversation
+          to retry.
+        </p>
+      )}
+      <ParsedBashBodyContent
+        content={content}
+        displayedContent={content}
+        maxLines={maxLines}
+        showAll={showAll}
+        running={running}
+        runningFooter={runningFooter}
+      />
+    </>
   );
 }
 
@@ -293,17 +303,18 @@ function FetchedBashBodyContent({
   const fullContentQuery = useQuery({
     queryKey: getGetMessageFullContentQueryKey(messageId),
     queryFn: ({ signal }) => getMessageFullContent(messageId, signal),
-    // The full payload is immutable for a given message id, so once fetched
-    // we don't need to refetch it. `gcTime` caps how long
-    // an unmounted entry stays in cache — bash outputs can run into megabytes
-    // per message, and a long session could otherwise accumulate the whole
-    // transcript in memory after the user collapses each one.
+    // Full output lives only while the user is viewing earlier lines.
     staleTime: Number.POSITIVE_INFINITY,
-    gcTime: 5 * 60 * 1000,
+    gcTime: 0,
   });
   const fetchedContent = fullContentQuery.data
     ? extractBashResultOutput(fullContentQuery.data.content)
     : undefined;
+  // The response can arrive after the click's suppression window. Keep this
+  // user-requested height change from scrolling the card out of the virtual list.
+  useLayoutEffect(() => {
+    suppressAutoScrollPin();
+  }, [fullContentQuery.data, fullContentQuery.isError]);
   return (
     <>
       {fullContentQuery.isFetching && (
@@ -321,7 +332,7 @@ function FetchedBashBodyContent({
         content={content}
         displayedContent={fetchedContent ?? content}
         maxLines={maxLines}
-        showAll={showAll}
+        showAll={showAll && fetchedContent !== undefined}
         running={running}
         runningFooter={runningFooter}
       />

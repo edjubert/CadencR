@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { lazy, memo, Suspense } from "react";
 import { Loader2Icon } from "lucide-react";
 import { apiErrorMessage } from "@/lib/api-errors";
 import { cn } from "@/lib/utils";
@@ -23,9 +23,9 @@ const EditorPreviewSurface = lazy(() =>
 const BUFFER_KEYMAP_EXT = editorBufferKeymap();
 const BUFFER_SEARCH_EXT = bufferSearchExtension();
 
-export default function CodeMirrorEditor(props: CodeMirrorEditorProps) {
+function CodeMirrorEditor(props: CodeMirrorEditorProps) {
   const controller = useCodeMirrorEditorController(props);
-  if (controller.data.fileQuery.error) {
+  if (controller.data.fileQuery.error && !controller.data.fileQuery.data) {
     return (
       <div className="h-full flex items-center justify-center bg-background text-destructive text-sm px-6 text-center">
         {apiErrorMessage(controller.data.fileQuery.error, "Failed to load file")}
@@ -59,7 +59,7 @@ function CodeMirrorEditorContent({
         readOnly={data.largeFile.largeMode}
         vimMode={data.isVimEnabled}
         ergonomics={!data.largeFile.largeMode}
-        onChange={buffer.handleChange}
+        onDocChange={buffer.handleChange}
         onSave={buffer.handleSave}
         extraExtensions={[
           buffer.cursorExtension,
@@ -79,6 +79,13 @@ function CodeMirrorEditorContent({
         col={buffer.cursorPosition.col}
         language={<EditorLanguageSelector filePath={props.filePath} language={data.language} />}
         autoSavedVisible={buffer.autoSavedVisible}
+        diskSync={buffer.saveState}
+        isFormatting={buffer.isFormatting}
+        readError={
+          data.fileQuery.error
+            ? apiErrorMessage(data.fileQuery.error, "Failed to check disk")
+            : undefined
+        }
         lspStatus={data.lsp.status}
         lspLanguageId={data.lsp.languageId}
         lspError={data.lsp.errorMessage}
@@ -142,3 +149,5 @@ function EditorOverlays({
     </>
   );
 }
+
+export default memo(CodeMirrorEditor);

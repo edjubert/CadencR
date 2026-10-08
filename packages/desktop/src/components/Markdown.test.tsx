@@ -1,8 +1,14 @@
 import { StrictMode } from "react";
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@/test-utils";
+import { render, screen, fireEvent } from "@/test-utils";
 import { LinkRoutingContext, type LinkRouting } from "./links/LinkRoutingContext";
 import { Markdown } from "./Markdown";
+import { useOpenDiffInEditor } from "./diff/OpenDiffInEditorContext";
+import { LARGE_CODE_LINE_THRESHOLD } from "./markdown/LargeCodeBlock";
+
+vi.mock("./diff/OpenDiffInEditorContext", () => ({
+  useOpenDiffInEditor: vi.fn(),
+}));
 
 const words = (count: number): string =>
   Array.from({ length: count }, (_, i) => `word${i}`).join(" ");
@@ -108,6 +114,20 @@ describe("Markdown", () => {
     render(<Markdown content={"```\nsome output\n```"} />);
     expect(screen.getByText("text")).toBeInTheDocument();
     expect(screen.getByText("some output")).toBeInTheDocument();
+  });
+
+  it("keeps ordinary fences highlighted and routes threshold-sized fences to the bounded viewer", () => {
+    const ordinary = render(<Markdown content={"```typescript\nconst x = 1;\n```"} />);
+    expect(ordinary.container.querySelector("code.hljs")).toBeInTheDocument();
+    ordinary.unmount();
+
+    const code = Array.from(
+      { length: LARGE_CODE_LINE_THRESHOLD },
+      (_, index) => `line ${index}`,
+    ).join("\n");
+    const large = render(<Markdown content={`\`\`\`typescript\n${code}\n\`\`\``} />);
+    expect(screen.getByText(/large code — virtualized for performance/i)).toBeInTheDocument();
+    expect(large.container.querySelector("code.hljs")).not.toBeInTheDocument();
   });
 
   it("renders inline raw HTML", () => {
@@ -224,6 +244,27 @@ describe("Markdown", () => {
       const spans = animatedSpans(container);
       expect(spans.length).toBeGreaterThan(20);
       expect(spans.filter((span) => span.style.getPropertyValue("--sd-delay") !== "")).toEqual([]);
+    });
+  });
+
+  describe("file references", () => {
+    it("renders a file:line reference as a clickable link", () => {
+      render(<Markdown content="see src/main.rs:42 for details" />);
+      expect(screen.getByText("src/main.rs:42")).toBeInTheDocument();
+    });
+
+    it("opens the file at the referenced line on click", () => {
+      const openInEditor = vi.fn();
+      vi.mocked(useOpenDiffInEditor).mockReturnValue(openInEditor);
+      render(<Markdown content="see src/main.rs:42 for details" />);
+      fireEvent.click(screen.getByText("src/main.rs:42"));
+      expect(openInEditor).toHaveBeenCalledWith("src/main.rs", 42, undefined);
+    });
+
+    it("does nothing when rendered outside an editor context", () => {
+      vi.mocked(useOpenDiffInEditor).mockReturnValue(undefined);
+      render(<Markdown content="see src/main.rs:42 for details" />);
+      expect(() => fireEvent.click(screen.getByText("src/main.rs:42"))).not.toThrow();
     });
   });
 });

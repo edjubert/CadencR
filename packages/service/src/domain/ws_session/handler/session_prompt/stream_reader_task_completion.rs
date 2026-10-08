@@ -7,7 +7,7 @@ use tracing::{error, info};
 use crate::domain::agents::adapter::{RuntimeError, RuntimeEvent};
 use crate::domain::session_status::AgentStatus;
 use crate::domain::ws_session::persistence::{
-    raw_event_with_agent_message_id, PersistedMessageRef, WsSessionPersistence,
+    raw_event_with_agent_message_id, PersistedEventRef, WsSessionPersistence,
 };
 use crate::domain::ws_session::protocol::{
     SessionEndedPayload, SessionErrorPayload, SessionMessagePayload, SessionUsageUpdatePayload,
@@ -42,7 +42,7 @@ impl StreamReaderTask {
         &self,
         state: &mut StreamReaderState,
         runtime_event: &RuntimeEvent,
-        persisted_message: Option<PersistedMessageRef>,
+        persisted_message: Option<PersistedEventRef>,
         current_model: Option<&str>,
         interrupted_generation: Option<u64>,
     ) -> Option<WsEnvelope> {
@@ -55,6 +55,14 @@ impl StreamReaderTask {
         state
             .canonical_projection
             .apply_runtime_event(runtime_event);
+        // Init and Other are operational signals, not transcript blocks. Their
+        // meaningful state has already been consumed by the stream reader
+        // (runtime id, MCP servers, usage, permissions, and provider-specific
+        // observers), so forwarding their provider-native raw JSON only makes
+        // the desktop parser warn about an unknown message type.
+        if runtime_event.is_operational_only() {
+            return None;
+        }
         let projected_model = state
             .canonical_projection
             .model_for_event(runtime_event)

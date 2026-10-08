@@ -5,13 +5,21 @@ pub mod openapi;
 
 use crate::app_state::{AppState, BrowserBridgeConfig};
 use crate::domain::agents::claude_code::routes::claude_code_router;
+use crate::domain::agents::codex::routes::codex_router;
 use crate::domain::agents::discovery::routes::discovery_router;
+use crate::domain::agents::providers::development::routes::provider_development_router;
+use crate::domain::agents::providers::installed::managed::routes::{
+    inventory_router as managed_provider_inventory_router,
+    lifecycle_router as managed_provider_lifecycle_router,
+};
 use crate::domain::agents::providers::installed::routes::{
     installed_provider_lifecycle_router, installed_providers_router,
 };
 use crate::domain::agents::runtime::AgentCatalogResponse;
+use crate::domain::agents::ResolvedSelection;
 use crate::domain::custom_actions::routes::custom_actions_router;
 use crate::domain::diff_comments::routes::diff_comments_router;
+use crate::domain::editor::file_size::EDITOR_REQUEST_BODY_BYTES;
 use crate::domain::editor::format::format_router;
 use crate::domain::editor::image_routes::image_router;
 use crate::domain::editor::mutation_routes::editor_mutation_router;
@@ -21,6 +29,8 @@ use crate::domain::features::routes::features_router;
 use crate::domain::git::routes::git_router;
 use crate::domain::imports::routes::imports_router;
 use crate::domain::lsp::lsp_router;
+use crate::domain::neovim::routes::routes as neovim_routes;
+use crate::domain::neovim::ws::ws_routes as neovim_ws_routes;
 use crate::domain::ports::routes::ports_router;
 use crate::domain::projects::routes::projects_router;
 use crate::domain::schedules::routes::schedules_router;
@@ -32,7 +42,7 @@ use crate::domain::workspace::routes::workspace_router;
 use crate::domain::ws_session::handler::ws_handler;
 use crate::domain::ws_session::routes::prompt_commands_router;
 use crate::error::AppError;
-use axum::extract::{Query, State};
+use axum::extract::{DefaultBodyLimit, Query, State};
 use axum::routing::{any, get, put};
 use axum::Json;
 use axum::Router;
@@ -44,7 +54,8 @@ use std::path::{Path, PathBuf};
     path = "/api/agent-catalog",
     params(
         ("cwd" = Option<String>, Query, description = "Workspace path used to discover project-local provider modes"),
-        ("profile" = Option<String>, Query, description = "Claude Code profile to scope the model probe to; defaults to the active profile")
+        ("provider" = Option<String>, Query, description = "Provider owning the scoped profile selection"),
+        ("profile" = Option<String>, Query, description = "Provider profile to scope the model probe to; defaults to the provider's active profile")
     ),
     responses((status = 200, body = AgentCatalogResponse))
 )]
@@ -52,9 +63,15 @@ pub async fn get_agent_catalog(
     State(state): State<AppState>,
     Query(query): Query<AgentCatalogQuery>,
 ) -> Json<AgentCatalogResponse> {
-    let catalog = crate::domain::agents::providers::provider_catalog_live_for_cwd(
+    let catalog = crate::domain::agents::providers::provider_catalog_live_for_profile(
         &state.read_pool,
         query.cwd.as_deref(),
+        query.provider.as_deref().or_else(|| {
+            query
+                .profile
+                .as_ref()
+                .map(|_| crate::domain::agents::claude_code::PROVIDER_ID)
+        }),
         query.profile.as_deref(),
     )
     .await;
@@ -64,10 +81,107 @@ pub async fn get_agent_catalog(
 #[derive(Debug, Deserialize)]
 pub struct AgentCatalogQuery {
     cwd: Option<PathBuf>,
-    /// Claude Code profile name. Scopes the model probe to that profile's env
-    /// (Bedrock / Vertex expose different model ids than Anthropic) instead of
-    /// the globally active profile. Providers without env profiles ignore it.
+    /// Provider owning `profile`; prevents one provider's selection from being
+    /// interpreted by every profile-aware adapter.
+    provider: Option<String>,
     profile: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AgentProfilesQuery {
+    provider: String,
+    cwd: Option<PathBuf>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/agent-profiles",
+    params(
+        ("provider" = String, Query, description = "Registered provider id"),
+        ("cwd" = Option<String>, Query, description = "Workspace path for project-local profiles")
+    ),
+    responses(
+        (status = 200, body = crate::domain::agents::runtime::ProviderProfilesResponse),
+        (status = 404, description = "Provider or profile capability not found")
+    )
+)]
+pub async fn get_agent_profiles(
+    State(_state): State<AppState>,
+    Query(query): Query<AgentProfilesQuery>,
+) -> Result<Json<crate::domain::agents::runtime::ProviderProfilesResponse>, AppError> {
+    let adapter = crate::domain::agents::providers::runtime_adapter(&query.provider)
+        .ok_or_else(|| AppError::NotFound(format!("provider '{}' not found", query.provider)))?;
+    let catalog = adapter
+        .profile_catalog(query.cwd.as_deref())
+        .await
+        .map_err(|error| AppError::BadRequest(error.to_string()))?
+        .ok_or_else(|| {
+            AppError::NotFound(format!(
+                "provider '{}' does not expose profiles",
+                query.provider
+            ))
+        })?;
+    Ok(Json(catalog))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AgentSelectionQuery {
+    /// Scope is implied by which ids are present: neither = global,
+    /// `project_id` only = project, both = feature. An explicit `level`
+    /// parameter would make `level=feature` without `feature_id` representable.
+    project_id: Option<i64>,
+    feature_id: Option<i64>,
+    cwd: Option<PathBuf>,
+    profile: Option<String>,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct AgentSelectionResponse {
+    /// Keyed by agent type (`session`, `auto_name`).
+    pub selections: std::collections::HashMap<String, ResolvedSelection>,
+}
+
+/// `auto_name` only exists at workspace level, so narrower scopes never report it.
+fn agent_types_for_scope(project_id: Option<i64>, feature_id: Option<i64>) -> Vec<String> {
+    if project_id.is_none() && feature_id.is_none() {
+        return vec!["session".to_string(), "auto_name".to_string()];
+    }
+    vec!["session".to_string()]
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/agent-runtime/selection",
+    params(
+        ("project_id" = Option<i64>, Query, description = "Resolve at project scope"),
+        ("feature_id" = Option<i64>, Query, description = "Resolve at feature scope; requires project_id"),
+        ("cwd" = Option<String>, Query, description = "Workspace path used to scope the model catalog lookup"),
+        ("profile" = Option<String>, Query, description = "Claude Code profile to scope the model lookup to")
+    ),
+    responses(
+        (status = 200, body = AgentSelectionResponse),
+        (status = 400, description = "No model is available for the resolved provider")
+    )
+)]
+pub async fn get_agent_selection(
+    State(state): State<AppState>,
+    Query(query): Query<AgentSelectionQuery>,
+) -> Result<Json<AgentSelectionResponse>, AppError> {
+    let mut selections = std::collections::HashMap::new();
+    for agent_type in agent_types_for_scope(query.project_id, query.feature_id) {
+        let selection = crate::domain::agents::resolve_selection(
+            &state.read_pool,
+            query.cwd.as_deref(),
+            &agent_type,
+            query.feature_id,
+            query.project_id,
+            query.profile.as_deref(),
+        )
+        .await
+        .map_err(|error| AppError::BadRequest(error.to_string()))?;
+        selections.insert(agent_type, selection);
+    }
+    Ok(Json(AgentSelectionResponse { selections }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -115,8 +229,8 @@ pub fn build_api_routes() -> Router<AppState> {
         .merge(sessions_router())
         .merge(schedules_router())
         .merge(terminal_router())
-        .merge(editor_router())
-        .merge(format_router())
+        .merge(editor_router().layer(DefaultBodyLimit::max(EDITOR_REQUEST_BODY_BYTES)))
+        .merge(format_router().layer(DefaultBodyLimit::max(EDITOR_REQUEST_BODY_BYTES)))
         .merge(image_router())
         // Raw bytes for off-loaded message payloads (screenshots, pasted
         // images). Outside the OpenAPI surface like the other byte routes.
@@ -132,12 +246,17 @@ pub fn build_api_routes() -> Router<AppState> {
         .merge(crate::domain::maintenance::routes::routes())
         .merge(themes_router())
         .merge(prompt_commands_router())
+        .merge(neovim_routes())
+        .merge(neovim_ws_routes())
         // VAPID public key — shared, so the frontend can fetch it on either
         // listener. Subscription management (device-keyed) is remote-only and
         // merged separately in `build_remote_router`.
         .merge(crate::domain::push::routes::vapid_key_router())
         .route("/ws", get(ws_handler))
         .route("/api/agent-catalog", get(get_agent_catalog))
+        .route("/api/agent-profiles", get(get_agent_profiles))
+        .merge(codex_router())
+        .route("/api/agent-runtime/selection", get(get_agent_selection))
 }
 
 fn compression_layer() -> tower_http::compression::CompressionLayer {
@@ -159,7 +278,10 @@ pub fn build_router(state: AppState) -> Router {
     let limiter = std::sync::Arc::new(middleware::RateLimiter::default());
     build_api_routes()
         .route("/api/browser-bridge", put(register_browser_bridge))
+        .merge(provider_development_router())
         .merge(installed_provider_lifecycle_router())
+        .merge(managed_provider_inventory_router())
+        .merge(managed_provider_lifecycle_router())
         .merge(crate::domain::mcp::control::control_router())
         .merge(crate::domain::remote::loopback_router())
         .layer(axum::middleware::from_fn_with_state(
@@ -228,7 +350,7 @@ async fn api_not_found() -> Result<(), AppError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_browser_bridge, BrowserBridgeRegistrationRequest};
+    use super::{validate_browser_bridge, AgentSelectionQuery, BrowserBridgeRegistrationRequest};
 
     #[test]
     fn browser_bridge_registration_accepts_loopback_http_url() {
@@ -251,5 +373,92 @@ mod tests {
         .expect_err("remote bridge should be rejected");
 
         assert!(error.to_string().contains("loopback"));
+    }
+
+    #[test]
+    fn global_scope_includes_workspace_only_agent_types() {
+        let query = AgentSelectionQuery {
+            project_id: None,
+            feature_id: None,
+            cwd: None,
+            profile: None,
+        };
+        assert_eq!(
+            super::agent_types_for_scope(query.project_id, query.feature_id),
+            vec!["session".to_string(), "auto_name".to_string()]
+        );
+    }
+
+    #[test]
+    fn project_and_feature_scopes_exclude_workspace_only_agent_types() {
+        assert_eq!(
+            super::agent_types_for_scope(Some(1), None),
+            vec!["session".to_string()]
+        );
+        assert_eq!(
+            super::agent_types_for_scope(Some(1), Some(7)),
+            vec!["session".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn large_editor_buffers_can_be_saved_and_formatted_without_relaxing_other_apis() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE projects (id INTEGER PRIMARY KEY, path TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        sqlx::query("INSERT INTO projects (id, path) VALUES (1, ?)")
+            .bind(dir.path().to_string_lossy().as_ref())
+            .execute(&pool)
+            .await
+            .unwrap();
+        let router =
+            super::build_api_routes().with_state(crate::app_state::AppState::with_pool(pool));
+        let content = "large buffer with spacing  \n".repeat(120_000);
+        assert!(content.len() > 2 * 1024 * 1024);
+        let payload = serde_json::json!({
+            "project_id": 1, "file_path": "large.txt", "content": content,
+            "formatter": "unknown-formatter",
+        })
+        .to_string();
+        let request = |uri: &str| {
+            Request::post(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(payload.clone()))
+                .unwrap()
+        };
+
+        let saved = router
+            .clone()
+            .oneshot(request("/api/editor/write"))
+            .await
+            .unwrap();
+        assert_eq!(saved.status(), StatusCode::OK);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("large.txt")).unwrap(),
+            content
+        );
+
+        // Reaching the formatter validation proves its JSON extractor accepted
+        // the whole buffer, without requiring a formatter binary in unit tests.
+        let formatted = router
+            .clone()
+            .oneshot(request("/api/editor/format"))
+            .await
+            .unwrap();
+        assert_eq!(formatted.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(formatted.into_body(), 4096)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("unknown formatter"));
+
+        let unrelated = router.oneshot(request("/api/projects")).await.unwrap();
+        assert_eq!(unrelated.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 }

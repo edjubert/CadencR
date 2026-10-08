@@ -49,6 +49,7 @@ function dispatchMod(key: string, code: string, extras: KeyboardEventInit = {}):
 beforeEach(() => seedLayout("git"));
 
 afterEach(() => {
+  document.getSelection()?.removeAllRanges();
   document.querySelectorAll("[data-test-overlay]").forEach((element) => element.remove());
   useFeatureLayoutStore.setState((state) => {
     const features = { ...state.features };
@@ -111,6 +112,29 @@ describe("useGitViewShortcuts", () => {
     dispatchMod("s", "KeyS");
 
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("still switches views while diff text is selected", () => {
+    const onChange = vi.fn();
+    const { getByTestId } = render(
+      <>
+        <Harness onChange={onChange} />
+        <p data-testid="selected">a line of the diff</p>
+      </>,
+    );
+    // Reading a diff means selecting bits of it, and the selection is
+    // document-wide and sticky — it outlives the tab you made it in. Letting it
+    // veto a ⌘-chord left the whole sub-view strip unreachable from the
+    // keyboard for the rest of the session.
+    const range = document.createRange();
+    range.selectNodeContents(getByTestId("selected"));
+    const selection = document.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    dispatchMod("y", "KeyY");
+
+    expect(onChange).toHaveBeenCalledWith("graph");
   });
 
   it("does not let an inactive Git pane retain shortcut ownership", () => {

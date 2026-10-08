@@ -32,6 +32,7 @@ export const SESSION_ACTION = {
   effortSetOk: "effort.set.ok",
   fastModeSetOk: "fast_mode.set.ok",
   profileChanged: "profile.changed",
+  runtimeOverridesChanged: "runtime_overrides.changed",
   compactStarted: "compact.started",
   compactOk: "compact.ok",
   cleared: "cleared",
@@ -45,6 +46,7 @@ export const SESSION_ACTION = {
   featureAutonaming: "feature.autonaming",
   branchRewound: "branch.rewound",
   branchForked: "branch.forked",
+  configSnapshot: "config.snapshot",
   ended: "ended",
   turnComplete: "turn_complete",
 } as const;

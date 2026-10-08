@@ -1,3 +1,5 @@
+mod archive;
+pub mod archive_routes;
 pub mod auto_name_route;
 pub mod models;
 pub mod pending_gate;

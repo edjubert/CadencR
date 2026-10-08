@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.12.0 - 2026-09-21
+
+Previous release: v0.11.5 - 2026-09-05
+
+### ✨ Added
+
+- [**Desktop**] Added a real Neovim editor pane using your own configuration and plugins, with file-tree and quick-open navigation, file-and-line references, mouse input, and restart controls when Neovim exits — [@edjubert](https://github.com/edjubert), [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Added local ACP provider connectors: create a connector project with authoring instructions or import an existing built Git repository, then restart Cadencr to discover its models and use its supported session controls and resume capabilities — [@rle-mino](https://github.com/rle-mino).
+- [**provider:codex**] Added named Codex profiles with an optional native `config.toml` and environment overrides, profile management in Settings, a default profile, and per-session selection in Info with matching model catalogs and runtime controls — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Added optional parent and descendant selection when archiving a conversation, with linked-session counts before confirmation — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Added browser profile and site controls to manage isolated or persistent browsing sessions, site permissions, stored site data, and agent access from the workspace — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Added local browsing history and bookmarks with address-bar suggestions to find and revisit pages — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Added browser tab organization and lazy workspace restoration so saved tabs load when needed — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Added native find-in-page and page zoom controls in the embedded browser — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Added browser popup handling with blocked-popup controls and support for opening links through secondary clicks — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Added per-workspace browser downloads with progress, pause, resume, cancel, and reveal-in-folder controls, plus destination handling that avoids overwriting existing files — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Added responsive viewport emulation in the embedded browser to inspect layouts at different screen sizes while keeping screenshots and element annotations aligned — [@rle-mino](https://github.com/rle-mino).
+
+### 🔧 Changed
+
+- [**Desktop**] Replaced the terminal renderer with CeleriTTY 1.2.2, powered by WebGPU and Rust/WASM, with persistent shell sessions, split-pane reconnection, copy/paste, and live Alacritty font, color, cursor, and scrollback settings — [@edjubert](https://github.com/edjubert), [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Improved responsiveness in long conversations, large code blocks, nested agent activity, sidebar lists, and conversation search; large outputs use previews with explicit full-content loading, while Bash output keeps its command card and access to earlier lines — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Separated provider branding from sidebar status: a blue activity ring identifies working agents, a green check identifies finished responses with unread messages, and permission/question indicators remain directly accessible — [@rle-mino](https://github.com/rle-mino).
+
+### 🐛 Fixed
+
+- [**Desktop**] Fixed mismatched provider logos, model selections, and agent modes when loading or switching providers; provider and model now update together using the resolved session, project, and global defaults — [@edjubert](https://github.com/edjubert), [@rle-mino](https://github.com/rle-mino).
+- [**provider:codex**] Fixed parent and subagent activity appearing in the wrong conversation or leaving the session in an incorrect working/completed state, including resumed activity and completion around compaction — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Preserved unsaved editor buffers across formatting and external file updates, and fixed large save/format requests being rejected by the API's default request-size limit — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Fixed Git sub-tab keyboard sequences stopping when text was selected — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Fixed stale allocated-port badges reappearing after a service disconnect or restart — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Fixed unnecessary missing-project errors after deleting a custom theme workspace — [@rle-mino](https://github.com/rle-mino).
+- [**Backend**] Fixed Git status and branch lookups failing for plain-folder projects while preserving errors for broken repositories — [@rle-mino](https://github.com/rle-mino).
+- [**Backend**] Fixed agent CLI discovery under fish by reading the exported login-shell path correctly — [@edjubert](https://github.com/edjubert).
+- [**Desktop**] Fixed remote browser clients attempting desktop-only embedded-browser operations; the Browser tab now explains its desktop requirement — [@rle-mino](https://github.com/rle-mino).
+
+### 🔒 Security
+
+- [**dependencies**] Updated vulnerable JavaScript and Rust dependency chains, including Astro, Sharp, Orval, concurrency primitives, and HTTP libraries — [@rle-mino](https://github.com/rle-mino).
+
 ## v0.11.5 - 2026-09-02
 
 Previous release: v0.11.4 - 2026-08-31

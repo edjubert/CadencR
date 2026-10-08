@@ -4,6 +4,40 @@ use axum::{body::Body, http::Request};
 use cadencr_service::shared::migrate::{run_migrations, MigrationContext};
 use serde_json::{json, Value};
 
+static CODEX_FIXTURE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+pub struct FakeCodexProject {
+    _project_dir: tempfile::TempDir,
+    _binary_guard: tokio::sync::MutexGuard<'static, ()>,
+}
+
+impl Drop for FakeCodexProject {
+    fn drop(&mut self) {
+        codex_app_server_sdk_rs::set_binary_override(None);
+    }
+}
+
+/// Native profile resolution needs an existing cwd and a Codex app-server.
+/// Hold the fixture while dispatching to avoid using an installed Codex CLI.
+pub async fn fake_codex_project(pool: &sqlx::SqlitePool) -> FakeCodexProject {
+    let binary_guard = CODEX_FIXTURE_LOCK.lock().await;
+    let project_dir = tempfile::tempdir().unwrap();
+    sqlx::query("UPDATE projects SET path = ? WHERE id = 7")
+        .bind(project_dir.path().to_string_lossy().as_ref())
+        .execute(pool)
+        .await
+        .unwrap();
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fake_codex_conversation.py")
+        .canonicalize()
+        .unwrap();
+    codex_app_server_sdk_rs::set_binary_override(Some(fixture));
+    FakeCodexProject {
+        _project_dir: project_dir,
+        _binary_guard: binary_guard,
+    }
+}
+
 pub async fn seeded_control_pool() -> sqlx::SqlitePool {
     let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
     run_migrations(&MigrationContext {

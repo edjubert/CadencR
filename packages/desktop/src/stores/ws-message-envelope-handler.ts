@@ -108,7 +108,14 @@ function processMessageBlocks(
     // A block that arrives whole (a large tool_result) would otherwise be
     // retained at full size for the session.
     for (const mutation of result.mutations) {
-      const budgeted = applyBlockContentBudget(mutation.block);
+      // Raw tool deltas are transient scanner input, not store content. A
+      // middle-of-string chunk can exceed the budget without starting like
+      // JSON; clamping it here would splice a notice into the provider value
+      // before the incremental scanner can reconstruct the envelope.
+      const budgeted =
+        mutation.action === "update" && mutation.block.type === "tool_call"
+          ? mutation.block
+          : applyBlockContentBudget(mutation.block);
       allMutations.push(budgeted === mutation.block ? mutation : { ...mutation, block: budgeted });
     }
     enterPlanModeRequested ||= result.signals.enterPlanModeRequested;
@@ -132,7 +139,14 @@ function processMessageBlocks(
       state,
       pendingPromptTailStartIndex(currentSession.blocks),
     );
-    Object.assign(patch, buildMessagePatch(newBlocks, allMutations, { enterPlanModeRequested }));
+    const messagePatch = buildMessagePatch(newBlocks, allMutations, { enterPlanModeRequested });
+    if (newBlocks !== currentSession.blocks) patch.blocks = newBlocks;
+    if (messagePatch.hasFileChanges !== undefined) {
+      patch.hasFileChanges = messagePatch.hasFileChanges;
+    }
+    if (messagePatch.todos !== undefined) patch.todos = messagePatch.todos;
+    if (messagePatch.permissionMode !== undefined)
+      patch.permissionMode = messagePatch.permissionMode;
     // applyMutations maintains derived state incrementally (reindexing only the
     // pending suffix for a root append); snapshot fresh refs only for the
     // structures it actually touched.
@@ -159,16 +173,18 @@ function processMessageBlocks(
         };
   }
 
-  patch.lifecycle =
+  const lifecycle =
     manualCompactBoundaryObserved && currentSession.pendingManualCompact
       ? transitionTurn(currentSession.lifecycle, {
           type: "turn_ended",
           reason: "completed",
         })
       : transitionTurn(currentSession.lifecycle, { type: "stream_activity" });
+  if (lifecycle !== currentSession.lifecycle) patch.lifecycle = lifecycle;
   if (manualCompactBoundaryObserved && currentSession.pendingManualCompact) {
     patch.pendingManualCompact = false;
   }
 
+  if (Object.keys(patch).length === 0) return;
   ctx.set(updateSession(ctx.get(), sessionId, patch));
 }

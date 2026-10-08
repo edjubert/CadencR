@@ -9,10 +9,8 @@ use crate::domain::agents::codex::{
 };
 use crate::domain::agents::providers::{
     canonical_provider_or_error, default_provider_id, provider_model_catalog_entry,
-    resolve_effective_provider, resolve_model_or_error_for_profile, runtime_adapter,
+    resolve_model_or_error_for_profile, runtime_adapter,
 };
-use crate::domain::agents::runtime::runtime_setting_key;
-use crate::domain::settings;
 use crate::error::AppError;
 
 /// A resolved target project the spawned session will be created in. Also the
@@ -165,8 +163,31 @@ pub(super) async fn resolve_spawn_runtime(
                 .map_err(|error| AppError::BadRequest(error.to_string()))?
         }
     };
-    let profile = runtime_adapter(&effective_provider)
-        .and_then(|adapter| adapter.profile_name_for_new_session());
+    let inherited_profile = if body.profile.is_none() {
+        let source_runtime: Option<(Option<String>, Option<String>)> =
+            sqlx::query_as("SELECT runtime_provider, profile FROM agent_sessions WHERE id = ?")
+                .bind(source.session_id)
+                .fetch_optional(&state.read_pool)
+                .await?;
+        source_runtime
+            .filter(|(provider, _)| provider.as_deref() == Some(effective_provider.as_str()))
+            .and_then(|(_, profile)| profile)
+    } else {
+        None
+    };
+    let requested_profile = trimmed_optional(body.profile.as_deref())
+        .or_else(|| trimmed_optional(inherited_profile.as_deref()));
+    let adapter = runtime_adapter(&effective_provider).ok_or_else(|| {
+        AppError::BadRequest(format!("provider '{effective_provider}' is unavailable"))
+    })?;
+    let profile = adapter
+        .resolve_profile(
+            requested_profile.as_deref(),
+            std::path::Path::new(&target_project.path),
+        )
+        .await
+        .map_err(|error| AppError::BadRequest(error.to_string()))?
+        .map(|resolved| resolved.identity);
     let (model, model_entry) = match trimmed_optional(body.model.as_deref()) {
         Some(model) => {
             let (model, catalog_entry) = resolve_model_or_error_for_profile(
@@ -235,22 +256,29 @@ async fn effective_spawn_provider(
     // Scope the default-provider cascade to the target project. Only inherit the
     // caller's feature-level override when spawning inside the same project.
     let feature_scope = (target_project.id == source.project_id).then_some(source.feature_id);
-    let configured = settings::resolve_setting(
-        &state.read_pool,
-        &runtime_setting_key("session"),
-        feature_scope,
-        Some(target_project.id),
-        Some(default_provider_id()),
-    )
-    .await
-    .unwrap_or_else(|| default_provider_id().to_string());
-    resolve_effective_provider(
+    match crate::domain::agents::resolve_selection(
         &state.read_pool,
         Some(std::path::Path::new(&target_project.path)),
-        configured,
-        body.model.as_deref(),
+        "session",
+        feature_scope,
+        Some(target_project.id),
+        None,
     )
     .await
+    {
+        Ok(selection) => selection.provider_id,
+        Err(error) => {
+            // The provider may have resolved fine while its catalog is empty;
+            // keep the user's configured provider only when the whole
+            // resolution failed, and never hide the reason.
+            tracing::warn!(
+                target_project_id = target_project.id,
+                %error,
+                "selection resolution failed for spawn; falling back to the default provider"
+            );
+            default_provider_id().to_string()
+        }
+    }
 }
 
 fn canonical_codex_permission_mode(raw_mode: &str) -> Result<String, AppError> {

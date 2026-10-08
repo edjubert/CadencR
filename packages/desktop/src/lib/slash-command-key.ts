@@ -1,3 +1,3 @@
-export function buildSlashCommandsKey(cwd: string, provider: string): string {
-  return `${provider}::${cwd}`;
+export function buildSlashCommandsKey(cwd: string, provider: string, profile?: string): string {
+  return `${provider}::${profile ?? ""}::${cwd}`;
 }

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { render, screen } from "@/test-utils";
+import { render, screen, waitFor } from "@/test-utils";
 import { RootOverlays, type ConfirmFeatureAction } from "@/components/RootOverlays";
 import type { Feature, FeatureWorktreeInfo } from "@/api/generated";
 
@@ -25,13 +25,19 @@ const features: Feature[] = [
   },
 ];
 
-const { mockListFeatureWorktrees } = vi.hoisted(() => ({
+const { mockListFeatureWorktrees, mockDeleteWorktree } = vi.hoisted(() => ({
   mockListFeatureWorktrees: vi.fn(),
+  mockDeleteWorktree: vi.fn(),
 }));
 
 vi.mock("@/api/generated", () => ({
+  useGetFeatureArchivePreview: vi.fn(() => ({
+    data: { parent_ids: [], descendant_ids: [], has_relations: false },
+    isLoading: false,
+    error: null,
+  })),
   useListFeatureWorktrees: mockListFeatureWorktrees,
-  useDeleteWorktree: vi.fn(() => ({ mutateAsync: vi.fn() })),
+  useDeleteWorktree: vi.fn(() => ({ mutateAsync: mockDeleteWorktree })),
   useDeleteFeatureBranch: vi.fn(() => ({ mutateAsync: vi.fn() })),
   useCheckBranchDelete: vi.fn(() => ({
     data: { branch: "feature/one", target_branch: "main", merged: true },
@@ -69,12 +75,16 @@ vi.mock("sonner", () => ({
   },
 }));
 
-function renderRootOverlays(confirmAction: ConfirmFeatureAction, onArchiveFeature = vi.fn()) {
+function renderRootOverlays(
+  confirmAction: ConfirmFeatureAction,
+  onArchiveFeature = vi.fn().mockResolvedValue({ archived_ids: [1] }),
+  activeProjectId = 1,
+) {
   render(
     <RootOverlays
       commandPaletteOpen={false}
       setCommandPaletteOpen={vi.fn()}
-      activeProjectId={1}
+      activeProjectId={activeProjectId}
       activeFeatureId={2}
       confirmAction={confirmAction}
       setConfirmAction={vi.fn()}
@@ -93,7 +103,9 @@ function renderRootOverlays(confirmAction: ConfirmFeatureAction, onArchiveFeatur
 
 describe("RootOverlays", () => {
   beforeEach(() => {
+    mockListFeatureWorktrees.mockClear();
     mockListFeatureWorktrees.mockReturnValue({ data: [] });
+    mockDeleteWorktree.mockReset().mockResolvedValue({ success: true });
   });
 
   it("confirms the feature id that opened the archive dialog, not the active route", async () => {
@@ -102,7 +114,10 @@ describe("RootOverlays", () => {
 
     await user.click(screen.getByRole("button", { name: /archive/i }));
 
-    expect(onArchiveFeature).toHaveBeenCalledWith(1);
+    expect(onArchiveFeature).toHaveBeenCalledWith(1, {
+      include_parent: false,
+      include_descendants: false,
+    });
   });
 
   it("hides worktree removal when archiving a feature attached to the main worktree", () => {
@@ -134,5 +149,39 @@ describe("RootOverlays", () => {
 
     expect(screen.queryByText("Remove worktree")).not.toBeInTheDocument();
     expect(screen.queryByText("Remove branch")).not.toBeInTheDocument();
+  });
+
+  it("keeps cleanup on the confirmed feature project after the active route changes", async () => {
+    const user = userEvent.setup();
+    mockListFeatureWorktrees.mockReturnValue({
+      data: [
+        {
+          feature_id: 1,
+          live: true,
+          worktree_path: "/repo/feature",
+          worktree_branch: "feature/one",
+          is_default_branch: false,
+          is_main_worktree: false,
+          directory_exists: true,
+          branch_exists: true,
+        } satisfies FeatureWorktreeInfo,
+      ],
+    });
+    renderRootOverlays(
+      { action: "archive", feature: features[0] },
+      vi.fn().mockResolvedValue({ archived_ids: [1] }),
+      2,
+    );
+    expect(mockListFeatureWorktrees).toHaveBeenLastCalledWith(
+      { project_id: 1 },
+      { query: { enabled: true } },
+    );
+    await user.click(screen.getByText("Remove worktree"));
+    await user.click(screen.getByRole("button", { name: /archive/i }));
+    await waitFor(() =>
+      expect(mockDeleteWorktree).toHaveBeenCalledWith({
+        params: { project_id: 1, feature_id: 1, force: false },
+      }),
+    );
   });
 });

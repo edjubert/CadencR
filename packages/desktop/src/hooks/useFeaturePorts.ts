@@ -1,7 +1,12 @@
 import { useEffect, useMemo } from "react";
 import { toast } from "sonner";
-import { useListFeaturePorts, type AllocatedPort } from "@/api/generated";
+import {
+  getListFeaturePortsQueryKey,
+  useListFeaturePorts,
+  type AllocatedPort,
+} from "@/api/generated";
 import { apiErrorMessage } from "@/lib/api-errors";
+import { useConnectionStatusStore } from "@/stores/connection-status-store";
 
 /** Stable reference so a row with no ports keeps its memoized props. */
 export const NO_PORTS: readonly AllocatedPort[] = [];
@@ -20,8 +25,20 @@ const PORT_POLL_INTERVAL_MS = 10_000;
  * keyed by feature id. One shared query serves every project section.
  */
 export function useFeaturePorts(): Map<number, readonly AllocatedPort[]> {
+  const connected = useConnectionStatusStore((s) => s.status === "connected");
+  const lastConnectedAt = useConnectionStatusStore((s) => s.lastConnectedAt);
   const portsQuery = useListFeaturePorts({
-    query: { refetchInterval: PORT_POLL_INTERVAL_MS },
+    query: {
+      // A late response from a previous connection cannot populate this scan.
+      queryKey: [...getListFeaturePortsQueryKey(), lastConnectedAt],
+      enabled: connected,
+      gcTime: 0,
+      staleTime: 0,
+      refetchInterval: PORT_POLL_INTERVAL_MS,
+      refetchOnMount: "always",
+      refetchOnWindowFocus: "always",
+      refetchOnReconnect: "always",
+    },
   });
 
   useEffect(() => {
@@ -31,11 +48,17 @@ export function useFeaturePorts(): Map<number, readonly AllocatedPort[]> {
     });
   }, [portsQuery.error]);
 
+  // Query retains its last successful data on errors and while reconnecting.
+  // A port badge is a live claim: never revive a previous service's snapshot
+  // before a successful scan in the current connection has confirmed it.
+  const confirmed = connected && !portsQuery.isError && portsQuery.isFetchedAfterMount;
+
   return useMemo(() => {
     const byFeatureId = new Map<number, readonly AllocatedPort[]>();
+    if (!confirmed) return byFeatureId;
     for (const entry of portsQuery.data ?? []) {
       if (entry.ports.length > 0) byFeatureId.set(entry.feature_id, entry.ports);
     }
     return byFeatureId;
-  }, [portsQuery.data]);
+  }, [confirmed, portsQuery.data]);
 }

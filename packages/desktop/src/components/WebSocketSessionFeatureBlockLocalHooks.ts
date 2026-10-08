@@ -16,6 +16,7 @@ import {
   useFeatureLayoutStore,
 } from "@/stores/feature-layout-store";
 import { useEditorStore } from "@/stores/editor-store";
+import { useOpenFileInNeovim } from "@/components/editor/neovim/useOpenFileInNeovim";
 import type { OpenDiffInEditor } from "@/components/diff/OpenDiffInEditorContext";
 
 export function useOpenDiffFileInEditor({
@@ -29,8 +30,17 @@ export function useOpenDiffFileInEditor({
   rootPath: string;
   refs: ReturnType<typeof useSessionRefs>;
 }): OpenDiffInEditor {
-  return useCallback(
-    (filePath, lineNumber): void => {
+  const revealEditor = useCallback(
+    () => activateFeatureTab(layoutFeatureId, "editor"),
+    [layoutFeatureId],
+  );
+  const openInNeovim = useOpenFileInNeovim(featureId, {
+    ensureStarted: true,
+    onOpened: revealEditor,
+  });
+
+  const openInCodeMirror = useCallback(
+    (filePath: string, lineNumber?: number): void => {
       const editor = useEditorStore.getState();
       editor.initFeature(featureId);
       const feature = useEditorStore.getState().features[featureId];
@@ -43,6 +53,19 @@ export function useOpenDiffFileInEditor({
       requestAnimationFrame(() => refs.editor.current?.focusActiveEditor());
     },
     [featureId, layoutFeatureId, refs.editor, rootPath],
+  );
+
+  return useCallback(
+    (filePath, lineNumber, column): void => {
+      if (!openInNeovim) {
+        openInCodeMirror(filePath, lineNumber);
+        return;
+      }
+
+      const relativePath = toRelativePath(filePath, rootPath).replace(/^\.\//, "");
+      openInNeovim(relativePath, lineNumber, column);
+    },
+    [openInCodeMirror, openInNeovim, rootPath],
   );
 }
 

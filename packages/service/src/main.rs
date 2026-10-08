@@ -255,6 +255,13 @@ async fn main() -> anyhow::Result<()> {
                 state.theme_events_tx.clone(),
             ));
 
+            // Watch alacritty.toml so external edits push a live refresh to
+            // connected clients, the same way the settings watcher above does
+            // for the settings directory.
+            domain::terminal::alacritty_config::start_watcher(
+                state.alacritty_config_events_tx.clone(),
+            );
+
             // Background Web Push dispatcher: turns agent finished / needs-input
             // transitions into native push for backgrounded remote PWAs. Cheap
             // when no subscriptions exist; runs for the process lifetime.
@@ -264,6 +271,8 @@ async fn main() -> anyhow::Result<()> {
             // process, which needs to honor the override on first launch.
             domain::agents::apply_binary_overrides_from_settings(&state.read_pool).await;
             domain::agents::spawn_runtime_startup_warmups();
+            domain::agents::providers::installed::managed::service::spawn_startup_blocklist_refresh(
+            );
 
             // Reconcile custom-action runs orphaned by the previous exit: their
             // processes died with the old service instance, so finalize them

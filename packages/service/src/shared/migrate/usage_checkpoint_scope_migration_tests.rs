@@ -14,6 +14,14 @@ async fn legacy_pool() -> sqlx::SqlitePool {
         .unwrap();
     sqlx::raw_sql(
         "PRAGMA foreign_keys = ON;
+         CREATE TABLE projects (
+             id INTEGER PRIMARY KEY,
+             name TEXT NOT NULL,
+             path TEXT NOT NULL UNIQUE,
+             branch_prefix TEXT,
+             created_at TEXT NOT NULL DEFAULT (datetime('now')),
+             kind TEXT NOT NULL DEFAULT 'user'
+         );
          CREATE TABLE agent_sessions (
              id INTEGER PRIMARY KEY,
              runtime_session_id TEXT
@@ -25,6 +33,12 @@ async fn legacy_pool() -> sqlx::SqlitePool {
              output_tokens INTEGER NOT NULL DEFAULT 0,
              PRIMARY KEY (session_id, provider_id),
              FOREIGN KEY (session_id) REFERENCES agent_sessions(id) ON DELETE CASCADE
+         );
+         CREATE TABLE agent_messages (
+             id INTEGER PRIMARY KEY,
+             session_id INTEGER NOT NULL,
+             content TEXT NOT NULL,
+             message_type TEXT NOT NULL
          );
          INSERT INTO agent_sessions (id, runtime_session_id)
          VALUES (1, 'codex-root'), (2, 'claude-root'), (3, NULL);

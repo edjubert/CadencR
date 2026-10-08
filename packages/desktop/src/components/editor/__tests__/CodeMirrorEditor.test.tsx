@@ -1,3 +1,4 @@
+import { Text } from "@codemirror/state";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen } from "@/test-utils";
 import CodeMirrorEditor from "../CodeMirrorEditor";
@@ -6,7 +7,8 @@ import { gitBlameExtension } from "../git-blame-extension";
 import { getLanguageExtension, isMarkdownFile } from "../language-extensions";
 import { useLsp } from "@/lib/lsp/useLsp";
 
-vi.mock("@codemirror/state", () => ({
+vi.mock("@codemirror/state", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@codemirror/state")>()),
   Compartment: class {
     of = vi.fn(() => []);
     reconfigure = vi.fn(() => ({}));
@@ -40,7 +42,7 @@ const baseEditorProps = vi.fn();
 // Mock BaseCodeMirrorEditor to render a simple div with the className
 let mockViewDoc = "";
 const mockEditorDispatch = vi.fn(
-  (transaction: { changes?: { from: number; to: number; insert: string } }) => {
+  (transaction: { changes?: { from: number; to: number; insert: string | Text } }) => {
     const changes = transaction.changes;
     if (!changes) return;
     mockViewDoc = `${mockViewDoc.slice(0, changes.from)}${changes.insert}${mockViewDoc.slice(
@@ -63,7 +65,12 @@ vi.mock("../BaseCodeMirrorEditor", () => ({
     if (mockViewDoc.length === 0) mockViewDoc = initialContent ?? "";
     if (editorViewRef) {
       editorViewRef.current = {
-        state: { doc: { toString: () => mockViewDoc, length: mockViewDoc.length } },
+        state: {
+          get doc() {
+            return Text.of(mockViewDoc.split("\n"));
+          },
+          selection: { main: { head: 0 } },
+        },
         dispatch: mockEditorDispatch,
         destroy: vi.fn(),
       };
@@ -290,7 +297,7 @@ describe("CodeMirrorEditor", () => {
 
     // File content arrives → editor mounts → blame effect must re-run.
     mockReadFileReturn = { data: { content: "hello" }, isLoading: false, error: null };
-    rerender(<CodeMirrorEditor {...defaultProps} />);
+    rerender(<CodeMirrorEditor {...defaultProps} onCloseSearch={() => {}} />);
 
     expect(screen.getByTestId("base-editor")).toBeInTheDocument();
     expect(gitBlameExtension).toHaveBeenCalledWith(mockBlameReturn.data?.lines);
@@ -308,11 +315,11 @@ describe("CodeMirrorEditor", () => {
     // Disk content arriving (a `data` identity change) must NOT re-clear dirty,
     // otherwise a later refetch would wipe genuine in-editor edits.
     mockReadFileReturn = { data: { content: "hello" }, isLoading: false, error: null };
-    rerender(<CodeMirrorEditor {...defaultProps} />);
+    rerender(<CodeMirrorEditor {...defaultProps} onCloseSearch={() => {}} />);
     expect(mockSetDirty).toHaveBeenCalledTimes(1);
 
     mockReadFileReturn = { data: { content: "hello updated" }, isLoading: false, error: null };
-    rerender(<CodeMirrorEditor {...defaultProps} />);
+    rerender(<CodeMirrorEditor {...defaultProps} onCloseSearch={() => {}} />);
     expect(mockSetDirty).toHaveBeenCalledTimes(1);
   });
 
@@ -323,11 +330,13 @@ describe("CodeMirrorEditor", () => {
     expect(mockViewDoc).toBe("old disk");
 
     mockReadFileReturn = { data: { content: "new disk" }, isLoading: false, error: null };
-    rerender(<CodeMirrorEditor {...defaultProps} />);
+    rerender(<CodeMirrorEditor {...defaultProps} onCloseSearch={() => {}} />);
 
-    expect(mockEditorDispatch).toHaveBeenCalledWith({
-      changes: { from: 0, to: "old disk".length, insert: "new disk" },
-    });
+    expect(mockEditorDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changes: { from: 0, to: "old disk".length, insert: Text.of(["new disk"]) },
+      }),
+    );
     expect(mockViewDoc).toBe("new disk");
   });
 
@@ -337,12 +346,23 @@ describe("CodeMirrorEditor", () => {
     mockViewDoc = "local edit";
 
     mockReadFileReturn = { data: { content: "new disk" }, isLoading: false, error: null };
-    rerender(<CodeMirrorEditor {...defaultProps} />);
+    rerender(<CodeMirrorEditor {...defaultProps} onCloseSearch={() => {}} />);
 
     expect(mockEditorDispatch).not.toHaveBeenCalledWith({
       changes: { from: 0, to: "old disk".length, insert: "new disk" },
     });
     expect(mockViewDoc).toBe("local edit");
+  });
+
+  it("keeps the mounted buffer after a background disk read fails", () => {
+    mockReadFileReturn = { data: { content: "original" }, isLoading: false, error: null };
+    const { rerender } = render(<CodeMirrorEditor {...defaultProps} />);
+    mockViewDoc = "unsaved typing";
+    mockReadFileReturn = { ...mockReadFileReturn, error: new Error("File unavailable") };
+    rerender(<CodeMirrorEditor {...defaultProps} onCloseSearch={() => {}} />);
+    expect(screen.getByTestId("base-editor")).toBeInTheDocument();
+    expect(screen.getByText("Disk check failed")).toBeInTheDocument();
+    expect(mockViewDoc).toBe("unsaved typing");
   });
 
   it("clamps invalid pending go-to lines to the document range", () => {

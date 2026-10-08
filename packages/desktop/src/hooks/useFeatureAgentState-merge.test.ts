@@ -87,16 +87,34 @@ describe("applyToolCallUpdates", () => {
     const blocks: AgentBlockData[] = [{ id: "t1", type: "tool_call", content: "{}" }];
     const args = JSON.stringify({ file_path: "/a.ts", content: "c".repeat(OVER_BUDGET) });
 
-    expect(applyToolCallUpdates(blocks, { t1: args })).toBe(true);
-    expect(blocks[0].truncatedContent).toBe(true);
-    expect(blocks[0].content).toBe(blocks[0].toolArgs);
-    const parsed = JSON.parse(blocks[0].toolArgs ?? "") as Record<string, unknown>;
+    const updated = applyToolCallUpdates(blocks, { t1: args });
+    expect(updated).not.toBe(blocks);
+    expect(updated[0].truncatedContent).toBe(true);
+    expect(updated[0].content).toBe(updated[0].toolArgs);
+    const parsed = JSON.parse(updated[0].toolArgs ?? "") as Record<string, unknown>;
     expect(parsed.file_path).toBe("/a.ts");
+    expect(blocks[0].content).toBe("{}");
   });
 
   it("reports no change when the content already matches", () => {
-    const blocks: AgentBlockData[] = [{ id: "t1", type: "tool_call", content: "same" }];
-    expect(applyToolCallUpdates(blocks, { t1: "same" })).toBe(false);
+    const blocks: AgentBlockData[] = [
+      { id: "t1", type: "tool_call", content: "same", toolArgs: "same" },
+    ];
+    expect(applyToolCallUpdates(blocks, { t1: "same" })).toBe(blocks);
     expect(blocks[0].truncatedContent).toBeUndefined();
+  });
+
+  it("matches a canonical update through messageDbId and applies server truncation", () => {
+    const blocks: AgentBlockData[] = [
+      { id: "live-tool", messageDbId: 9, type: "tool_call", content: "before" },
+    ];
+
+    const updated = applyToolCallUpdates(blocks, { "msg-9": "after" }, new Set(["msg-9"]));
+
+    expect(updated[0]).toMatchObject({
+      content: "after",
+      toolArgs: "after",
+      truncatedContent: true,
+    });
   });
 });

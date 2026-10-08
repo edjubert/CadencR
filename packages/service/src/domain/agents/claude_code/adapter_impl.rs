@@ -23,6 +23,22 @@ use crate::domain::agents::runtime::{ModelCatalogEntry, ProviderCatalogEntry, Pr
 
 #[async_trait]
 impl AgentRuntimeAdapter for ClaudeCodeAdapter {
+    async fn profile_catalog(
+        &self,
+        _cwd: Option<&Path>,
+    ) -> Result<Option<crate::domain::agents::runtime::ProviderProfilesResponse>, RuntimeError>
+    {
+        Ok(Some(super::profile_adapter::catalog()))
+    }
+
+    async fn resolve_profile(
+        &self,
+        selection: Option<&str>,
+        _cwd: &Path,
+    ) -> Result<Option<crate::domain::agents::adapter::ResolvedRuntimeProfile>, RuntimeError> {
+        super::profile_adapter::resolve(selection, _cwd).map(Some)
+    }
+
     fn user_shell_strategy(&self) -> RuntimeUserShellStrategy {
         RuntimeUserShellStrategy::CadencrManaged
     }
@@ -57,6 +73,7 @@ impl AgentRuntimeAdapter for ClaudeCodeAdapter {
         ProviderCatalogEntry {
             id: "claude_code".to_string(),
             label: "Claude".to_string(),
+            icon_data: None,
             status: ProviderStatus::Available,
             status_message: None,
             models,
@@ -351,6 +368,7 @@ fn provider_catalog_entry_from_models(models: Vec<ModelCatalogEntry>) -> Provide
     ProviderCatalogEntry {
         id: "claude_code".to_string(),
         label: "Claude".to_string(),
+        icon_data: None,
         status: ProviderStatus::Available,
         status_message: None,
         models,

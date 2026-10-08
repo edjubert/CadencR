@@ -45,7 +45,7 @@ fn empty_snapshot(feature_id: i64, target_branch: &str) -> GitStatusSnapshot {
 }
 
 /// Same contract as `compute_status` but degrades to `empty_snapshot` instead
-/// of bubbling a `GIT_COMMAND_ERROR` when `repo` doesn't exist on disk. Use
+/// of bubbling a `GIT_COMMAND_ERROR` when `repo` is missing or has no Git metadata. Use
 /// this from request handlers and the watcher subscribe path so a stale
 /// `worktree_path` setting doesn't spam the error log on every poll.
 pub async fn compute_status_or_empty(
@@ -53,7 +53,7 @@ pub async fn compute_status_or_empty(
     feature_id: i64,
     target_branch: &str,
 ) -> Result<GitStatusSnapshot, AppError> {
-    if !repo.exists() {
+    if !crate::shared::git_context::has_git_metadata(repo).await? {
         return Ok(empty_snapshot(feature_id, target_branch));
     }
     compute_status(repo, feature_id, target_branch).await
@@ -273,6 +273,27 @@ mod tests {
         let snap = compute_status_or_empty(&missing, 1, "main").await.unwrap();
         assert_eq!(snap.current_branch, "");
         assert_eq!(snap.uncommitted_count, 0);
+    }
+
+    #[tokio::test]
+    async fn compute_status_or_empty_skips_git_for_plain_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("notes.txt"), "not a repository").unwrap();
+        let snap = compute_status_or_empty(dir.path(), 1, "main")
+            .await
+            .unwrap();
+        assert_eq!(snap.current_branch, "");
+        assert_eq!(snap.uncommitted_count, 0);
+        assert!(!snap.has_remote);
+    }
+
+    #[tokio::test]
+    async fn compute_status_or_empty_preserves_broken_repository_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".git"), "gitdir: missing").unwrap();
+        assert!(compute_status_or_empty(dir.path(), 1, "main")
+            .await
+            .is_err());
     }
 
     fn run_git(dir: &Path, args: &[&str]) {

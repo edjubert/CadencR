@@ -8,7 +8,9 @@ use super::AcpRuntimeSession;
 use crate::domain::agents::adapter::RuntimeError;
 
 use super::super::prompt_turn::{acp_prompt_blocks_from_content, build_prompt_params};
-use super::super::turn_lifecycle::{finalize_turn, request_prompt_with_cancel};
+use super::super::turn_lifecycle::{
+    await_event_loop_barrier, finalize_turn, request_prompt_with_cancel,
+};
 
 impl AcpRuntimeSession {
     pub(super) async fn prompt_input(
@@ -75,14 +77,15 @@ impl AcpRuntimeSession {
                 .pending_prompt_receipts
                 .acknowledge_client_message_id(client_message_id)
             {
-                let _ = self.local_tx.send(Ok(event)).await;
+                let _ = self.local_tx().send(Ok(event)).await;
             }
         }
+        await_event_loop_barrier(&self.client).await?;
         if finalize_response {
             if let Some(reason) = response.get("stopReason").and_then(Value::as_str) {
                 tracing::debug!(stop_reason = reason, "session/prompt completed");
                 finalize_turn(
-                    &self.local_tx,
+                    self.local_tx(),
                     &self.indexer,
                     self.current_session_id().await,
                     self.context_window,

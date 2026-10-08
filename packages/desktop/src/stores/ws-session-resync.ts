@@ -52,6 +52,7 @@
  */
 import { getFeatureAgentState } from "@/api/generated";
 import { serverBlocksToAgentBlocks } from "@/hooks/useFeatureAgentState";
+import { applyToolCallUpdates } from "@/hooks/useFeatureAgentState-merge";
 import type { AgentBlockData } from "@/components/AgentBlock";
 import { blocksPatchWithDerived, type StreamingState } from "./ws-message-processing";
 import { updateSession, type ResyncTarget } from "./ws-session-types";
@@ -82,66 +83,121 @@ async function performMessageResync(
 ): Promise<void> {
   const session = ctx.get().sessions[sessionId];
   if (!session) return;
-
-  // Reconnect derives the conversation key, session id, and cursor from the
-  // store. The manual "Sync from CLI" action passes them explicitly: a session
-  // born live this run never hydrated from REST, so its store `sessionDbId` is
-  // a stale fallback and its blocks may lack persisted ids — the backend hands
-  // back the authoritative `sessionDbId` plus the pre-append `cursor` so we
-  // fetch *only* the rows it just appended.
   const featureId = target?.featureId ?? session.featureId;
   const sessionDbId = target?.sessionDbId ?? session.sessionDbId;
   if (!featureId || !sessionDbId) return;
-
-  // Anchor only at a cursor confirmed by a completed server response. A live
-  // row with a larger DB id does not prove every earlier row was received.
   const cursor = target?.cursor ?? session.lastAppliedMessageId ?? 0;
-  // Delivery-state changes mutate an existing message row. Overlap from the
-  // earliest locally pending prompt while retaining the confirmed snapshot
-  // cursor for sessions without pending receipts.
   const fetchCursor = target ? cursor : reconnectFetchCursor(session.blocks, cursor);
-  const data =
-    target || fetchCursor > 0
-      ? await getFeatureAgentState(featureId, {
-          after: JSON.stringify({ [sessionDbId]: fetchCursor }),
-        })
-      : await getFeatureAgentState(featureId);
-  if (!data?.sessions) return;
-  const serverSession = data.sessions.find((s) => s.sessionDbId === sessionDbId);
-  if (!serverSession) return;
-
-  const newBlocks = serverBlocksToAgentBlocks(serverSession.blocks as never[]);
+  const revisionCursor = session.lastAppliedContentRevision ?? 0;
+  const pages = await drainResyncPages({
+    featureId,
+    sessionDbId,
+    fetchCursor,
+    revisionCursor,
+    fullSnapshot: !target && fetchCursor === 0,
+  });
+  if (!pages) return;
   const current = ctx.get().sessions[sessionId];
   if (!current) return;
-
-  // Persist the authoritative session id so future resyncs/status lookups key
-  // correctly when the stored one was a stale live fallback.
   const idPatch = current.sessionDbId === sessionDbId ? {} : { sessionDbId };
-  const nextCursor = Math.max(cursor, serverSession.maxMessageId ?? 0);
-
-  if (newBlocks.length === 0) {
-    ctx.set(
-      updateSession(ctx.get(), sessionId, {
-        ...idPatch,
-        lastAppliedMessageId: nextCursor,
-      }),
-    );
-    return;
-  }
-
-  const merged = mergeCanonicalBlocks(current.blocks, newBlocks);
-  if (merged === current.blocks) {
-    ctx.set(updateSession(ctx.get(), sessionId, { ...idPatch, lastAppliedMessageId: nextCursor }));
-    return;
-  }
-
+  const currentWithUpdates = applyToolCallUpdates(
+    current.blocks,
+    pages.toolCallUpdates,
+    pages.truncatedToolCallUpdateIds,
+  );
+  const incomingWithUpdates = applyToolCallUpdates(
+    pages.blocks,
+    pages.toolCallUpdates,
+    pages.truncatedToolCallUpdateIds,
+  );
+  const merged = mergeCanonicalBlocks(currentWithUpdates, incomingWithUpdates);
   ctx.set(
     updateSession(ctx.get(), sessionId, {
       ...idPatch,
-      ...blocksPatchWithDerived(current.streamingState, merged),
-      lastAppliedMessageId: nextCursor,
+      ...(merged === current.blocks ? {} : blocksPatchWithDerived(current.streamingState, merged)),
+      lastAppliedMessageId: Math.max(
+        current.lastAppliedMessageId ?? 0,
+        cursor,
+        pages.messageCursor,
+      ),
+      lastAppliedContentRevision: Math.max(
+        current.lastAppliedContentRevision ?? 0,
+        pages.revisionCursor,
+      ),
     }),
   );
+}
+
+interface ResyncPageRequest {
+  featureId: number;
+  sessionDbId: number;
+  fetchCursor: number;
+  revisionCursor: number;
+  fullSnapshot: boolean;
+}
+
+interface DrainedResyncPages {
+  blocks: AgentBlockData[];
+  toolCallUpdates: Record<string, string | null>;
+  truncatedToolCallUpdateIds: Set<string>;
+  messageCursor: number;
+  revisionCursor: number;
+}
+
+async function drainResyncPages(request: ResyncPageRequest): Promise<DrainedResyncPages | null> {
+  let messageCursor = request.fetchCursor;
+  let revisionCursor = request.revisionCursor;
+  let blocks: AgentBlockData[] = [];
+  const toolCallUpdates: Record<string, string | null> = {};
+  const truncatedToolCallUpdateIds = new Set<string>();
+  let firstPage = true;
+
+  while (true) {
+    const data =
+      firstPage && request.fullSnapshot
+        ? await getFeatureAgentState(request.featureId)
+        : await getFeatureAgentState(request.featureId, {
+            after: JSON.stringify({ [request.sessionDbId]: messageCursor }),
+            after_revisions: JSON.stringify({ [request.sessionDbId]: revisionCursor }),
+          });
+    const serverSession = data?.sessions?.find(
+      (candidate) => candidate.sessionDbId === request.sessionDbId,
+    );
+    if (!serverSession) return null;
+    firstPage = false;
+
+    blocks = mergeCanonicalBlocks(
+      blocks,
+      serverBlocksToAgentBlocks(serverSession.blocks as never[]),
+    );
+    const pageTruncatedIds = new Set(serverSession.truncatedToolCallUpdateIds ?? []);
+    for (const [id, content] of Object.entries(serverSession.toolCallUpdates ?? {})) {
+      toolCallUpdates[id] = content;
+      if (pageTruncatedIds.has(id)) truncatedToolCallUpdateIds.add(id);
+      else truncatedToolCallUpdateIds.delete(id);
+    }
+
+    const nextMessageCursor = Math.max(messageCursor, serverSession.maxMessageId ?? messageCursor);
+    const nextRevisionCursor = Math.max(
+      revisionCursor,
+      serverSession.maxContentRevision ?? revisionCursor,
+    );
+    const continueMessages =
+      serverSession.hasMoreIncrementalMessages && nextMessageCursor > messageCursor;
+    const continueRevisions =
+      serverSession.hasMoreContentRevisions && nextRevisionCursor > revisionCursor;
+    messageCursor = nextMessageCursor;
+    revisionCursor = nextRevisionCursor;
+    if (!continueMessages && !continueRevisions) break;
+  }
+
+  return {
+    blocks,
+    toolCallUpdates,
+    truncatedToolCallUpdateIds,
+    messageCursor,
+    revisionCursor,
+  };
 }
 
 function reconnectFetchCursor(blocks: AgentBlockData[], confirmedCursor: number): number {
@@ -227,6 +283,10 @@ export async function repairPersistedBlocksAfterTurn(
       lastAppliedMessageId: Math.max(
         current.lastAppliedMessageId ?? 0,
         serverSession.maxMessageId ?? 0,
+      ),
+      lastAppliedContentRevision: Math.max(
+        current.lastAppliedContentRevision ?? 0,
+        serverSession.maxContentRevision ?? 0,
       ),
     }),
   );

@@ -9,13 +9,13 @@ import {
 } from "react";
 import type { EditorView } from "@codemirror/view";
 import { EditorView as CodeMirrorView } from "@codemirror/view";
-import type { Extension } from "@codemirror/state";
+import type { Extension, Text } from "@codemirror/state";
 import { Loader2Icon } from "lucide-react";
 import type { GitOperationKind } from "@/api/generated";
 import { useDebouncedSetting } from "@/hooks/useDebouncedSetting";
 import { useEditorLanguage } from "@/hooks/useEditorLanguage";
-import { useEditorStore } from "@/stores/editor-store";
 import BaseCodeMirrorEditor from "./BaseCodeMirrorEditor";
+import { EditorDiskSyncIndicator, type EditorDiskSyncState } from "./EditorDiskSyncIndicator";
 import { getLanguageExtension } from "./language-extensions";
 import { registerSave, unregisterSave } from "./editorSaveRegistry";
 import { useEditorFormat } from "./useEditorFormat";
@@ -65,14 +65,14 @@ export default function ConflictResultResolver(props: ConflictResultResolverProp
           language={editor.languageExtension}
           vimMode={editor.vimEnabled}
           editorViewRef={editor.viewRef}
-          onChange={editor.onChange}
+          onDocChange={editor.onChange}
           onSave={editor.onSave}
           onEditorViewChange={editor.onViewChange}
           extraExtensions={extraExtensions}
           className="h-full overflow-hidden"
         />
       </div>
-      <ConflictEditorStatus isSaving={editor.isSaving} saveError={editor.saveError} />
+      <ConflictEditorStatus sync={editor.diskSync} isFormatting={editor.isFormatting} />
       <p className="sr-only" aria-live="polite">
         {editor.announcement}
       </p>
@@ -81,22 +81,26 @@ export default function ConflictResultResolver(props: ConflictResultResolverProp
 }
 
 function ConflictEditorStatus({
-  isSaving,
-  saveError,
+  sync,
+  isFormatting,
 }: {
-  isSaving: boolean;
-  saveError: string | null;
+  sync: EditorDiskSyncState;
+  isFormatting: boolean;
 }): ReactElement | null {
-  if (!isSaving && !saveError) return null;
+  const { isSaving, errorMessage } = sync;
+  if (!isSaving && !isFormatting && !errorMessage && !sync.diskChanged) return null;
   return (
-    <div
-      className="absolute bottom-2 right-3 z-10 flex items-center gap-1.5 rounded border border-border bg-popover px-2 py-1 text-xs shadow-md"
-      role={saveError ? "alert" : "status"}
-    >
-      {isSaving && <Loader2Icon className="size-3 animate-spin" aria-hidden />}
-      <span className={saveError ? "text-destructive" : "text-muted-foreground"}>
-        {saveError ?? "Saving…"}
-      </span>
+    <div className="absolute bottom-2 right-3 z-10 flex items-center gap-1.5 rounded border border-border bg-popover px-2 py-1 text-xs shadow-md">
+      <EditorDiskSyncIndicator sync={sync} />
+      {(isSaving || isFormatting) && <Loader2Icon className="size-3 animate-spin" aria-hidden />}
+      {(errorMessage || isSaving || isFormatting) && (
+        <span
+          role={errorMessage ? "alert" : "status"}
+          className={errorMessage ? "text-destructive" : "text-muted-foreground"}
+        >
+          {errorMessage ?? (isFormatting ? "Formatting…" : "Saving…")}
+        </span>
+      )}
     </div>
   );
 }
@@ -117,11 +121,10 @@ function useConflictResultEditor({
     viewRef,
     onEditorViewChange,
   });
-  const setDirty = useEditorStore((state) => state.setDirty);
   const language = useEditorLanguage(projectId, filePath);
   const { value: vimSetting } = useDebouncedSetting("editor_vim_mode");
   const { value: autoSaveSetting } = useDebouncedSetting("editor_auto_save");
-  const { beforeWrite } = useEditorFormat({
+  const { beforeWrite, isFormatting } = useEditorFormat({
     projectId,
     featureId,
     filePath,
@@ -140,12 +143,14 @@ function useConflictResultEditor({
   const autoSaveEnabledRef = useRef((autoSaveSetting ?? "false") === "true");
   autoSaveEnabledRef.current = (autoSaveSetting ?? "false") === "true";
 
-  const onChange = useCallback((): void => {
-    setDirty(featureId, paneId, filePath, true);
-    if (!autoSaveEnabledRef.current) return;
-    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-    autoSaveTimerRef.current = setTimeout(() => void saveState.saveQuiet(), AUTO_SAVE_DELAY_MS);
-  }, [featureId, filePath, paneId, saveState.saveQuiet, setDirty]);
+  const onChange = useCallback(
+    (doc: Text): void => {
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      if (!saveState.onDocChange(doc) || !autoSaveEnabledRef.current) return;
+      autoSaveTimerRef.current = setTimeout(() => void saveState.saveQuiet(), AUTO_SAVE_DELAY_MS);
+    },
+    [saveState.onDocChange, saveState.saveQuiet],
+  );
   const onSave = useCallback((): void => {
     void saveState.save();
   }, [saveState.save]);
@@ -154,7 +159,7 @@ function useConflictResultEditor({
     [filePath, language.languageId],
   );
 
-  useConflictSaveRegistration(paneId, filePath, saveState.save, autoSaveTimerRef);
+  useConflictSaveRegistration(paneId, filePath, saveState.saveForClose, autoSaveTimerRef);
 
   return useMemo(
     () => ({
@@ -165,20 +170,12 @@ function useConflictResultEditor({
       onSave,
       onViewChange: mapping.onViewChange,
       announcement: mapping.announcement,
-      isSaving: saveState.isSaving,
-      saveError: saveState.errorMessage,
+      diskSync: saveState,
+      isFormatting,
       vimEnabled: (vimSetting ?? "false") === "true",
       languageExtension,
     }),
-    [
-      languageExtension,
-      mapping,
-      onChange,
-      onSave,
-      saveState.errorMessage,
-      saveState.isSaving,
-      vimSetting,
-    ],
+    [languageExtension, mapping, onChange, onSave, saveState, isFormatting, vimSetting],
   );
 }
 

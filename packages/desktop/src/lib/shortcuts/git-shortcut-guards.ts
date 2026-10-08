@@ -29,6 +29,15 @@ function hasOpenOverlay(): boolean {
   return document.querySelector(OPEN_OVERLAY_SELECTOR) != null;
 }
 
+/**
+ * True when the keystroke carries a modifier that no amount of typing or
+ * selecting could produce. Shift does not count: it extends a selection and
+ * shifts a character, so a Shift-only combo is still competing with the text.
+ */
+function isChord(event: KeyboardEvent): boolean {
+  return event.metaKey || event.ctrlKey || event.altKey;
+}
+
 /** True when the active surface, composition session, or overlay owns the key. */
 export function shouldIgnoreGitShortcut(event: KeyboardEvent): boolean {
   if (
@@ -42,5 +51,13 @@ export function shouldIgnoreGitShortcut(event: KeyboardEvent): boolean {
   if (composedPathOwnsTextInput(event) || isEditableShortcutTarget(getDeepestActiveElement())) {
     return true;
   }
-  return hasActiveTextSelection() || hasOpenOverlay();
+  if (hasOpenOverlay()) return true;
+  // A live selection only speaks for the bare keys. Git's navigation map is
+  // single letters, so `j` while a range is highlighted is far more likely to
+  // be a mis-typed selection gesture than a request to move — but `⌘Y` never
+  // is. The selection is also document-wide: highlighting a line to copy it
+  // (or a sentence in the agent transcript three tabs ago) used to disable
+  // every Git chord until something happened to collapse it, which is what
+  // made the sub-view shortcuts read as simply not implemented.
+  return !isChord(event) && hasActiveTextSelection();
 }

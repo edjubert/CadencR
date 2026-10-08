@@ -7,6 +7,7 @@
 
 import { useEffect, useMemo } from "react";
 import type { AgentBlockData } from "@/components/AgentBlock";
+import type { RuntimeSessionConfigSnapshot, RuntimeSessionConfigValue } from "@/api/generated";
 import { useGetFeatureAgentState } from "@/api/generated";
 import { serverBlocksToAgentBlocks } from "@/hooks/useFeatureAgentState";
 import {
@@ -14,6 +15,7 @@ import {
   type PermissionMode,
   type PendingPlanApproval,
 } from "@/stores/ws-session-store";
+import type { RuntimeSelection } from "@/shared/models";
 import type { PendingPermission } from "@/components/ToolPermissionPrompt";
 import type { PermissionDecisionValue } from "@/components/ToolPermissionPrompt";
 import type { AgentQuestion, AgentQuestionAnswers } from "@/components/AgentQuestionDrawer";
@@ -81,20 +83,34 @@ export interface UseWebSocketSessionReturn {
   closeGate: (reason: GateCloseReason) => void;
 
   contextUsage: ContextUsageState | null;
-  currentProviderId: string;
-  currentModelId: string;
+  currentSelection: RuntimeSelection | null;
   currentThinkingEffort?: string;
   fastMode: boolean;
   currentProfile?: string;
-  runtimeProvider: string;
+  runtimeOverrides?: {
+    model: string | null;
+    thinking_effort: string | null;
+    fast_mode: boolean | null;
+  };
+  runtimeOverridesPending: boolean;
   runtimeSessionId: string;
+  sessionConfig: RuntimeSessionConfigSnapshot | null;
+  sessionConfigLoading: boolean;
+  sessionConfigSupported: boolean | null;
+  sessionConfigError: string | null;
+  pendingSessionConfigId: string | null;
+  requestSessionConfig: () => Promise<void>;
+  setSessionConfigOption: (configId: string, value: RuntimeSessionConfigValue) => Promise<void>;
   mcpServers: McpServerStatus[] | null;
   hasFileChanges: boolean;
   setModel: (modelId: string, providerId: string) => void;
   setThinkingEffort: (thinkingEffort?: string) => void;
   setFastMode: (enabled: boolean) => Promise<void>;
   setProfile: (profile: string) => void;
-  setProvider: (providerId: string) => void;
+  setRuntimeOverrides: (
+    patch: import("@/lib/ws-envelope").RuntimeConfigOverridePatch,
+  ) => Promise<void>;
+  setProvider: (providerId: string, modelId?: string) => void;
   sendPrompt: (text: string, options?: PromptDispatchOptions) => void;
   respondToPermission: (
     requestId: string,
@@ -129,11 +145,14 @@ type SessionActions = Pick<
   | "setThinkingEffort"
   | "setFastMode"
   | "setProfile"
+  | "setRuntimeOverrides"
   | "setPermissionMode"
   | "setAccessMode"
   | "approvePlan"
   | "requestPlanChanges"
   | "closeGate"
+  | "requestSessionConfig"
+  | "setSessionConfigOption"
 >;
 
 // ---------------------------------------------------------------------------
@@ -222,14 +241,19 @@ function usePersistedSessionLoader(
       hasMore: lastSession.hasMore,
       oldestMessageId: lastSession.oldestMessageId,
       maxMessageId: lastSession.maxMessageId,
+      maxContentRevision: lastSession.maxContentRevision,
       featureId,
       sessionDbId: lastSession.sessionDbId,
-      currentProviderId: lastSession.runtimeProvider ?? undefined,
-      currentModelId: lastSession.model ?? undefined,
+      currentSelection:
+        lastSession.runtimeProvider && lastSession.model
+          ? {
+              providerId: lastSession.runtimeProvider,
+              modelId: lastSession.model,
+            }
+          : undefined,
       currentProfile: lastSession.profile ?? undefined,
       permissionMode: parsePermissionMode(lastSession.permissionMode) ?? undefined,
       accessMode: parseAccessMode(lastSession.accessMode),
-      runtimeProvider: lastSession.runtimeProvider ?? undefined,
       runtimeSessionId: lastSession.runtimeSessionId ?? undefined,
       pendingPermission: lastSession.pendingPermission,
       pendingQuestions: lastSession.pendingQuestions,
@@ -264,18 +288,23 @@ function useSessionActions(sessionId: string): SessionActions {
       clearSession: (): void => s.clearSession(sessionId),
       compactSession: (): void => s.compactSession(sessionId),
       initSession: (config: SessionConfig): void => s.initSession(sessionId, config),
-      setProvider: (providerId: string): void => s.setProvider(sessionId, providerId),
+      setProvider: (providerId: string, modelId?: string): void =>
+        s.setProvider(sessionId, providerId, modelId),
       setModel: (modelId: string, providerId: string): void =>
         s.setModel(sessionId, modelId, providerId),
       setThinkingEffort: (thinkingEffort?: string): void =>
         s.setThinkingEffort(sessionId, thinkingEffort),
       setFastMode: (enabled: boolean): Promise<void> => s.setFastMode(sessionId, enabled),
       setProfile: (profile: string): void => s.setProfile(sessionId, profile),
+      setRuntimeOverrides: (patch): Promise<void> => s.setRuntimeOverrides(sessionId, patch),
       setPermissionMode: (mode: PermissionMode): void => s.setPermissionMode(sessionId, mode),
       setAccessMode: (mode: AccessMode): void => s.setAccessMode(sessionId, mode),
       approvePlan: (): void => s.approvePlan(sessionId),
       requestPlanChanges: (feedback: string): void => s.requestPlanChanges(sessionId, feedback),
       closeGate: (reason: GateCloseReason): void => s.closeGate(sessionId, reason),
+      requestSessionConfig: (): Promise<void> => s.requestSessionConfig(sessionId),
+      setSessionConfigOption: (configId: string, value: RuntimeSessionConfigValue): Promise<void> =>
+        s.setSessionConfigOption(sessionId, configId, value),
     };
   }, [sessionId]);
 }
@@ -322,13 +351,18 @@ function useSessionSnapshot(
       accessMode: session?.accessMode ?? "default",
       pendingPlanApproval: session?.pendingPlanApproval ?? null,
       contextUsage: session?.contextUsage ?? null,
-      currentProviderId: session?.currentProviderId ?? "",
-      currentModelId: session?.currentModelId ?? "",
+      currentSelection: session?.currentSelection ?? null,
       currentThinkingEffort: session?.currentThinkingEffort,
       fastMode: session?.fastMode ?? false,
       currentProfile: session?.currentProfile,
-      runtimeProvider: session?.runtimeProvider ?? "",
+      runtimeOverrides: session?.runtimeOverrides,
+      runtimeOverridesPending: session?.runtimeOverridesPending ?? false,
       runtimeSessionId: session?.runtimeSessionId ?? "",
+      sessionConfig: session?.sessionConfig ?? null,
+      sessionConfigLoading: session?.sessionConfigLoading ?? false,
+      sessionConfigSupported: session?.sessionConfigSupported ?? null,
+      sessionConfigError: session?.sessionConfigError ?? null,
+      pendingSessionConfigId: session?.pendingSessionConfigId ?? null,
       mcpServers: session?.mcpServers ?? null,
       hasFileChanges: session?.hasFileChanges ?? false,
       ...actions,

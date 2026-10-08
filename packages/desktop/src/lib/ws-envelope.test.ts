@@ -124,6 +124,11 @@ describe("ws-envelope", () => {
       expect(env.payload).toEqual({ cwd: "/repo", provider: "codex_cli" });
     });
 
+    it("createCommandsGet scopes discovery to the selected profile", () => {
+      const env = createCommandsGet("/repo", "codex_cli", "work-id");
+      expect(env.payload).toEqual({ cwd: "/repo", provider: "codex_cli", profile: "work-id" });
+    });
+
     it("createPermissionRespond", () => {
       const env = createPermissionRespond("s1", "r1", "allow_once");
       expect(env.domain).toBe("session");

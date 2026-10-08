@@ -521,15 +521,14 @@ describe("AgentSession auto-scroll", () => {
         status="idle"
         onSend={onSend}
         onStop={vi.fn()}
-        currentProviderId="claude_code"
-        currentModelId="opus"
+        selection={{ providerId: "claude_code", modelId: "opus" }}
         runtimeProvider="claude_code"
         runtimeSessionId="runtime-1"
       />,
     );
 
     await user.click(screen.getByRole("button", { name: "Session info" }));
-    await user.click(screen.getByLabelText("Claude profile"));
+    await user.click(screen.getByLabelText("Profile"));
     await user.click(screen.getByRole("option", { name: /bedrock/i }));
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "Hi there" } });
     await user.click(screen.getByLabelText("Send message"));

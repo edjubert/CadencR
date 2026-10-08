@@ -7,7 +7,7 @@ mod subagents;
 #[cfg(test)]
 mod subagents_collab;
 
-use self::signals::{result_event, text_delta_event, turn_started_event};
+use self::signals::{child_error_event, result_event, text_delta_event, turn_started_event};
 use self::subagents::apply_subagent_parent_tool_use_id;
 use super::event_items::{
     command_output_delta_event, file_patch_updated_event, item_events, tool_json_delta_event,
@@ -34,24 +34,35 @@ pub fn notification_events(
     // Codex multi-agent v2 announces a child thread separately from the raw
     // `spawn_agent` function call. Join those notifications before routing
     // this event so the child's very first streamed item is nested correctly.
-    register_thread_started_route(method, &params, index_state);
+    let mut events = register_thread_started_route(method, &params, index_state);
 
-    let subagent_parent_tool_use_id = if index_state.has_any_subagents() {
-        params
-            .get("threadId")
-            .and_then(Value::as_str)
-            .and_then(|thread_id| index_state.subagent_parent_tool_use_id(thread_id))
-            .map(ToOwned::to_owned)
-    } else {
-        None
-    };
+    let thread_id = params.get("threadId").and_then(Value::as_str);
+    let untracked = thread_id.is_some_and(|id| index_state.is_untracked_thread(id));
+    if untracked
+        && !matches!(
+            method,
+            "thread/tokenUsage/updated" | "rawResponse/completed" | "turn/completed"
+        )
+    {
+        return events;
+    }
+    let subagent_parent_tool_use_id = thread_id
+        .filter(|_| index_state.has_any_subagents())
+        .and_then(|thread| index_state.subagent_parent_tool_use_id(thread))
+        .map(ToOwned::to_owned);
 
-    if method == "turn/completed" && subagent_parent_tool_use_id.is_some() {
-        return flush_raw_response_usage_events(&params, index_state);
+    if let ("turn/completed", Some(parent)) = (method, subagent_parent_tool_use_id.as_deref()) {
+        let mut events = flush_raw_response_usage_events(&params, index_state);
+        events.extend(child_error_event(params, parent));
+        return events;
     }
 
-    let mut events = dispatch_notification(method, params, model, index_state);
-    if let Some(parent_tool_use_id) = subagent_parent_tool_use_id {
+    events.extend(dispatch_notification(method, params, model, index_state));
+    if untracked {
+        // Guardian/foreign threads and unresolved children must not leak
+        // content or terminal signals into the root conversation.
+        events.retain(RuntimeEvent::is_usage_accounting);
+    } else if let Some(parent_tool_use_id) = subagent_parent_tool_use_id {
         apply_subagent_parent_tool_use_id(&mut events, &parent_tool_use_id);
     }
     events

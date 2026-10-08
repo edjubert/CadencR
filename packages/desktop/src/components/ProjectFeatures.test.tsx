@@ -111,8 +111,16 @@ const mockFeatures = [
   },
 ];
 
-vi.mock("@/api/generated", () => ({
+vi.mock("@/api/generated", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/api/generated")>()),
   FeatureStatus: { active: "active", archived: "archived" },
+  useArchiveFeature: vi.fn(() => ({ mutateAsync: vi.fn() })),
+  useGetFeatureArchivePreview: vi.fn(() => ({
+    data: { parent_ids: [], descendant_ids: [], has_relations: false },
+    isLoading: false,
+    isFetching: false,
+    error: null,
+  })),
   useListFeatures: vi.fn(() => ({ data: mockFeatures })),
   useListFeaturePorts: vi.fn(() => ({ data: [], error: null })),
   useListFeatureActivity: vi.fn(() => ({
@@ -280,7 +288,9 @@ describe("ProjectFeatures", () => {
     expect(childRow).toHaveClass("bg-sidebar-accent");
   });
 
-  it("reserves the hierarchy gutter for every root feature", () => {
+  // Real layout (including an empty leaf gutter) is checked by
+  // docs/qa/sidebar-status-project-alignment.check.js in the running app.
+  it("keeps the hierarchy control before the content of every root feature", () => {
     vi.mocked(useListFeatures).mockReturnValueOnce({
       data: [
         mockFeatures[0],
@@ -303,8 +313,8 @@ describe("ProjectFeatures", () => {
     const parentGutter = parentRow?.querySelector("[data-feature-hierarchy-gutter]");
     const leafGutter = leafRow?.querySelector("[data-feature-hierarchy-gutter]");
 
-    expect(parentGutter).toHaveClass("w-2");
-    expect(leafGutter).toHaveClass("w-2");
+    expect(parentRow?.firstElementChild).toBe(parentGutter);
+    expect(leafRow?.firstElementChild).toBe(leafGutter);
     expect(
       within(parentGutter as HTMLElement).getByRole("button", {
         name: "Collapse child sessions",

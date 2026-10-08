@@ -68,6 +68,70 @@ pub(super) async fn repair_agent_messages_content_column(pool: &SqlitePool) -> a
     Ok(())
 }
 
+/// Backfill revision tracking for databases imported from the legacy Electron
+/// migration runner. Its history is seeded as applied, so newly embedded sqlx
+/// migrations do not run against those databases.
+pub(super) async fn repair_agent_message_content_revisions(
+    pool: &SqlitePool,
+) -> anyhow::Result<()> {
+    if !table_exists(pool, "agent_sessions").await? || !table_exists(pool, "agent_messages").await?
+    {
+        return Ok(());
+    }
+
+    if !table_has_column(pool, "agent_sessions", "message_revision").await? {
+        sqlx::query(
+            "ALTER TABLE agent_sessions
+             ADD COLUMN message_revision INTEGER NOT NULL DEFAULT 0",
+        )
+        .execute(pool)
+        .await?;
+    }
+    if !table_has_column(pool, "agent_messages", "content_revision").await? {
+        sqlx::query(
+            "ALTER TABLE agent_messages
+             ADD COLUMN content_revision INTEGER NOT NULL DEFAULT 0",
+        )
+        .execute(pool)
+        .await?;
+    }
+
+    if table_has_column(pool, "agent_messages", "content").await?
+        && table_has_column(pool, "agent_messages", "message_type").await?
+        && table_has_column(pool, "agent_messages", "session_id").await?
+    {
+        sqlx::raw_sql(
+            "DROP TRIGGER IF EXISTS agent_messages_content_revision;
+             CREATE TRIGGER agent_messages_content_revision
+             AFTER UPDATE OF content ON agent_messages
+             WHEN NEW.content IS NOT OLD.content
+              AND NEW.message_type = 'tool_call'
+             BEGIN
+                 UPDATE agent_sessions
+                 SET message_revision = message_revision + 1
+                 WHERE id = NEW.session_id;
+
+                 UPDATE agent_messages
+                 SET content_revision = (
+                     SELECT message_revision FROM agent_sessions WHERE id = NEW.session_id
+                 )
+                 WHERE id = NEW.id;
+             END;",
+        )
+        .execute(pool)
+        .await?;
+    }
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_agent_messages_session_content_revision
+         ON agent_messages(session_id, content_revision)
+         WHERE content_revision > 0",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub(super) async fn repair_agent_messages_perf_indexes(pool: &SqlitePool) -> anyhow::Result<()> {
     if !table_exists(pool, "agent_messages").await? {
         return Ok(());
@@ -168,5 +232,60 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(old_count, 1);
+    }
+
+    #[tokio::test]
+    async fn legacy_database_gets_content_revision_tracking() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::raw_sql(
+            "CREATE TABLE migrations (version INTEGER PRIMARY KEY);
+             CREATE TABLE agent_sessions (id INTEGER PRIMARY KEY);
+             CREATE TABLE agent_messages (
+                 id INTEGER PRIMARY KEY,
+                 session_id INTEGER NOT NULL,
+                 content TEXT NOT NULL,
+                 message_type TEXT NOT NULL
+             );
+             INSERT INTO agent_sessions (id) VALUES (1);
+             INSERT INTO agent_messages (id, session_id, content, message_type)
+             VALUES (10, 1, 'before', 'tool_call'),
+                    (11, 1, 'before', 'assistant_message');",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        run_migrations(&MigrationContext::pool_only(&pool))
+            .await
+            .unwrap();
+        run_migrations(&MigrationContext::pool_only(&pool))
+            .await
+            .unwrap();
+
+        sqlx::query("UPDATE agent_messages SET content = 'ignored' WHERE id = 11")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE agent_messages SET content = 'after' WHERE id = 10")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let session_revision: i64 =
+            sqlx::query_scalar("SELECT message_revision FROM agent_sessions WHERE id = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let revisions: Vec<i64> =
+            sqlx::query_scalar("SELECT content_revision FROM agent_messages ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(session_revision, 1);
+        assert_eq!(revisions, vec![1, 0]);
     }
 }

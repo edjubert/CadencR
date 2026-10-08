@@ -1,9 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { customInstance } from "./client";
 import { AGENT_TYPES, type AgentTypeSetting } from "../shared/models";
 import type { AccessMode } from "@/types/access-mode";
 import type { PermissionMode } from "@/types/permission-mode";
-import type { ModelCatalogEntry, UpsertCustomModelRequest } from "./generated";
+import type {
+  ModelCatalogEntry,
+  ProviderCatalogResponseEntry,
+  ProviderOrigin,
+  UpsertCustomModelRequest,
+} from "./generated";
+import { getGetAgentSelectionQueryKey } from "./generated";
+import { setProviderCatalogMetadata } from "@/lib/provider-catalog-registry";
+import { PROVIDER_IDS } from "@/lib/providers";
 
 export type RuntimeModelOption = {
   [Key in keyof ModelCatalogEntry]: Exclude<ModelCatalogEntry[Key], null>;
@@ -13,11 +22,14 @@ export interface RuntimeProviderOption {
   id: string;
   label: string;
   status: "available" | "unavailable" | "coming_soon";
+  origin: ProviderOrigin;
   status_message?: string;
+  icon_data?: string;
   models: RuntimeModelOption[];
   modes?: RuntimeProviderModeOption[];
   access_modes?: RuntimeProviderAccessModeOption[];
   default_model: string | null;
+  profile_capability?: ProviderCatalogResponseEntry["profile_capability"];
 }
 
 export interface RuntimeProviderModeOption {
@@ -37,6 +49,20 @@ export interface AgentCatalog {
   providers: RuntimeProviderOption[];
 }
 
+export interface AgentProfileOption {
+  id: string;
+  label: string;
+  description?: string;
+  is_default: boolean;
+}
+
+export interface AgentProfilesResponse {
+  provider: string;
+  active_profile: string | null;
+  default_profile: string | null;
+  profiles: AgentProfileOption[];
+}
+
 export type ProviderSettings = Record<AgentTypeSetting, string>;
 
 interface ProviderMutationCallbacks<TVariables> {
@@ -52,6 +78,7 @@ interface QueryExtras {
   enabled?: boolean;
   staleTime?: number;
   cwd?: string;
+  provider?: string;
   profile?: string;
 }
 
@@ -71,23 +98,47 @@ const AGENT_CATALOG_STALE_MS = 10 * 60_000;
 const AGENT_CATALOG_GC_MS = 30 * 60_000;
 
 export function useAgentCatalog(extras?: QueryExtras) {
-  const { cwd, profile, ...queryExtras } = extras ?? {};
+  const { cwd, provider, profile, ...queryExtras } = extras ?? {};
   // The Claude model probe is profile-dependent (Bedrock/Vertex expose
   // different model ids), so `profile` is part of the cache key — switching the
   // prompt-area profile selector refetches the catalog for that profile rather
   // than serving the active profile's stale models.
-  return useQuery({
-    queryKey: ["agent-catalog", cwd ?? null, profile ?? null],
+  const query = useQuery({
+    queryKey: ["agent-catalog", cwd ?? null, provider ?? null, profile ?? null],
     queryFn: () =>
       customInstance<AgentCatalog>({
         method: "GET",
         url: "/api/agent-catalog",
         params:
-          cwd || profile ? { ...(cwd ? { cwd } : {}), ...(profile ? { profile } : {}) } : undefined,
+          cwd || provider || profile
+            ? {
+                ...(cwd ? { cwd } : {}),
+                ...(provider ? { provider } : {}),
+                ...(profile ? { profile } : {}),
+              }
+            : undefined,
       }),
     staleTime: AGENT_CATALOG_STALE_MS,
     gcTime: AGENT_CATALOG_GC_MS,
     ...queryExtras,
+  });
+  // Also runs for a hydrated cache hit, where `queryFn` may not execute.
+  useEffect(() => {
+    if (query.data) setProviderCatalogMetadata(query.data.providers);
+  }, [query.data]);
+  return query;
+}
+
+export function useAgentProfiles(provider: string | undefined, cwd?: string) {
+  return useQuery({
+    queryKey: ["agent-profiles", provider ?? null, cwd ?? null],
+    queryFn: () =>
+      customInstance<AgentProfilesResponse>({
+        method: "GET",
+        url: "/api/agent-profiles",
+        params: { provider, ...(cwd ? { cwd } : {}) },
+      }),
+    enabled: provider != null,
   });
 }
 
@@ -184,6 +235,7 @@ export { DEFAULT_CLAUDE_PROFILE_NAME } from "@/lib/claude-profiles";
 
 export interface ClaudeCodeProfile {
   name: string;
+  label?: string;
   env: Record<string, string>;
 }
 
@@ -218,7 +270,9 @@ export function useClaudeCodeProfiles(arg: boolean | QueryExtras = true) {
 async function invalidateProfilesAndCatalog(queryClient: ReturnType<typeof useQueryClient>) {
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: ["claude-code", "profiles"] }),
+    queryClient.invalidateQueries({ queryKey: ["agent-profiles", PROVIDER_IDS.CLAUDE_CODE] }),
     queryClient.invalidateQueries({ queryKey: ["agent-catalog"] }),
+    queryClient.invalidateQueries({ queryKey: getGetAgentSelectionQueryKey() }),
   ]);
 }
 
@@ -284,6 +338,7 @@ export function useUpsertClaudeCodeCustomModel() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["claude-code", "custom-models"] }),
         queryClient.invalidateQueries({ queryKey: ["agent-catalog"] }),
+        queryClient.invalidateQueries({ queryKey: getGetAgentSelectionQueryKey() }),
       ]);
     },
   });
@@ -301,6 +356,7 @@ export function useDeleteClaudeCodeCustomModel() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["claude-code", "custom-models"] }),
         queryClient.invalidateQueries({ queryKey: ["agent-catalog"] }),
+        queryClient.invalidateQueries({ queryKey: getGetAgentSelectionQueryKey() }),
       ]);
     },
   });

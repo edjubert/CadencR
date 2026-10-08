@@ -17,6 +17,8 @@ pub struct BranchContext {
     /// Worktree the session runs in. Both the provider transcript location and
     /// the (unchanged) code live here.
     pub cwd: PathBuf,
+    /// Persisted provider profile which owns the source session's state.
+    pub profile: Option<String>,
     /// The provider session being branched from.
     pub source_runtime_session_id: String,
     /// The cut message's own provider id (Claude `uuid`), when known. Preferred

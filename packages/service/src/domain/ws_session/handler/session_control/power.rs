@@ -106,24 +106,29 @@ pub(crate) async fn handle_suspend(
 
     // Capture session id BEFORE interrupt: once the subprocess starts
     // tearing down, `session_id()` may return None for some adapters.
-    let cli_sid = {
+    let (cli_sid, allows_resume_persistence) = {
         let q = query.read().await;
         let sid = q.session_id().await;
+        let allows_resume_persistence = q.allows_resume_persistence();
         let interrupt_result = q.interrupt().await;
         drop(q);
         if let Err(error) = interrupt_result {
             info!(db_session_id, %error, "suspend: interrupt failed (treating as best-effort)");
         }
-        sid
+        (sid, allows_resume_persistence)
     };
-    if let Some(sid) = cli_sid.as_deref() {
+    if let Some(sid) = super::super::session_init_resume::persistable_resume_session_id_for_provider(
+        &runtime_provider,
+        cli_sid.as_deref(),
+        allows_resume_persistence,
+    ) {
         // Persist so resume survives a subprocess death during suspend.
         // DB is the source of truth for resume IDs across restarts.
         WsSessionPersistence::persist_runtime_session_id_static(
             &app_state.write_pool,
             db_session_id,
             &runtime_provider,
-            sid,
+            &sid,
         )
         .await;
     }

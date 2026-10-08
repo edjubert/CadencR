@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyBlockContentBudget,
   BLOCK_CONTENT_MAX_CHARS,
   clampJsonText,
+  clampParsedJsonText,
   clampTailText,
   clampText,
   TRUNCATION_NOTICE,
@@ -77,6 +78,19 @@ describe("clampJsonText", () => {
     const result = clampJsonText(payload, 4000);
     const parsed = JSON.parse(result.text) as { edits: Array<{ new_string: string }> };
     expect(parsed.edits[0].new_string).toContain(TRUNCATION_NOTICE);
+  });
+
+  it("reuses an already-parsed value when structurally clamping", () => {
+    const payload = JSON.stringify({ content: "x".repeat(50_000) });
+    const parsed: unknown = JSON.parse(payload);
+    const parse = vi.spyOn(JSON, "parse");
+    const result = clampParsedJsonText(payload, parsed, 4_000);
+    const parseCalls = parse.mock.calls.length;
+    parse.mockRestore();
+    expect(parseCalls).toBe(0);
+    expect(JSON.parse(result.text)).toEqual({
+      content: expect.stringContaining(TRUNCATION_NOTICE),
+    });
   });
 
   // Tool content accumulates as partial JSON fragments across a turn. A raw

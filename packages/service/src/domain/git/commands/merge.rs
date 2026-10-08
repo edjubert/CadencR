@@ -10,6 +10,9 @@ use crate::shared::git_cli::{run_git, run_git_safe_refs};
 
 /// Get the current branch name. Returns None on error (detached HEAD, not a repo).
 pub async fn get_current_branch(repo_path: &Path) -> Result<Option<String>, AppError> {
+    if !crate::shared::git_context::has_git_metadata(repo_path).await? {
+        return Ok(None);
+    }
     match run_git(&["rev-parse", "--abbrev-ref", "HEAD"], repo_path).await {
         Ok(stdout) => {
             let branch = stdout.trim().to_string();
@@ -39,6 +42,7 @@ pub async fn get_original_branch(
     repo_path: &Path,
     worktree_branch: &str,
 ) -> Result<String, AppError> {
+    crate::shared::git_context::require_git_metadata(repo_path).await?;
     // 1. Tracking config — only honor when the remote is `origin`. A merge
     //    target whose remote is anything else (or unset) doesn't tell us the
     //    correct `origin/...` ref, so fall through to the symbolic-ref probe

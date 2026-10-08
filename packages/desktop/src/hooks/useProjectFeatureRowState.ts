@@ -35,9 +35,8 @@ export function useProjectFeatureRowState(
   // ensures this row only re-renders when its own feature's (status, kind)
   // actually changes.
   const { status: liveStatus } = useFeatureStatus(feature.id);
-  // Blue unread overlay: the agent finished while this conversation wasn't
-  // open. Only meaningful when idle — a working/asking mark already carries
-  // status on the provider silhouette.
+  // Blue unread dot: the agent finished while this conversation was not open.
+  // Working and pending-gate indicators take precedence in the status slot.
   const isUnread = useIsFeatureUnread(feature.id);
   const prStatus = usePrStatusStore(selectPrStatus(feature.id));
   const isActive = activeFeatureId === feature.id;

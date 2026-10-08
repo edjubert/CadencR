@@ -7,10 +7,12 @@ import { useFeatureLayoutStore } from "@/stores/feature-layout-store";
 
 const mockNavigate = vi.fn();
 const mockUpdateStatus = vi.fn();
+const mockArchive = vi.fn();
 const mockDelete = vi.fn();
 const mockDisconnectSession = vi.fn();
-const { mockUseIsFeatureEmpty } = vi.hoisted(() => ({
+const { mockUseIsFeatureEmpty, mockUseArchivePreview } = vi.hoisted(() => ({
   mockUseIsFeatureEmpty: vi.fn(),
+  mockUseArchivePreview: vi.fn(),
 }));
 
 interface MockUpdateStatusVariables {
@@ -41,8 +43,20 @@ const mockFeatures = [
   },
 ];
 
-vi.mock("@/api/generated", () => ({
+vi.mock("@/api/generated", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/api/generated")>()),
   FeatureStatus: { active: "active", archived: "archived" },
+  useArchiveFeature: vi.fn(
+    (opts?: { mutation?: { onSuccess?: (data: { archived_ids: number[] }) => void } }) => ({
+      mutateAsync: ({ id }: { id: number }) => {
+        mockArchive(id);
+        const response = { archived_ids: [id] };
+        opts?.mutation?.onSuccess?.(response);
+        return Promise.resolve(response);
+      },
+    }),
+  ),
+  useGetFeatureArchivePreview: mockUseArchivePreview,
   useListFeatures: vi.fn(() => ({ data: mockFeatures })),
   useListFeaturePorts: vi.fn(() => ({ data: [], error: null })),
   useListFeatureActivity: vi.fn(() => ({ data: [], error: null })),
@@ -123,10 +137,17 @@ describe("ProjectFeatures archived section", () => {
     resetMockIds();
     mockNavigate.mockClear();
     mockUpdateStatus.mockClear();
+    mockArchive.mockClear();
     mockDelete.mockClear();
     mockDisconnectSession.mockClear();
     mockUseIsFeatureEmpty.mockReturnValue({
       data: { empty: false },
+      isLoading: false,
+      isFetching: false,
+      error: null,
+    });
+    mockUseArchivePreview.mockReturnValue({
+      data: { parent_ids: [], descendant_ids: [], has_relations: false },
       isLoading: false,
       isFetching: false,
       error: null,
@@ -191,6 +212,29 @@ describe("ProjectFeatures archived section", () => {
     expect(screen.queryByText("Archive session?")).not.toBeInTheDocument();
   });
 
+  it("archives an empty linked conversation instead of deleting it", async () => {
+    const user = userEvent.setup();
+    mockUseIsFeatureEmpty.mockReturnValue({
+      data: { empty: true },
+      isLoading: false,
+      isFetching: false,
+      error: null,
+    });
+    mockUseArchivePreview.mockReturnValue({
+      data: { parent_ids: [], descendant_ids: [], has_relations: true },
+      isLoading: false,
+      isFetching: false,
+      error: null,
+    });
+    renderProjectFeatures();
+
+    openFeatureContextMenu("Feature One");
+    await user.click(await screen.findByRole("menuitem", { name: "Archive" }));
+
+    expect(screen.getByText("Archive session?")).toBeInTheDocument();
+    expect(screen.queryByText("Delete session?")).not.toBeInTheDocument();
+  });
+
   it("leaves the active chat route after archiving the current session", async () => {
     const user = userEvent.setup();
     renderProjectFeatures(1);
@@ -199,10 +243,7 @@ describe("ProjectFeatures archived section", () => {
     await user.click(await screen.findByRole("menuitem", { name: "Archive" }));
     await user.click(screen.getByRole("button", { name: /archive/i }));
 
-    expect(mockUpdateStatus).toHaveBeenCalledWith({
-      id: 1,
-      data: { status: "archived" },
-    });
+    expect(mockArchive).toHaveBeenCalledWith(1);
     expect(mockDisconnectSession).toHaveBeenCalledWith("ws-feature-1");
     expect(mockNavigate).toHaveBeenCalledWith({
       to: "/",

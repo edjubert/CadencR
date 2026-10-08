@@ -169,7 +169,7 @@ pub(super) fn handle_tool_result(
     }
 }
 
-fn merge_tool_result_patch(tool_call_content: &mut String, tool_result_content: &str) {
+pub(super) fn merge_tool_result_patch(tool_call_content: &mut String, tool_result_content: &str) {
     let Ok(result) = serde_json::from_str::<serde_json::Value>(tool_result_content) else {
         return;
     };

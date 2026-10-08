@@ -1,19 +1,5 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type ReactElement,
-} from "react";
-import { toast } from "sonner";
-import {
-  useDeleteFeatureBranch,
-  useDeleteWorktree,
-  useKillTerminalSessions,
-  type Feature,
-} from "@/api/generated";
+import type { KeyboardEvent, ReactElement } from "react";
+import type { Feature } from "@/api/generated";
 import { apiErrorMessage } from "@/lib/api-errors";
 import { Button } from "@/components/ui/button";
 import { KbdShortcut } from "@/components/KbdShortcut";
@@ -21,6 +7,10 @@ import { ArchiveCleanupOptions } from "@/components/ArchiveCleanupOptions";
 import { KillTerminalsOption } from "@/components/KillTerminalsOption";
 import { useKillTerminalsState } from "@/components/use-kill-terminals-state";
 import { useArchiveCleanupState } from "@/components/archive-cleanup-state";
+import {
+  useArchiveRelativeOptions,
+  type ArchiveRelativeSelection,
+} from "@/components/ArchiveRelativeOptions";
 import {
   Dialog,
   DialogContent,
@@ -30,6 +20,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useDialogSubmitShortcut } from "@/components/git-actions/useDialogSubmitShortcut";
+import {
+  useArchiveSubmission,
+  useConfirmSubmissionLock,
+} from "@/components/archive-feature-submission";
 
 const SUBMIT_KEYS: string[] = ["cmd", "enter"];
 
@@ -42,7 +36,7 @@ interface ArchiveFeatureDialogProps {
   showWorktreeRemoval: boolean;
   showBranchRemoval: boolean;
   onOpenChange: (open: boolean) => void;
-  onArchive: (featureId: number) => void;
+  onArchive: (featureId: number, options: ArchiveRelativeSelection) => Promise<unknown>;
 }
 
 export function ArchiveFeatureDialog({
@@ -56,10 +50,7 @@ export function ArchiveFeatureDialog({
   onOpenChange,
   onArchive,
 }: ArchiveFeatureDialogProps): ReactElement {
-  const { isConfirming, lockConfirm } = useConfirmSubmissionLock(open);
-  const deleteWorktree = useDeleteWorktree();
-  const deleteBranch = useDeleteFeatureBranch();
-  const killTerminals = useKillTerminalSessions();
+  const confirmationLock = useConfirmSubmissionLock(open);
   const killState = useKillTerminalsState(open, feature);
   const cleanupState = useArchiveCleanupState({
     open,
@@ -70,77 +61,102 @@ export function ArchiveFeatureDialog({
     showWorktreeRemoval,
     showBranchRemoval,
   });
-  const confirm = (): void => {
-    if (!feature) return;
-    if (!lockConfirm()) return;
-    const featureId = feature.id;
-    onArchive(featureId);
-    onOpenChange(false);
-    const needsGitCleanup = cleanupState.removeWorktree || cleanupState.removeBranch;
-    if (!killState.killTerminals && !needsGitCleanup) return;
-    const cleanup = (async (): Promise<void> => {
-      // Kill shells before removing the worktree they may be running in.
-      if (killState.killTerminals) {
-        await killTerminals.mutateAsync({ params: { feature_id: featureId } });
-      }
-      if (needsGitCleanup) {
-        await cleanupFeature({
-          projectId,
-          featureId,
-          removeWorktree: cleanupState.removeWorktree,
-          removeBranch: cleanupState.removeBranch,
-          forceBranchDelete: cleanupState.forceBranchDelete,
-          forceWorktreeDelete: cleanupState.forceWorktreeDelete,
-          deleteWorktree: deleteWorktree.mutateAsync,
-          deleteBranch: deleteBranch.mutateAsync,
-        });
-      }
-    })();
-    toast.promise(cleanup, {
-      loading: "Archiving session; cleaning up…",
-      success: "Session archived and cleanup finished.",
-      error: (err) => apiErrorMessage(err, "Session archived, but cleanup failed"),
-    });
-  };
+  const relativeState = useArchiveRelativeOptions({
+    open,
+    featureId: feature?.id,
+    disabled: confirmationLock.isConfirming,
+  });
+  const submission = useArchiveSubmission({
+    open,
+    feature,
+    projectId,
+    onArchive,
+    onOpenChange,
+    cleanupState,
+    killState,
+    relativeState,
+    confirmationLock,
+  });
   useDialogSubmitShortcut({
     open,
-    enabled: !cleanupState.isCheckingBranch && !cleanupState.isCheckingWorktree && !isConfirming,
-    onSubmit: confirm,
+    enabled:
+      !cleanupState.isCheckingBranch &&
+      !cleanupState.isCheckingWorktree &&
+      !relativeState.isPending &&
+      !submission.isConfirming,
+    onSubmit: submission.confirm,
   });
+  const requestOpenChange = (nextOpen: boolean): void => {
+    if (!submission.isConfirming) onOpenChange(nextOpen);
+  };
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={requestOpenChange}>
       <DialogContent
         showCloseButton={false}
         className="sm:max-w-md"
-        onKeyDown={(event) => handleCleanupShortcut(event, cleanupState, killState)}
+        onKeyDown={(event) =>
+          handleCleanupShortcut(
+            event,
+            cleanupState,
+            killState,
+            relativeState,
+            submission.isConfirming,
+          )
+        }
       >
         <ArchiveDialogHeader />
-
-        <div className="space-y-3">
-          {killState.liveTerminalCount > 0 && (
-            <KillTerminalsOption
-              count={killState.liveTerminalCount}
-              checked={killState.killTerminals}
-              onToggle={killState.toggleKillTerminals}
-            />
-          )}
-          <ArchiveCleanupOptions
-            {...cleanupState}
-            hasLiveWorktree={hasLiveWorktree}
-            hasResidualWorktreeDirectory={hasResidualWorktreeDirectory}
-          />
-        </div>
-
+        <ArchiveOptionsList
+          killState={killState}
+          relativeState={relativeState}
+          cleanupState={cleanupState}
+          hasLiveWorktree={hasLiveWorktree}
+          hasResidualWorktreeDirectory={hasResidualWorktreeDirectory}
+        />
+        {submission.archiveError != null && (
+          <p role="alert" className="text-xs text-destructive">
+            {apiErrorMessage(submission.archiveError, "Could not archive session")}
+          </p>
+        )}
         <ArchiveDialogFooter
           forceDelete={cleanupState.forceBranchDelete || cleanupState.forceWorktreeDelete}
           disabled={
-            cleanupState.isCheckingBranch || cleanupState.isCheckingWorktree || isConfirming
+            cleanupState.isCheckingBranch ||
+            cleanupState.isCheckingWorktree ||
+            relativeState.isPending ||
+            submission.isConfirming
           }
-          onCancel={() => onOpenChange(false)}
-          onConfirm={confirm}
+          isConfirming={submission.isConfirming}
+          onCancel={() => requestOpenChange(false)}
+          onConfirm={submission.confirm}
         />
       </DialogContent>
     </Dialog>
+  );
+}
+
+function ArchiveOptionsList(props: {
+  killState: ReturnType<typeof useKillTerminalsState>;
+  relativeState: ReturnType<typeof useArchiveRelativeOptions>;
+  cleanupState: ReturnType<typeof useArchiveCleanupState>;
+  hasLiveWorktree: boolean;
+  hasResidualWorktreeDirectory: boolean;
+}): ReactElement {
+  return (
+    <div className="space-y-3">
+      {props.killState.liveTerminalCount > 0 && (
+        <KillTerminalsOption
+          count={props.killState.liveTerminalCount}
+          checked={props.killState.killTerminals}
+          onToggle={props.killState.toggleKillTerminals}
+        />
+      )}
+      {props.relativeState.content}
+      <ArchiveCleanupOptions
+        {...props.cleanupState}
+        hasLiveWorktree={props.hasLiveWorktree}
+        hasResidualWorktreeDirectory={props.hasResidualWorktreeDirectory}
+      />
+    </div>
   );
 }
 
@@ -159,11 +175,18 @@ function handleCleanupShortcut(
   event: KeyboardEvent,
   cleanupState: ReturnType<typeof useArchiveCleanupState>,
   killState: ReturnType<typeof useKillTerminalsState>,
+  relativeState: ReturnType<typeof useArchiveRelativeOptions>,
+  isConfirming: boolean,
 ): void {
+  if (isConfirming || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)
+    return;
   const action = {
     w: cleanupState.toggleWorktree,
     b: cleanupState.toggleBranch,
     t: killState.toggleKillTerminals,
+    p: relativeState.toggleParent,
+    c: relativeState.toggleDescendants,
   }[event.key.toLowerCase()];
   if (!action) return;
   event.preventDefault();
@@ -172,6 +195,7 @@ function handleCleanupShortcut(
 
 interface ArchiveDialogFooterProps {
   disabled: boolean;
+  isConfirming: boolean;
   forceDelete: boolean;
   onCancel: () => void;
   onConfirm: () => void;
@@ -180,7 +204,7 @@ interface ArchiveDialogFooterProps {
 function ArchiveDialogFooter(props: ArchiveDialogFooterProps): ReactElement {
   return (
     <DialogFooter>
-      <Button variant="outline" onClick={props.onCancel}>
+      <Button variant="outline" disabled={props.isConfirming} onClick={props.onCancel}>
         Cancel
       </Button>
       <Button
@@ -188,80 +212,15 @@ function ArchiveDialogFooter(props: ArchiveDialogFooterProps): ReactElement {
         disabled={props.disabled}
         onClick={props.onConfirm}
       >
-        <span>{props.forceDelete ? "Archive & force delete" : "Archive"}</span>
-        <KbdShortcut keys={SUBMIT_KEYS} variant="hint" />
+        <span>
+          {props.isConfirming
+            ? "Archiving…"
+            : props.forceDelete
+              ? "Archive & force delete"
+              : "Archive"}
+        </span>
+        {!props.isConfirming && <KbdShortcut keys={SUBMIT_KEYS} variant="hint" />}
       </Button>
     </DialogFooter>
   );
-}
-
-async function cleanupFeature(args: {
-  projectId: number;
-  featureId: number;
-  removeWorktree: boolean;
-  removeBranch: boolean;
-  forceBranchDelete: boolean;
-  forceWorktreeDelete: boolean;
-  deleteWorktree: ReturnType<typeof useDeleteWorktree>["mutateAsync"];
-  deleteBranch: ReturnType<typeof useDeleteFeatureBranch>["mutateAsync"];
-}): Promise<void> {
-  const errors: string[] = [];
-  const completed: string[] = [];
-  if (args.removeWorktree) {
-    try {
-      const result = await args.deleteWorktree({
-        params: {
-          project_id: args.projectId,
-          feature_id: args.featureId,
-          force: args.forceWorktreeDelete,
-        },
-      });
-      if (result.success) completed.push("worktree removal");
-      else errors.push(result.error ?? "Failed to remove worktree");
-    } catch (error) {
-      errors.push(apiErrorMessage(error, "Failed to remove worktree"));
-    }
-  }
-  if (args.removeBranch) {
-    try {
-      const result = await args.deleteBranch({
-        params: {
-          project_id: args.projectId,
-          feature_id: args.featureId,
-          force: args.forceBranchDelete,
-        },
-      });
-      if (result.success) completed.push("branch deletion");
-      else errors.push(result.error ?? "Failed to delete branch");
-    } catch (error) {
-      errors.push(apiErrorMessage(error, "Failed to delete branch"));
-    }
-  }
-  if (errors.length > 0) {
-    const partialSuccess = completed.length > 0 ? `; ${completed.join(" and ")} succeeded` : "";
-    throw new Error(`${errors.join("; ")}${partialSuccess}`);
-  }
-}
-
-function useConfirmSubmissionLock(open: boolean): {
-  isConfirming: boolean;
-  lockConfirm: () => boolean;
-} {
-  const [isConfirming, setIsConfirming] = useState(false);
-  const isConfirmingRef = useRef(false);
-
-  useEffect(() => {
-    if (open) return;
-    isConfirmingRef.current = false;
-    setIsConfirming(false);
-  }, [open]);
-
-  const lockConfirm = useCallback((): boolean => {
-    if (isConfirmingRef.current) return false;
-    isConfirmingRef.current = true;
-    setIsConfirming(true);
-    return true;
-  }, []);
-
-  return useMemo(() => ({ isConfirming, lockConfirm }), [isConfirming, lockConfirm]);
 }

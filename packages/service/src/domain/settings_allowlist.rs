@@ -252,6 +252,12 @@ mod tests {
         assert!(!is_project_key_allowed("notification_mode"));
     }
     #[test]
+    fn workspace_accepts_sidebar_provider_logos() {
+        assert!(is_workspace_key_allowed("sidebar_provider_logos"));
+        assert!(!is_feature_key_allowed("sidebar_provider_logos"));
+        assert!(!is_project_key_allowed("sidebar_provider_logos"));
+    }
+    #[test]
     fn workspace_accepts_ui_collapse_settings() {
         assert!(is_workspace_key_allowed("editor_sidebar_collapsed"));
         assert!(is_workspace_key_allowed("git_sidebar_collapsed"));
@@ -342,6 +348,7 @@ mod tests {
     #[test]
     fn workspace_accepts_browser_settings() {
         assert!(is_workspace_key_allowed("browser_default_mode"));
+        assert!(is_workspace_key_allowed("browser_search_engine"));
         assert!(is_workspace_key_allowed("browser_mcp_enabled"));
         assert!(is_workspace_key_allowed("project_mcp_enabled"));
         assert!(is_workspace_key_allowed("workspace_mcp_enabled"));
@@ -350,6 +357,8 @@ mod tests {
         assert!(!is_workspace_key_allowed("project_mcp_allow_send_message"));
         assert!(!is_feature_key_allowed("browser_mcp_enabled"));
         assert!(!is_project_key_allowed("browser_mcp_enabled"));
+        assert!(!is_feature_key_allowed("browser_search_engine"));
+        assert!(!is_project_key_allowed("browser_search_engine"));
     }
 
     #[test]

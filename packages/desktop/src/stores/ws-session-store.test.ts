@@ -341,6 +341,67 @@ describe("ws-session-store", () => {
     });
   });
 
+  it("sends presence-aware runtime override patches including explicit null and false", async () => {
+    const { store, ws } = await connectInitializedSession();
+    const pending = store.setRuntimeOverrides("s1", { model: null, fast_mode: false });
+    const envelope = ws.sent.map((raw) => JSON.parse(raw)).at(-1);
+    expect(envelope).toMatchObject({
+      domain: "session",
+      action: "runtime_overrides.set",
+      payload: { session_id: "srv-1", runtime_overrides: { model: null, fast_mode: false } },
+    });
+    ws.simulateMessage({
+      domain: "session",
+      action: "runtime_overrides.set.ok",
+      ref: envelope.id,
+      payload: { ok: true },
+    });
+    await pending;
+  });
+
+  it("applies the confirmed snapshot from a correlated runtime override reply", async () => {
+    const { store, ws } = await connectInitializedSession();
+    const pending = store.setRuntimeOverrides("s1", { thinking_effort: null });
+    const envelope = JSON.parse(ws.sent[ws.sent.length - 1]);
+
+    expect(useWsSessionStore.getState().sessions["s1"].runtimeOverridesPending).toBe(true);
+    ws.simulateMessage({
+      domain: "session",
+      action: "runtime_overrides.changed",
+      ref: envelope.id,
+      payload: {
+        runtime_overrides: { model: null, thinking_effort: null, fast_mode: null },
+        effective: { model: "gpt-5", thinking_effort: "low", fast_mode: false },
+      },
+    });
+    await pending;
+
+    const session = useWsSessionStore.getState().sessions["s1"];
+    expect(session.runtimeOverrides).toEqual({
+      model: null,
+      thinking_effort: null,
+      fast_mode: null,
+    });
+    expect(session.currentThinkingEffort).toBe("low");
+    expect(session.runtimeOverridesPending).toBe(false);
+  });
+
+  it("rejects a failed runtime override without changing confirmed state", async () => {
+    const { store, ws } = await connectInitializedSession();
+    const pending = store.setRuntimeOverrides("s1", { fast_mode: false });
+    const envelope = JSON.parse(ws.sent[ws.sent.length - 1]);
+    expect(useWsSessionStore.getState().sessions["s1"].runtimeOverridesPending).toBe(true);
+    ws.simulateMessage({
+      domain: "session",
+      action: "error",
+      ref: envelope.id,
+      payload: { error: "Profile rejected" },
+    });
+    await expect(pending).rejects.toThrow("Profile rejected");
+    expect(useWsSessionStore.getState().sessions["s1"].runtimeOverrides).toBeUndefined();
+    expect(useWsSessionStore.getState().sessions["s1"].runtimeOverridesPending).toBe(false);
+  });
+
   it("sendPrompt marks mid-turn messages as pending when prompt receipts are supported", async () => {
     const store = useWsSessionStore.getState();
     store.connect("s1");
@@ -751,6 +812,42 @@ describe("ws-session-store", () => {
     });
   });
 
+  it("accepts an initialized provider with an empty model", async () => {
+    const store = useWsSessionStore.getState();
+    store.connect("s1");
+    await tick();
+    getWs().simulateMessage({
+      domain: "session",
+      action: "initialized",
+      payload: { session_id: "srv-1", provider: "pi-acp", model: "" },
+    });
+    expect(useWsSessionStore.getState().sessions.s1.currentSelection).toEqual({
+      providerId: "pi-acp",
+      modelId: "",
+    });
+  });
+
+  it("does not replay a built-in permission mode to an installed ACP provider", async () => {
+    const store = useWsSessionStore.getState();
+    store.connect("s1");
+    await tick();
+    const ws = getWs();
+
+    store.sendPrompt("s1", "hello");
+    ws.simulateMessage({
+      domain: "session",
+      action: "initialized",
+      payload: { session_id: "srv-1", provider: "pi-acp" },
+    });
+
+    const sent = ws.sent.map((raw) => JSON.parse(raw));
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      action: "prompt.send",
+      payload: { session_id: "srv-1", text: "hello" },
+    });
+  });
+
   it("setPersistedState sets blocks and lifecycle", () => {
     // Ensure session exists first
     useWsSessionStore.getState().connect("s1");
@@ -773,15 +870,14 @@ describe("ws-session-store", () => {
     useWsSessionStore.getState().setPersistedState("s1", {
       blocks: [{ id: "b1", type: "text" as const, content: "restored" }],
       lifecycle: { phase: "terminal", reason: "completed" },
-      currentProviderId: "opencode",
-      currentModelId: "openai/gpt-5.3-codex",
-      runtimeProvider: "opencode",
+      currentSelection: { providerId: "opencode", modelId: "openai/gpt-5.3-codex" },
       runtimeSessionId: "ses_live_123",
     });
     const session = useWsSessionStore.getState().sessions["s1"];
-    expect(session.currentProviderId).toBe("opencode");
-    expect(session.currentModelId).toBe("openai/gpt-5.3-codex");
-    expect(session.runtimeProvider).toBe("opencode");
+    expect(session.currentSelection).toEqual({
+      providerId: "opencode",
+      modelId: "openai/gpt-5.3-codex",
+    });
     expect(session.runtimeSessionId).toBe("ses_live_123");
   });
 
@@ -795,7 +891,7 @@ describe("ws-session-store", () => {
     useWsSessionStore.getState().setPersistedState("s1", {
       blocks: [{ id: "b1", type: "text" as const, content: "restored" }],
       lifecycle: { phase: "terminal", reason: "completed" },
-      currentProviderId: "claude_code",
+      currentSelection: { providerId: "claude_code", modelId: "opus" },
       permissionMode: "bypassPermissions",
     });
     expect(useWsSessionStore.getState().sessions["s1"].permissionMode).toBe("bypassPermissions");
@@ -806,22 +902,9 @@ describe("ws-session-store", () => {
     useWsSessionStore.getState().setPersistedState("s1", {
       blocks: [{ id: "b1", type: "text" as const, content: "restored" }],
       lifecycle: { phase: "terminal", reason: "completed" },
-      currentProviderId: "claude_code",
+      currentSelection: { providerId: "claude_code", modelId: "haiku" },
     });
     expect(useWsSessionStore.getState().sessions["s1"].permissionMode).toBe("acceptEdits");
-  });
-
-  it("setPersistedState uses runtimeProvider as currentProviderId when provider field is omitted", () => {
-    useWsSessionStore.getState().connect("s1");
-    useWsSessionStore.getState().setPersistedState("s1", {
-      blocks: [{ id: "b1", type: "text" as const, content: "restored" }],
-      lifecycle: { phase: "terminal", reason: "completed" },
-      runtimeProvider: "opencode",
-      currentModelId: "openai/gpt-5.3-codex",
-    });
-    const session = useWsSessionStore.getState().sessions["s1"];
-    expect(session.currentProviderId).toBe("opencode");
-    expect(session.runtimeProvider).toBe("opencode");
   });
 
   it("runtime_session_id action sets runtimeSessionId on the session", async () => {
@@ -1132,77 +1215,71 @@ describe("ws-session-store", () => {
     expect(after.submittingPermissionRequestId).toBeNull();
   });
 
-  it("new session keeps provider and model empty until initialization", async () => {
+  it("new session starts with no selection until the backend confirms one", async () => {
     useWsSessionStore.getState().connect("s1");
     await tick();
     const session = useWsSessionStore.getState().sessions["s1"];
-    expect(session.currentProviderId).toBe("");
-    expect(session.currentModelId).toBe("");
+    expect(session.currentSelection).toBeNull();
   });
 
-  it("initSession waits for initialized before applying provider and model", async () => {
+  it("initSession does not optimistically write currentSelection", async () => {
     const store = useWsSessionStore.getState();
     store.connect("s1");
     await tick();
-    store.initSession("s1", {
-      provider: "opencode",
-      model: "lmstudio/qwen-3.6:35b-a3b",
-    });
+    store.initSession("s1", { provider: "claude_code", model: "claude-haiku-4-5-20251001" });
     const session = useWsSessionStore.getState().sessions["s1"];
-    expect(session.currentProviderId).toBe("");
-    expect(session.currentModelId).toBe("");
+    expect(session.currentSelection).toBeNull();
   });
 
-  it("initSession without model keeps the pending selection empty", async () => {
+  it("session.initialized applies the server-confirmed provider/model pair", async () => {
     const store = useWsSessionStore.getState();
     store.connect("s1");
     await tick();
-    store.initSession("s1", { cwd: "/tmp" });
-    const session = useWsSessionStore.getState().sessions["s1"];
-    expect(session.currentModelId).toBe("");
-  });
-
-  it("session.initialized with model updates currentModelId from server", async () => {
-    const store = useWsSessionStore.getState();
-    store.connect("s1");
-    await tick();
+    // Frontend sends settings provider/model on init, but the pair is not
+    // written locally until the backend confirms it.
     store.initSession("s1", { provider: "claude_code", model: "opus[1m]" });
-    expect(useWsSessionStore.getState().sessions["s1"].currentModelId).toBe("");
+    expect(useWsSessionStore.getState().sessions["s1"].currentSelection).toBeNull();
 
-    // Server responds with the stored model from the DB (last used)
+    // Server responds with the stored provider/model from the DB (last used)
     const ws = MockWebSocket.instances[0];
     ws.simulateMessage({
       domain: "session",
       action: "initialized",
-      payload: {
-        session_id: "42",
-        provider: "claude_code",
-        model: "claude-haiku-4-5-20251001",
-      },
+      payload: { session_id: "42", provider: "claude_code", model: "claude-haiku-4-5-20251001" },
     });
-    expect(useWsSessionStore.getState().sessions["s1"].currentModelId).toBe(
-      "claude-haiku-4-5-20251001",
-    );
+    expect(useWsSessionStore.getState().sessions["s1"].currentSelection).toEqual({
+      providerId: "claude_code",
+      modelId: "claude-haiku-4-5-20251001",
+    });
   });
 
-  it("session.initialized without selection fields preserves a hydrated selection", async () => {
+  it("session.initialized clears an old model when the authoritative provider has no model", async () => {
     const store = useWsSessionStore.getState();
     store.connect("s1");
     await tick();
-    useWsSessionStore.setState((state) =>
-      updateSession(state, "s1", {
-        currentProviderId: "claude_code",
-        currentModelId: "opus[1m]",
-      }),
-    );
 
     const ws = MockWebSocket.instances[0];
     ws.simulateMessage({
       domain: "session",
       action: "initialized",
-      payload: { session_id: "42" },
+      payload: { session_id: "42", provider: "claude_code", model: "opus[1m]" },
     });
-    expect(useWsSessionStore.getState().sessions["s1"].currentModelId).toBe("opus[1m]");
+    expect(useWsSessionStore.getState().sessions["s1"].currentSelection).toEqual({
+      providerId: "claude_code",
+      modelId: "opus[1m]",
+    });
+
+    // The model is optional in the protocol. Do not retain the old
+    // provider and model when the backend confirms a different runtime.
+    ws.simulateMessage({
+      domain: "session",
+      action: "initialized",
+      payload: { session_id: "42", provider: "codex_cli" },
+    });
+    expect(useWsSessionStore.getState().sessions["s1"].currentSelection).toEqual({
+      providerId: "codex_cli",
+      modelId: "",
+    });
   });
 
   it("session.initialized with codex permission mode updates the stored access chip", async () => {
@@ -1260,12 +1337,14 @@ describe("ws-session-store", () => {
     });
 
     const session = useWsSessionStore.getState().sessions["s1"];
-    expect(session.currentProviderId).toBe("claude_code");
-    expect(session.currentModelId).toBe("claude-sonnet-4-5");
+    expect(session.currentSelection).toEqual({
+      providerId: "claude_code",
+      modelId: "claude-sonnet-4-5",
+    });
     expect(session.currentProfile).toBe("bedrock");
   });
 
-  it("session.profile.changed updates profile without changing provider or model", async () => {
+  it("session.profile.changed applies its confirmed effective runtime snapshot", async () => {
     const store = useWsSessionStore.getState();
     store.connect("s1");
     await tick();
@@ -1287,13 +1366,35 @@ describe("ws-session-store", () => {
         provider: "claude_code",
         model: "claude-opus-4-5",
         profile: "bedrock",
+        effective: { model: "claude-haiku", thinking_effort: "low", fast_mode: false },
       },
     });
 
     const session = useWsSessionStore.getState().sessions["s1"];
-    expect(session.currentProviderId).toBe("claude_code");
-    expect(session.currentModelId).toBe("claude-sonnet-4-5");
+    expect(session.currentSelection).toEqual({
+      providerId: "claude_code",
+      modelId: "claude-haiku",
+    });
     expect(session.currentProfile).toBe("bedrock");
+    expect(session.currentThinkingEffort).toBe("low");
+  });
+
+  it("accepts only a complete confirmed runtime override snapshot", async () => {
+    const { ws } = await connectInitializedSession();
+    ws.simulateMessage({
+      domain: "session",
+      action: "runtime_overrides.changed",
+      payload: {
+        runtime_overrides: { model: null, thinking_effort: "high", fast_mode: false },
+        effective: { model: "gpt-5", thinking_effort: "high", fast_mode: false },
+      },
+    });
+    expect(useWsSessionStore.getState().sessions["s1"].runtimeOverrides).toEqual({
+      model: null,
+      thinking_effort: "high",
+      fast_mode: false,
+    });
+    expect(useWsSessionStore.getState().sessions["s1"].currentThinkingEffort).toBe("high");
   });
 
   it("session.access_mode.changed updates the stored access chip", async () => {
@@ -1321,7 +1422,7 @@ describe("ws-session-store", () => {
     ws.simulateMessage({
       domain: "session",
       action: "initialized",
-      payload: { session_id: "42", provider: "claude_code" },
+      payload: { session_id: "42", provider: "claude_code", model: "opus" },
     });
     ws.simulateMessage({
       domain: "session",
@@ -1351,9 +1452,10 @@ describe("ws-session-store", () => {
     });
 
     const session = useWsSessionStore.getState().sessions["s1"];
-    expect(session.currentProviderId).toBe("opencode");
-    expect(session.runtimeProvider).toBe("opencode");
-    expect(session.currentModelId).toBe("openai/gpt-5.3-codex");
+    expect(session.currentSelection).toEqual({
+      providerId: "opencode",
+      modelId: "openai/gpt-5.3-codex",
+    });
   });
 
   it("setProvider waits for provider.set.ok before mutating local state", async () => {
@@ -1369,21 +1471,92 @@ describe("ws-session-store", () => {
 
     useWsSessionStore.setState((state) =>
       updateSession(state, "s1", {
-        currentProviderId: "stale-provider",
-        currentModelId: "stale-model",
+        currentSelection: { providerId: "stale-provider", modelId: "stale-model" },
       }),
     );
     store.setProvider("s1", "claude_code");
-    expect(useWsSessionStore.getState().sessions["s1"].currentProviderId).toBe("stale-provider");
+    expect(useWsSessionStore.getState().sessions["s1"].currentSelection).toEqual({
+      providerId: "stale-provider",
+      modelId: "stale-model",
+    });
 
     ws.simulateMessage({
       domain: "session",
       action: "provider.set.ok",
-      payload: { provider: "claude_code" },
+      payload: { provider: "claude_code", model: "opus" },
     });
-    const session = useWsSessionStore.getState().sessions["s1"];
-    expect(session.currentProviderId).toBe("claude_code");
-    expect(session.currentModelId).toBe("");
+    expect(useWsSessionStore.getState().sessions["s1"].currentSelection).toEqual({
+      providerId: "claude_code",
+      modelId: "opus",
+    });
+  });
+
+  it("provider confirmation replaces profile and override state together", async () => {
+    const store = useWsSessionStore.getState();
+    store.connect("s1");
+    await tick();
+    const ws = getWs();
+    useWsSessionStore.setState((state) =>
+      updateSession(state, "s1", {
+        currentSelection: { providerId: "claude_code", modelId: "opus" },
+        currentProfile: "bedrock",
+        currentThinkingEffort: "high",
+        fastMode: true,
+        runtimeOverrides: { model: "opus", thinking_effort: "high", fast_mode: true },
+      }),
+    );
+    ws.simulateMessage({
+      domain: "session",
+      action: "provider.set.ok",
+      payload: {
+        provider: "codex_cli",
+        model: "chosen-model",
+        profile: "codex-home",
+        thinking_effort: null,
+        fast_mode: false,
+        runtime_overrides: { model: "chosen-model", thinking_effort: null, fast_mode: false },
+      },
+    });
+    expect(useWsSessionStore.getState().sessions.s1).toMatchObject({
+      currentSelection: { providerId: "codex_cli", modelId: "chosen-model" },
+      currentProfile: "codex-home",
+      currentThinkingEffort: undefined,
+      fastMode: false,
+      runtimeOverrides: { model: "chosen-model", thinking_effort: null, fast_mode: false },
+    });
+    ws.simulateMessage({
+      domain: "session",
+      action: "provider.set.ok",
+      payload: {
+        provider: "cursor",
+        model: "auto",
+        profile: null,
+        thinking_effort: null,
+        fast_mode: false,
+        runtime_overrides: { model: null, thinking_effort: null, fast_mode: null },
+      },
+    });
+    expect(useWsSessionStore.getState().sessions.s1.currentProfile).toBeUndefined();
+  });
+
+  it("setProvider with modelId sends the model in the payload", async () => {
+    const store = useWsSessionStore.getState();
+    store.connect("s1");
+    await tick();
+    const ws = getWs();
+    ws.simulateMessage({
+      domain: "session",
+      action: "initialized",
+      payload: { session_id: "srv-1" },
+    });
+
+    store.setProvider("s1", "claude_code", "sonnet");
+    const sent = JSON.parse(ws.sent.at(-1) ?? "{}");
+    expect(sent).toMatchObject({
+      domain: "session",
+      action: "provider.set",
+      payload: { provider: "claude_code", model: "sonnet" },
+    });
   });
 
   it("setModel sends catalog ownership and waits for model.set.ok", async () => {
@@ -1398,10 +1571,15 @@ describe("ws-session-store", () => {
     });
 
     useWsSessionStore.setState((state) =>
-      updateSession(state, "s1", { currentModelId: "opus[1m]" }),
+      updateSession(state, "s1", {
+        currentSelection: { providerId: "claude_code", modelId: "opus[1m]" },
+      }),
     );
     store.setModel("s1", "haiku", "claude_code");
-    expect(useWsSessionStore.getState().sessions["s1"].currentModelId).toBe("opus[1m]");
+    expect(useWsSessionStore.getState().sessions["s1"].currentSelection).toEqual({
+      providerId: "claude_code",
+      modelId: "opus[1m]",
+    });
     const request = JSON.parse(ws.sent.at(-1) ?? "{}");
     expect(request.payload).toMatchObject({
       session_id: "srv-1",
@@ -1412,11 +1590,12 @@ describe("ws-session-store", () => {
     ws.simulateMessage({
       domain: "session",
       action: "model.set.ok",
-      payload: { provider: "claude_code", model: "haiku" },
+      payload: { model: "haiku", provider: "claude_code" },
     });
-    const session = useWsSessionStore.getState().sessions["s1"];
-    expect(session.currentProviderId).toBe("claude_code");
-    expect(session.currentModelId).toBe("haiku");
+    expect(useWsSessionStore.getState().sessions["s1"].currentSelection).toEqual({
+      providerId: "claude_code",
+      modelId: "haiku",
+    });
   });
 
   it("model.set.ok preserves tokens and drops the outgoing model's context window", async () => {
@@ -1431,7 +1610,7 @@ describe("ws-session-store", () => {
     });
     useWsSessionStore.setState((state) =>
       updateSession(state, "s1", {
-        currentModelId: "opus",
+        currentSelection: { providerId: "claude_code", modelId: "opus" },
         contextUsage: {
           inputTokens: 12345,
           outputTokens: 6789,
@@ -1444,16 +1623,19 @@ describe("ws-session-store", () => {
     ws.simulateMessage({
       domain: "session",
       action: "model.set.ok",
-      payload: { provider: "claude_code", model: "sonnet" },
+      payload: { model: "sonnet", provider: "claude_code" },
     });
 
     const usage = useWsSessionStore.getState().sessions["s1"].contextUsage;
-    expect(useWsSessionStore.getState().sessions["s1"].currentModelId).toBe("sonnet");
+    expect(useWsSessionStore.getState().sessions["s1"].currentSelection).toEqual({
+      providerId: "claude_code",
+      modelId: "sonnet",
+    });
     expect(usage?.inputTokens).toBe(12345);
     expect(usage?.outputTokens).toBe(6789);
     // The backend could not seed a window for the incoming model, and the
-    // outgoing model's does not describe it — 200k against a 1M model reads 5x
-    // too high. Hide the bar until the next authoritative event instead.
+    // outgoing model's does not describe it — hide the bar until the next
+    // authoritative event instead of misscaling against the old window.
     expect(usage?.contextWindow).toBeNull();
   });
 
@@ -1469,7 +1651,7 @@ describe("ws-session-store", () => {
     });
     useWsSessionStore.setState((state) =>
       updateSession(state, "s1", {
-        currentModelId: "opus",
+        currentSelection: { providerId: "claude_code", modelId: "opus" },
         contextUsage: {
           inputTokens: 1000,
           outputTokens: 200,
@@ -1482,17 +1664,57 @@ describe("ws-session-store", () => {
     ws.simulateMessage({
       domain: "session",
       action: "model.set.ok",
-      payload: {
-        provider: "claude_code",
-        model: "claude-opus-4-7[1m]",
-        context_window: 1_000_000,
-      },
+      payload: { model: "claude-opus-4-7[1m]", provider: "claude_code", context_window: 1_000_000 },
     });
 
     const usage = useWsSessionStore.getState().sessions["s1"].contextUsage;
     expect(usage?.inputTokens).toBe(1000);
     expect(usage?.outputTokens).toBe(200);
     expect(usage?.contextWindow).toBe(1_000_000);
+  });
+
+  it("model.set.ok invalidates an active negotiated session configuration", async () => {
+    const { ws } = await connectInitializedSession();
+    ws.simulateMessage({
+      domain: "session",
+      action: "runtime_session_id",
+      payload: { runtime_session_id: "runtime-1" },
+    });
+    ws.simulateMessage({
+      domain: "session",
+      action: "config.snapshot",
+      payload: {
+        session_id: "srv-1",
+        config: {
+          options: [
+            {
+              id: "model",
+              name: "Model",
+              type: "select",
+              current_value: "opus",
+              choices: {
+                layout: "ungrouped",
+                options: [{ name: "Opus", value: "opus" }],
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(useWsSessionStore.getState().sessions.s1.sessionConfigSupported).toBe(true);
+    ws.simulateMessage({
+      domain: "session",
+      action: "model.set.ok",
+      payload: { provider: "claude_code", model: "sonnet" },
+    });
+
+    const session = useWsSessionStore.getState().sessions.s1;
+    expect(session.currentSelection?.modelId).toBe("sonnet");
+    expect(session.sessionConfig).toBeNull();
+    expect(session.sessionConfigSupported).toBeNull();
+    expect(session.sessionConfigLoading).toBe(false);
+    expect(session.sessionConfigError).toBeNull();
   });
 
   it("clears optimistic thinking effort when initialized payload omits it", async () => {
@@ -2385,6 +2607,13 @@ describe("ws-session-store", () => {
 
     it("approvePlan sends permission.respond and waits for backend mode.changed", async () => {
       const { ws } = await setupWithInit();
+      // mode.changed only applies once a provider is known — seed the pair as
+      // the `initialized` envelope normally would.
+      useWsSessionStore.setState((state) =>
+        updateSession(state, "s1", {
+          currentSelection: { providerId: "claude_code", modelId: "opus" },
+        }),
+      );
       streamExitPlanMode(ws);
       sendPlanPermissionRequest(ws);
 
@@ -2437,7 +2666,9 @@ describe("ws-session-store", () => {
       // the post-approval mode anymore. The backend resolves it from its
       // own adapter matrix and broadcasts via `mode.changed`.
       useWsSessionStore.setState((state) =>
-        updateSession(state, "s1", { currentProviderId: "codex_cli" }),
+        updateSession(state, "s1", {
+          currentSelection: { providerId: "codex_cli", modelId: "gpt-5-codex" },
+        }),
       );
       streamExitPlanMode(ws);
       sendPlanPermissionRequest(ws);
@@ -3646,7 +3877,7 @@ describe("ws-session-store", () => {
             userShell: true,
           },
           slashCommandsLoading: false,
-          slashCommandsKey: "claude_code::/repo",
+          slashCommandsKey: "claude_code::::/repo",
           slashCommandsRequestRef: firstRequest.id,
         }),
       );
@@ -3677,7 +3908,7 @@ describe("ws-session-store", () => {
         updateSession(state, "s1", {
           slashCommands: [{ name: "compact", description: "Compact", kind: "command" }],
           slashCommandsLoading: false,
-          slashCommandsKey: "codex_cli::/repo",
+          slashCommandsKey: "codex_cli::::/repo",
           slashCommandsRequestRef: "previous-request",
         }),
       );
@@ -3694,6 +3925,23 @@ describe("ws-session-store", () => {
       ]);
       expect(session.slashCommandsLoading).toBe(true);
       expect(session.slashCommandsRequestRef).toBe(request.id);
+    });
+
+    it("scopes slash command requests and cache identity to the selected profile", async () => {
+      const store = useWsSessionStore.getState();
+      store.connect("s1");
+      await tick();
+      const ws = getWs();
+      store.requestSlashCommands("s1", "/repo", "codex_cli", "work-id");
+      const request = JSON.parse(ws.sent[ws.sent.length - 1]);
+      expect(request.payload).toMatchObject({
+        cwd: "/repo",
+        provider: "codex_cli",
+        profile: "work-id",
+      });
+      expect(useWsSessionStore.getState().sessions["s1"].slashCommandsKey).toBe(
+        "codex_cli::work-id::/repo",
+      );
     });
 
     it("ignores stale slash command responses for an older provider", async () => {
@@ -3826,5 +4074,135 @@ describe("ws-session-store", () => {
       const updatedChild = streamState.toolUseIdToBlock.get("tu1")!.childBlocks![0];
       expect(updatedChild.toolArgs).toBe(validArgs);
     });
+  });
+
+  describe("negotiated session configuration", () => {
+    it("loads and updates authoritative snapshots without optimistic state", async () => {
+      const { store, ws } = await connectInitializedSession();
+      const load = store.requestSessionConfig("s1");
+      const getRequest = lastSentEnvelope(ws, "config.get");
+      expect(useWsSessionStore.getState().sessions.s1.sessionConfigLoading).toBe(true);
+
+      ws.simulateMessage({
+        domain: "session",
+        action: "config.snapshot",
+        ref: getRequest.id as string,
+        payload: {
+          session_id: "srv-1",
+          config: {
+            options: [
+              {
+                id: "safe_mode",
+                name: "Safe mode",
+                category: "_fixture",
+                type: "boolean",
+                current_value: false,
+              },
+              {
+                id: "model",
+                name: "Model",
+                type: "select",
+                current_value: "small",
+                choices: {
+                  layout: "grouped",
+                  groups: [
+                    {
+                      id: "fixture",
+                      name: "Fixture",
+                      options: [{ name: "Small", value: "small" }],
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      });
+      await load;
+      let session = useWsSessionStore.getState().sessions.s1;
+      expect(session.sessionConfigSupported).toBe(true);
+      expect(session.sessionConfig?.options).toHaveLength(2);
+
+      const update = store.setSessionConfigOption("s1", "safe_mode", true);
+      const setRequest = lastSentEnvelope(ws, "config.set");
+      session = useWsSessionStore.getState().sessions.s1;
+      expect(session.pendingSessionConfigId).toBe("safe_mode");
+      expect(session.sessionConfig?.options[0]).toMatchObject({ current_value: false });
+
+      ws.simulateMessage({
+        domain: "session",
+        action: "config.snapshot",
+        ref: setRequest.id as string,
+        payload: {
+          session_id: "srv-1",
+          config: {
+            options: [
+              {
+                id: "safe_mode",
+                name: "Safe mode",
+                type: "boolean",
+                current_value: true,
+              },
+            ],
+          },
+        },
+      });
+      await update;
+      session = useWsSessionStore.getState().sessions.s1;
+      expect(session.pendingSessionConfigId).toBeNull();
+      expect(session.sessionConfig?.options[0]).toMatchObject({ current_value: true });
+    });
+
+    it("hides a runtime that explicitly declines configuration", async () => {
+      const { store, ws } = await connectInitializedSession();
+      const load = store.requestSessionConfig("s1");
+      const request = lastSentEnvelope(ws, "config.get");
+      ws.simulateMessage({
+        domain: "session",
+        action: "error",
+        ref: request.id as string,
+        payload: {
+          code: "SESSION_CONFIG_UNSUPPORTED",
+          message: "not supported",
+        },
+      });
+      await load;
+      const session = useWsSessionStore.getState().sessions.s1;
+      expect(session.sessionConfigSupported).toBe(false);
+      expect(session.sessionConfigError).toBeNull();
+    });
+
+    it("treats a persisted inactive runtime as unavailable without surfacing a dead retry", async () => {
+      const { store, ws } = await connectInitializedSession();
+      const load = store.requestSessionConfig("s1");
+      const request = lastSentEnvelope(ws, "config.get");
+      ws.simulateMessage({
+        domain: "session",
+        action: "error",
+        ref: request.id as string,
+        payload: {
+          code: "SESSION_NOT_ACTIVE",
+          message: "Session configuration is available after the runtime starts",
+        },
+      });
+      await load;
+      const session = useWsSessionStore.getState().sessions.s1;
+      expect(session.sessionConfigSupported).toBe(false);
+      expect(session.sessionConfigError).toBeNull();
+    });
+  });
+
+  it("applies provider-advertised command updates without a request ref", async () => {
+    const { ws } = await connectInitializedSession();
+    ws.simulateMessage({
+      domain: "commands",
+      action: "updated",
+      payload: {
+        commands: [{ name: "review", description: "Review changes", kind: "command" }],
+      },
+    });
+    expect(useWsSessionStore.getState().sessions.s1.slashCommands).toEqual([
+      { name: "review", description: "Review changes", kind: "command" },
+    ]);
   });
 });

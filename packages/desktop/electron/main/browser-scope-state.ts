@@ -13,6 +13,7 @@ import type { BrowserBounds, BrowserStateSnapshot } from "./browser-types";
 export class BrowserScopeState {
   readonly active = new Map<number | null, string>();
   readonly bounds = new Map<number | null, BrowserBounds>();
+  readonly rendererZoom = new Map<number | null, number>();
   // Most-recently activated tab across every scope — drives the unscoped
   // snapshot consumed by agent/MCP automation.
   globalActiveTabId: string | null = null;
@@ -30,9 +31,19 @@ export class BrowserScopeState {
    * A zero-size viewport means the workspace is hidden/unmounted: drop the scope
    * so its tabs detach and it stops receiving state broadcasts.
    */
-  setBounds(scope: number | null, bounds: BrowserBounds): void {
-    if (bounds.width > 0 && bounds.height > 0) this.bounds.set(scope, bounds);
-    else this.bounds.delete(scope);
+  setBounds(scope: number | null, bounds: BrowserBounds, zoomFactor = 1): void {
+    if (bounds.width > 0 && bounds.height > 0) {
+      this.bounds.set(scope, bounds);
+      this.rendererZoom.set(scope, zoomFactor > 0 ? zoomFactor : 1);
+    } else {
+      this.bounds.delete(scope);
+      this.rendererZoom.delete(scope);
+    }
+  }
+
+  clearBounds(): void {
+    this.bounds.clear();
+    this.rendererZoom.clear();
   }
 
   /**
@@ -75,6 +86,7 @@ export class BrowserScopeState {
     tabs: Map<string, ManagedTab>,
     knownOrigins: string[],
     error: string | null,
+    orderedMetadata?: BrowserStateSnapshot["tabs"],
   ): BrowserStateSnapshot {
     const scoped = scopeId !== undefined;
     const visible = scoped
@@ -84,7 +96,7 @@ export class BrowserScopeState {
     const activeTab = activeTabId ? tabs.get(activeTabId) : null;
     return {
       scopeId: scoped ? scopeId : null,
-      tabs: visible.map((tab) => tab.metadata),
+      tabs: orderedMetadata ?? visible.map((tab) => tab.metadata),
       activeTabId,
       consoleEntries: activeTab?.consoleEntries ?? [],
       networkEntries: activeTab?.networkEntries ?? [],

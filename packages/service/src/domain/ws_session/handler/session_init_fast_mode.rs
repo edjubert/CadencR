@@ -59,14 +59,36 @@ fn normalize_restored_fast_mode(stored: bool, supported: bool) -> (bool, bool) {
     (false, stored)
 }
 
+pub(super) fn profile_effective_or_legacy(
+    inherits_profile_config: bool,
+    profile_effective: Option<bool>,
+    legacy_effective: bool,
+) -> bool {
+    if inherits_profile_config {
+        profile_effective.unwrap_or(legacy_effective)
+    } else {
+        legacy_effective
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::normalize_restored_fast_mode;
+    use super::{normalize_restored_fast_mode, profile_effective_or_legacy};
 
     #[test]
     fn clears_a_restored_value_when_capability_is_gone() {
         assert_eq!(normalize_restored_fast_mode(true, false), (false, true));
         assert_eq!(normalize_restored_fast_mode(true, true), (true, false));
         assert_eq!(normalize_restored_fast_mode(false, true), (false, false));
+    }
+
+    #[test]
+    fn inherited_provider_uses_confirmed_true_over_stale_false() {
+        assert!(profile_effective_or_legacy(true, Some(true), false));
+    }
+
+    #[test]
+    fn inherited_provider_uses_confirmed_false_over_stale_true() {
+        assert!(!profile_effective_or_legacy(true, Some(false), true));
     }
 }

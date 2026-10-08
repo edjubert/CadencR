@@ -15,6 +15,7 @@ import { useShortcutsHelpStore } from "@/stores/shortcuts-help-store";
 import { useListFeatureWorktrees, type Feature } from "@/api/generated";
 import { getArchiveCleanupAvailability } from "@/components/archive-cleanup-availability";
 import { type FeatureArchiveAction } from "@/lib/feature-archive-decision";
+import type { ArchiveRelativeSelection } from "@/components/ArchiveRelativeOptions";
 
 export interface ConfirmFeatureAction {
   action: FeatureArchiveAction;
@@ -35,7 +36,7 @@ interface RootOverlaysProps {
   activeFeatureId: number | null;
   confirmAction: ConfirmFeatureAction | null;
   setConfirmAction: Dispatch<SetStateAction<ConfirmFeatureAction | null>>;
-  onArchiveFeature: (featureId: number) => void;
+  onArchiveFeature: (featureId: number, options: ArchiveRelativeSelection) => Promise<unknown>;
   onDeleteFeature: (featureId: number) => void;
   appClose: AppCloseOverlayState;
 }
@@ -61,9 +62,10 @@ export function RootOverlays({
   const archiveConfirmAction = confirmAction?.action === "archive" ? confirmAction : null;
   const deleteConfirmAction = confirmAction?.action === "delete" ? confirmAction : null;
   const archiveFeatureId = archiveConfirmAction?.feature.id ?? null;
+  const archiveProjectId = archiveConfirmAction?.feature.project_id ?? null;
   const { data: featureWorktrees = [] } = useListFeatureWorktrees(
-    { project_id: activeProjectId ?? 0 },
-    { query: { enabled: activeProjectId != null && archiveFeatureId != null } },
+    { project_id: archiveProjectId ?? 0 },
+    { query: { enabled: archiveProjectId != null && archiveFeatureId != null } },
   );
   const confirmFeatureWorktree =
     featureWorktrees.find((worktree) => worktree.feature_id === archiveFeatureId) ?? null;
@@ -87,7 +89,7 @@ export function RootOverlays({
       <ArchiveFeatureDialog
         open={archiveConfirmAction != null}
         feature={archiveConfirmAction?.feature}
-        projectId={activeProjectId ?? 0}
+        projectId={archiveProjectId ?? 0}
         hasLiveWorktree={cleanupAvailability.hasLiveWorktree}
         hasResidualWorktreeDirectory={cleanupAvailability.hasResidualWorktreeDirectory}
         showWorktreeRemoval={cleanupAvailability.showWorktreeRemoval}

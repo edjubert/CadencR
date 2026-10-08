@@ -1,17 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ReactNode } from "react";
 import { render, screen } from "@/test-utils";
 import type { AllocatedPort, Feature, PrStatusSnapshot } from "@/api/generated";
-import { FeatureRowMetaLine, FeatureRowProviderMark } from "./ProjectFeatureRowParts";
+import { FeatureRowMetaLine, FeatureRowTitleLine } from "./ProjectFeatureRowParts";
 
 vi.mock("@/components/ShortcutTooltip", () => ({
   ShortcutTooltip: ({ children }: { children: unknown }) => children,
 }));
 
 vi.mock("@/components/SidebarPendingGatePopover", () => ({
-  SidebarPendingGatePopover: ({ children }: { children?: ReactNode }) => (
-    <div data-testid="pending-gate">{children ?? "default-gate"}</div>
-  ),
+  SidebarPendingGatePopover: () => <div data-testid="pending-gate">default-gate</div>,
 }));
 
 function feature(overrides: Partial<Feature> = {}): Feature {
@@ -51,7 +48,11 @@ function port(overrides: Partial<AllocatedPort> = {}): AllocatedPort {
   };
 }
 
-function renderLine(prStatus: PrStatusSnapshot | undefined, ports: readonly AllocatedPort[] = []) {
+function renderLine(
+  prStatus: PrStatusSnapshot | undefined,
+  ports: readonly AllocatedPort[] = [],
+  downloadCount = 0,
+) {
   return render(
     <FeatureRowMetaLine
       feature={feature()}
@@ -59,6 +60,7 @@ function renderLine(prStatus: PrStatusSnapshot | undefined, ports: readonly Allo
       gitStats={undefined}
       shellCount={0}
       browserCount={0}
+      downloadCount={downloadCount}
       ports={ports}
       isEditingLabel={false}
       labelDraft=""
@@ -105,13 +107,24 @@ describe("FeatureRowMetaLine", () => {
     expect(screen.getByLabelText("Ports 3000, 5173 in use")).toBeInTheDocument();
     expect(screen.getByText("+1")).toBeInTheDocument();
   });
+
+  it("shows active downloads independently from browser tabs", () => {
+    renderLine(undefined, [], 2);
+
+    expect(screen.getByLabelText("2 browser downloads active")).toHaveTextContent("2");
+    expect(screen.queryByLabelText(/browser tabs open/)).not.toBeInTheDocument();
+  });
 });
 
-describe("FeatureRowProviderMark", () => {
-  const mark = (status: "idle" | "agent" | "question", unread = false) =>
+describe("FeatureRowTitleLine", () => {
+  const row = (status: "idle" | "agent" | "question", unread = false) =>
     render(
-      <FeatureRowProviderMark
-        feature={feature({ runtime_provider: "claude_code" })}
+      <FeatureRowTitleLine
+        feature={feature({ runtime_provider: "codex_cli" })}
+        liveTitle={undefined}
+        isAutoNaming={false}
+        isArchived={false}
+        hasWorktree={false}
         liveStatus={status}
         isActive={false}
         isUnread={unread}
@@ -119,25 +132,36 @@ describe("FeatureRowProviderMark", () => {
       />,
     );
 
-  it("shows the idle provider mark without a reserved status column", () => {
-    mark("idle");
-    expect(screen.getByRole("img")).toHaveAttribute("data-provider-mark", "idle");
-    expect(screen.queryByTestId("pending-gate")).not.toBeInTheDocument();
+  it("puts the quiet logo at the very end of the title line", () => {
+    row("idle");
+    const line = document.querySelector("[data-feature-title-line]");
+    expect(line).toHaveClass("min-h-6");
+    expect(line?.firstElementChild).toHaveAttribute("data-sidebar-status", "idle");
+    expect(line?.lastElementChild).toHaveAttribute("data-sidebar-identity-slot");
+    expect(line?.lastElementChild?.querySelector("[data-provider-mark]")).toHaveAttribute(
+      "data-provider-mark",
+      "mono",
+    );
+    expect(screen.getByText("A feature")).toHaveClass("truncate", "flex-1");
   });
 
-  it("uses the working tinted mark instead of a separate bot icon", () => {
-    mark("agent");
-    const working = screen.getByRole("img", { name: /Working/ });
-    expect(working).toHaveAttribute("data-provider-mark", "working");
-    expect(working).toHaveClass("text-blue-500", "animate-pulse");
-    expect(screen.queryByTestId("pending-gate")).not.toBeInTheDocument();
+  it("shows working separately without tinting the logo", () => {
+    row("agent", true);
+    expect(screen.getByLabelText("Agent working")).toHaveClass("sidebar-status-working");
+    expect(screen.getByRole("img", { name: /Codex/ })).toHaveClass("text-muted-foreground");
+    expect(screen.queryByLabelText("Unread agent messages")).not.toBeInTheDocument();
   });
 
-  it("wraps the tinted mark in the pending-gate trigger while waiting", () => {
-    mark("question");
-    expect(screen.getByTestId("pending-gate")).toBeInTheDocument();
-    expect(
-      screen.getByTestId("pending-gate").querySelector("[data-provider-mark]"),
-    ).toHaveAttribute("data-provider-mark", "waiting");
+  it("keeps unread distinct from working", () => {
+    row("idle", true);
+    expect(screen.getByLabelText("Unread agent messages")).toHaveClass("sidebar-status-unread");
+    expect(screen.queryByLabelText("Agent working")).not.toBeInTheDocument();
+  });
+
+  it("keeps the pending gate independent of the provider", () => {
+    row("question");
+    expect(screen.getByTestId("pending-gate")).toHaveTextContent("default-gate");
+    expect(screen.getByTestId("pending-gate").querySelector("[data-provider-mark]")).toBeNull();
+    expect(screen.getByRole("img", { name: /Codex/ })).toBeInTheDocument();
   });
 });

@@ -3,22 +3,17 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import type { PanelImperativeHandle } from "react-resizable-panels";
 import { toast } from "sonner";
-import {
-  useCreateFeature,
-  useDeleteFeature,
-  useUpdateFeatureStatus,
-  type Feature,
-} from "@/api/generated";
+import { useCreateFeature, useDeleteFeature, type Feature } from "@/api/generated";
 import { customInstance } from "@/api/client";
 import { SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from "@/components/AppShell";
 import type { ConfirmFeatureAction } from "@/components/RootOverlays";
 import {
-  archiveFeatureInCachedLists,
   closeFeatureSession,
   navigateToFeatureIdOrHome,
   removeFeatureFromCachedLists,
 } from "@/components/project-feature-navigation";
 import { useAppClose } from "@/hooks/useAppClose";
+import { useArchiveFeatureAction } from "@/hooks/useArchiveFeatureAction";
 import { useAutoUpdateBridge } from "@/hooks/useAutoUpdateBridge";
 import { useConnectionWatchdog } from "@/hooks/useConnectionWatchdog";
 import { useDebouncedSetting } from "@/hooks/useDebouncedSetting";
@@ -175,6 +170,7 @@ function useRootFeatureActions(route: RootRouteState) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [confirmAction, setConfirmAction] = useState<ConfirmFeatureAction | null>(null);
+  const [archiveActiveFeatures, setArchiveActiveFeatures] = useState<Feature[]>([]);
   const deleteNavTargetRef = useRef<number | null>(null);
   const invalidateFeatures = useCallback(
     () => void invalidateByUrlPrefix(queryClient, "/api/features"),
@@ -209,25 +205,11 @@ function useRootFeatureActions(route: RootRouteState) {
       },
     },
   });
-  const archiveMutation = useUpdateFeatureStatus({
-    mutation: {
-      onError: () => toast.error("Failed to archive session"),
-      onSuccess: (_data, variables) => {
-        archiveFeatureInCachedLists(queryClient, variables.id);
-        closeFeatureSession(variables.id);
-        invalidateFeatures();
-        if (route.activeProjectId == null) return;
-        const targetId = deleteNavTargetRef.current;
-        deleteNavTargetRef.current = null;
-        navigateToFeatureIdOrHome(navigate, route.activeProjectId, targetId);
-      },
-    },
+  const archiveFeature = useArchiveFeatureAction({
+    activeFeatureId: route.activeFeatureId,
+    activeFeatures: archiveActiveFeatures,
+    projectId: route.activeProjectId,
   });
-  const archiveFeature = useCallback(
-    (featureId: number): void =>
-      archiveMutation.mutate({ id: featureId, data: { status: "archived" } }),
-    [archiveMutation],
-  );
   const deleteFeature = useCallback(
     (featureId: number): void => deleteMutation.mutate({ id: featureId }),
     [deleteMutation],
@@ -241,6 +223,7 @@ function useRootFeatureActions(route: RootRouteState) {
     deleteFeature,
     deleteNavTargetRef,
     setConfirmAction,
+    setArchiveActiveFeatures,
   };
 }
 
@@ -249,7 +232,11 @@ type RootFeatureActions = ReturnType<typeof useRootFeatureActions>;
 async function prepareFeatureAction(
   projectId: number,
   featureId: number,
-): Promise<{ confirmAction: ConfirmFeatureAction; targetId: number | null } | null> {
+): Promise<{
+  activeFeatures: Feature[];
+  confirmAction: ConfirmFeatureAction;
+  targetId: number | null;
+} | null> {
   const features = await customInstance<Feature[]>({
     method: "GET",
     url: `/api/features?project_id=${projectId}&include_archived=true`,
@@ -261,6 +248,7 @@ async function prepareFeatureAction(
   const remaining = activeFeatures.filter((candidate) => candidate.id !== featureId);
   const target = index > 0 ? activeFeatures[index - 1] : (remaining[0] ?? null);
   return {
+    activeFeatures,
     confirmAction: { action: await resolveFeatureArchiveAction(feature), feature },
     targetId: target?.id ?? null,
   };
@@ -314,13 +302,18 @@ function useRootShortcuts(
   useShortcut("delete-feature", async (event) => {
     event.preventDefault();
     if (route.activeProjectId == null || route.activeFeatureId == null) return;
+    const toastId = `feature-archive-check-${route.activeFeatureId}`;
+    toast.loading("Checking conversation…", { id: toastId });
     try {
       const prepared = await prepareFeatureAction(route.activeProjectId, route.activeFeatureId);
       if (!prepared) return;
       features.deleteNavTargetRef.current = prepared.targetId;
+      features.setArchiveActiveFeatures(prepared.activeFeatures);
       features.setConfirmAction(prepared.confirmAction);
     } catch (error) {
       toastError(error, "Failed to load features");
+    } finally {
+      toast.dismiss(toastId);
     }
   });
 }

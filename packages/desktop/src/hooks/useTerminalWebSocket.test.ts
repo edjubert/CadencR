@@ -215,7 +215,7 @@ describe("useTerminalWebSocket", () => {
     renderAndConnect({ onError });
     act(() => lastWs().simulateOpen());
     act(() => lastWs().simulateMessage({ type: "error", message: "bad" }));
-    expect(onError).toHaveBeenCalledWith("bad");
+    expect(onError).toHaveBeenCalledWith("bad", "protocol");
   });
 
   it("sends write/resize/kill JSON when WS is open", () => {
@@ -270,7 +270,7 @@ describe("useTerminalWebSocket", () => {
       renderAndConnect({ onError });
       act(() => lastWs().simulateOpen());
       act(() => lastWs().simulateClose(1006));
-      expect(onError).toHaveBeenCalledWith("Connection lost. Reconnecting…");
+      expect(onError).toHaveBeenCalledWith("Connection lost. Reconnecting…", "transport");
     });
   });
 
@@ -314,7 +314,7 @@ describe("useTerminalWebSocket", () => {
     renderAndConnect({ onError });
     act(() => lastWs().simulateOpen());
     act(() => lastWs().simulateRawMessage("not json"));
-    expect(onError).toHaveBeenCalledWith("Failed to parse terminal message");
+    expect(onError).toHaveBeenCalledWith("Failed to parse terminal message", "protocol");
   });
 
   it("closes WS on unmount", () => {
@@ -323,5 +323,73 @@ describe("useTerminalWebSocket", () => {
     act(() => ws.simulateOpen());
     unmount();
     expect(ws.readyState).toBe(MockWebSocket.CLOSED);
+  });
+
+  it("exposes disconnect() that closes the WS without sending kill", () => {
+    const { result } = renderAndConnect();
+    const ws = lastWs();
+    act(() => ws.simulateOpen());
+    act(() => result.current.disconnect());
+    expect(ws.readyState).toBe(MockWebSocket.CLOSED);
+    const sent = ws.sent.map((s) => JSON.parse(s));
+    expect(sent).not.toEqual(expect.arrayContaining([{ type: "kill" }]));
+  });
+});
+
+describe("terminal reconnect dimensions", () => {
+  it("resends the last measured grid when the PTY acknowledges reattachment", () => {
+    const { result } = renderAndConnect({ ptyId: "existing" });
+    const socket = lastWs();
+    act(() => result.current.resize(132, 48));
+    act(() => socket.simulateOpen());
+    socket.sent.length = 0;
+    act(() =>
+      socket.simulateMessage({ type: "reconnected", scrollback: "", alive: true, cwd: "/work" }),
+    );
+    expect(socket.sent.map((data) => JSON.parse(data))).toContainEqual({
+      type: "resize",
+      cols: 132,
+      rows: 48,
+    });
+  });
+});
+
+describe("terminal socket generations", () => {
+  it("invalidates delayed events and connection state immediately on disconnect", () => {
+    const callbacks = defaultOptions();
+    const { result } = renderAndConnect(callbacks);
+    const socket = lastWs();
+    act(() => socket.simulateOpen());
+    // Browser close is asynchronous; state must not depend on its event.
+    vi.spyOn(socket, "close").mockImplementation(() => {});
+    act(() => result.current.disconnect());
+    expect(result.current.isConnected).toBe(false);
+    act(() => {
+      socket.simulateOpen();
+      socket.simulateMessage({ type: "data", data: "stale" });
+      socket.simulateRawMessage("malformed");
+      socket.simulateClose();
+    });
+    expect(result.current.isConnected).toBe(false);
+    expect(callbacks.onData).not.toHaveBeenCalled();
+    expect(callbacks.onError).not.toHaveBeenCalled();
+    expect(socket.sent).toEqual([]);
+    act(() => result.current.connect(80, 24));
+    act(() => lastWs().simulateOpen());
+    expect(result.current.isConnected).toBe(true);
+  });
+
+  it("ignores delayed output and close events from a replaced connection", () => {
+    const onData = vi.fn();
+    const { result } = renderAndConnect({ onData });
+    const oldSocket = lastWs();
+    act(() => oldSocket.simulateOpen());
+    act(() => result.current.connect(80, 24));
+    const activeSocket = lastWs();
+    act(() => activeSocket.simulateOpen());
+    act(() => oldSocket.simulateClose());
+    act(() => oldSocket.simulateMessage({ type: "data", data: "stale" }));
+    expect(result.current.isConnected).toBe(true);
+    expect(onData).not.toHaveBeenCalled();
   });
 });

@@ -25,6 +25,13 @@ export const BROWSER_SHORTCUTS = [
     scope: "browser",
   },
   {
+    // Chrome's customary Mod+Shift+T belongs to Cadencr's Terminal pane.
+    id: "browser-reopen-tab",
+    keys: ["mod", "shift", "u"],
+    description: "Reopen last closed browser tab",
+    scope: "browser",
+  },
+  {
     id: "browser-prev-tab",
     keys: ["mod", "shift", "lbracket"],
     description: "Previous browser tab",
@@ -49,17 +56,35 @@ export const BROWSER_SHORTCUTS = [
     scope: "browser",
   },
   {
+    id: "browser-find",
+    keys: ["mod", "f"],
+    description: "Find in page",
+    scope: "browser",
+  },
+  {
     id: "browser-add-comment",
     keys: ["mod", "s"],
     description: "Add a page comment",
     scope: "browser",
   },
   {
-    // ⌘⌥I matches Chrome/Electron's DevTools chord. In dev the Electron menu
-    // accelerator intercepts it before the page sees it, so this binding only
-    // takes effect in packaged builds — acceptable, the toolbar button covers dev.
+    id: "browser-downloads",
+    keys: ["mod", "shift", "j"],
+    description: "Show browser downloads",
+    scope: "browser",
+  },
+  {
+    id: "browser-responsive",
+    keys: ["mod", "shift", "m"],
+    description: "Toggle responsive mode",
+    scope: "browser",
+  },
+  {
+    // Electron owns Cmd+Opt+I / Ctrl+Shift+I for the app renderer's DevTools.
+    // F12 is also a standard browser binding and reaches the Browser guest in
+    // both development and packaged builds without opening the wrong tools.
     id: "browser-devtools",
-    keys: ["mod", "alt", "i"],
+    keys: ["f12"],
     description: "Toggle browser DevTools",
     scope: "browser",
   },

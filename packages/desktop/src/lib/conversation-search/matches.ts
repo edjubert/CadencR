@@ -82,7 +82,11 @@ function blocksOf(item: DisplayItem): AgentBlockData[] {
   return item.kind === "flow" ? item.blocks : [item.block];
 }
 
-function countOccurrences(haystackLower: string, needleLower: string): number {
+export function normalizeConversationQuery(query: string): string {
+  return query.trim().toLowerCase();
+}
+
+export function countConversationOccurrences(haystackLower: string, needleLower: string): number {
   if (!needleLower) return 0;
   let count = 0;
   let from = 0;
@@ -100,21 +104,22 @@ function countOccurrences(haystackLower: string, needleLower: string): number {
  * Matching is case-insensitive and literal (no regex). An empty or
  * whitespace-only query yields no matches.
  *
- * Cost is O(total transcript length); callers only run it while the search bar
- * is open and debounce the query, so it never touches the streaming hot path.
+ * This full-scan helper is kept for one-shot callers and focused matching
+ * tests. The streaming search hook uses `ConversationSearchIndex` instead, so
+ * unchanged blocks do not get rescanned or rematerialized on every chunk.
  */
 export function computeConversationMatches(
   items: readonly DisplayItem[],
   query: string,
   toolResultMap?: ReadonlyMap<string, AgentBlockData>,
 ): ConversationMatch[] {
-  const needle = query.trim().toLowerCase();
+  const needle = normalizeConversationQuery(query);
   if (!needle) return [];
 
   const matches: ConversationMatch[] = [];
   for (let rowIndex = 0; rowIndex < items.length; rowIndex += 1) {
     for (const block of blocksOf(items[rowIndex])) {
-      const occurrences = countOccurrences(
+      const occurrences = countConversationOccurrences(
         blockSearchableText(block, toolResultMap).toLowerCase(),
         needle,
       );

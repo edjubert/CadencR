@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -9,9 +10,11 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::{broadcast, oneshot, Mutex};
 
 use crate::client_io::{spawn_reader, spawn_reaper, spawn_stderr_reader, ReaderState};
+use crate::client_launch::profile_aware_command;
 use crate::client_state::{Inner, PendingRequestGuard};
 use crate::discovery::resolved_codex_command;
 use crate::error::SdkError;
+use crate::event_queue::EventHub;
 use crate::parse::{parse_model, parse_turn_handle};
 use crate::protocol::{app_server_args, mcp_server_status_list_params};
 use crate::types::{
@@ -33,6 +36,10 @@ pub struct CodexAppServerClient {
 #[derive(Debug, Clone, Default, bon::Builder)]
 pub struct AppServerSpawnOptions {
     pub env: Option<HashMap<String, String>>,
+    /// Environment keys removed from the already login-hydrated service env.
+    #[builder(default)]
+    pub env_unset: Vec<String>,
+    pub cwd: Option<PathBuf>,
     #[builder(default)]
     pub enable_features: Vec<String>,
     #[builder(default)]
@@ -44,20 +51,21 @@ pub struct AppServerSpawnOptions {
 impl CodexAppServerClient {
     pub async fn spawn_with_options(options: AppServerSpawnOptions) -> Result<Self, SdkError> {
         let binary = resolved_codex_command().await?;
-        let mut command = cli_discovery::login_shell_exec_command(
+        let args = app_server_args(&options.enable_features);
+        let mut command = profile_aware_command(
             binary.as_os_str(),
-            app_server_args(&options.enable_features)
-                .into_iter()
-                .map(std::ffi::OsString::from),
+            &args,
+            options.env.as_ref(),
+            &options.env_unset,
         );
+        if let Some(cwd) = options.cwd {
+            command.current_dir(cwd);
+        }
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        if let Some(env) = options.env {
-            command.envs(env);
-        }
         let mut child = command.spawn()?;
         let pid = child.id();
         let stdin = child
@@ -72,7 +80,7 @@ impl CodexAppServerClient {
             .stderr
             .take()
             .ok_or_else(|| SdkError::Protocol("missing app-server stderr".to_string()))?;
-        let (events, _) = broadcast::channel(512);
+        let events = EventHub::new();
         let pending = Arc::new(StdMutex::new(HashMap::new()));
         let max_line_bytes = options.max_line_bytes.unwrap_or(DEFAULT_MAX_LINE_BYTES);
         let (kill_tx, kill_rx) = oneshot::channel();
@@ -115,8 +123,15 @@ impl CodexAppServerClient {
         Ok(Self { inner })
     }
 
+    /// Best-effort observer stream; slow receivers may lag. Use
+    /// `subscribe_reliable` for runtime event processing.
     pub fn subscribe(&self) -> broadcast::Receiver<AppServerEvent> {
         self.inner.events.subscribe()
+    }
+
+    /// Subscribe without losing events when runtime processing falls behind.
+    pub fn subscribe_reliable(&self) -> crate::AppServerEventReceiver {
+        self.inner.events.subscribe_reliable()
     }
 
     pub async fn initialize(&self) -> Result<Value, SdkError> {
@@ -173,6 +188,18 @@ impl CodexAppServerClient {
             }
         }
         Ok(models)
+    }
+
+    /// Read Codex's effective configuration, including user and project layers.
+    pub async fn config_read(&self, cwd: &std::path::Path) -> Result<Value, SdkError> {
+        self.request(
+            "config/read",
+            json!({
+                "cwd": cwd.to_string_lossy(),
+                "includeLayers": true,
+            }),
+        )
+        .await
     }
 
     pub async fn turn_start(&self, params: Value) -> Result<TurnHandle, SdkError> {

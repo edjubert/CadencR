@@ -6,6 +6,7 @@ mod event_command_execution;
 mod event_inputs;
 mod event_items;
 mod event_json;
+mod event_lifecycle;
 mod event_loop;
 mod event_mcp_items;
 mod event_payloads;
@@ -20,6 +21,7 @@ mod event_reasoning;
 mod event_reasoning_state;
 mod event_state;
 mod event_subagent_activity;
+mod event_subagent_recovery;
 mod event_subagent_routes;
 mod event_subagents;
 mod event_system;
@@ -29,18 +31,23 @@ mod event_web;
 mod events;
 mod input;
 mod instructions;
+mod launch;
 mod legacy_permissions;
 mod mcp;
 mod mcp_status;
 mod model;
+mod native_config;
 mod permission_details;
 mod permission_options;
 #[cfg(test)]
 mod permission_options_tests;
 mod permissions;
+mod profile_runtime;
+pub mod profiles;
 mod prompt_receipts;
 mod raw_tool_names;
 mod responses;
+pub mod routes;
 mod runtime_error;
 mod session;
 mod session_permissions;
@@ -52,28 +59,26 @@ mod turn_steer_recovery;
 mod worktree_config;
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use codex_app_server_sdk_rs::{AppServerSpawnOptions, CodexAppServerClient, CodexModel};
+use codex_app_server_sdk_rs::{CodexAppServerClient, CodexModel};
 use serde_json::Value;
 use tokio::sync::{Mutex, RwLock};
 
-use self::instructions::codex_developer_instructions;
-use self::mcp::{mcp_server_names, thread_config};
+use self::mcp::mcp_server_names;
 use self::mcp_status::mcp_server_statuses;
 pub(crate) use self::model::{canonical_access_mode_wire, configured_access_mode};
 pub(crate) use self::raw_tool_names::function_tool_name;
 use self::session::CodexSession;
-use self::thread_params::{thread_resume_params, thread_start_params};
-use self::timeouts::{with_probe_timeout, PROBE_TIMEOUT};
 use super::adapter::{
-    static_config_paths, AgentRuntimeAdapter, AgentRuntimeSession, RuntimeAccessMode,
-    RuntimeCompactionStrategy, RuntimeError, RuntimePermissionRequest,
-    RuntimePromptCommandPlacement, RuntimePromptCommandPolicy, RuntimeSkillReferenceTrigger,
-    RuntimeSlashCommand, RuntimeSpawnConfig, RuntimeUserShellStrategy,
+    static_config_paths, AgentRuntimeAdapter, AgentRuntimeSession, ResolvedRuntimeProfile,
+    RuntimeAccessMode, RuntimeCompactionStrategy, RuntimeConfigOverrides, RuntimeEffectiveConfig,
+    RuntimeError, RuntimePermissionRequest, RuntimePromptCommandPlacement,
+    RuntimePromptCommandPolicy, RuntimeSkillReferenceTrigger, RuntimeSlashCommand,
+    RuntimeSpawnConfig, RuntimeUserShellStrategy,
 };
 use super::runtime::{ModelCatalogEntry, ProviderCatalogEntry, ProviderStatus};
 
@@ -116,6 +121,7 @@ fn catalog_from_models(models: Vec<CodexModel>) -> ProviderCatalogEntry {
     ProviderCatalogEntry {
         id: PROVIDER_ID.to_string(),
         label: PROVIDER_LABEL.to_string(),
+        icon_data: None,
         status: ProviderStatus::Available,
         status_message: None,
         models: models.into_iter().map(model_entry).collect(),
@@ -203,7 +209,7 @@ async fn live_catalog() -> ProviderCatalogEntry {
         }
     }
 
-    let catalog = match probe_models().await {
+    let catalog = match profile_runtime::probe_models().await {
         Ok(models) if !models.is_empty() => catalog_from_models(models),
         Ok(_) => unavailable_catalog("codex app-server returned no models"),
         Err(error) => unavailable_catalog(format!("codex app-server unavailable: {error}")),
@@ -215,185 +221,11 @@ async fn live_catalog() -> ProviderCatalogEntry {
     catalog
 }
 
-async fn probe_models() -> Result<Vec<CodexModel>, RuntimeError> {
-    let client = CodexAppServerClient::spawn_with_options(app_server_spawn_options(None)).await?;
-    let result = async {
-        client.initialize_with_timeout(PROBE_TIMEOUT).await?;
-        with_probe_timeout("Codex model/list", client.model_list()).await
-    }
-    .await;
-    client.shutdown().await;
-    result
-}
-
-fn app_server_spawn_options(env: Option<HashMap<String, String>>) -> AppServerSpawnOptions {
-    AppServerSpawnOptions::builder()
-        .maybe_env(env)
-        .enable_features(vec![DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE.to_string()])
-        .build()
-}
-
-async fn start_or_resume_thread(
-    client: &CodexAppServerClient,
-    config: &RuntimeSpawnConfig,
-    mcp_config: &Value,
-) -> Result<String, RuntimeError> {
-    match config.resume_session_id.as_deref() {
-        Some(thread_id) => Ok(client
-            .thread_resume(thread_resume_params(thread_id, config, mcp_config))
-            .await?
-            .id),
-        None => start_thread(client, config, mcp_config).await,
-    }
-}
-
-async fn start_thread(
-    client: &CodexAppServerClient,
-    config: &RuntimeSpawnConfig,
-    mcp_config: &Value,
-) -> Result<String, RuntimeError> {
-    Ok(client
-        .thread_start(thread_start_params(config, mcp_config))
-        .await?
-        .id)
-}
-
-#[async_trait]
-impl AgentRuntimeAdapter for CodexAdapter {
-    fn user_shell_strategy(&self) -> RuntimeUserShellStrategy {
-        RuntimeUserShellStrategy::ProviderNative
-    }
-
-    fn prompt_command_policy(&self) -> RuntimePromptCommandPolicy {
-        RuntimePromptCommandPolicy {
-            slash_command_placement: RuntimePromptCommandPlacement::PromptStart,
-            skill_reference_trigger: RuntimeSkillReferenceTrigger::Dollar,
-            user_shell: true,
-        }
-    }
-
-    fn session_branching(&self) -> Option<&dyn super::adapter::SessionBranching> {
-        Some(&branching::CODEX_SESSION_BRANCHING)
-    }
-
-    fn parse_permission_request(&self, raw: &Value) -> Option<RuntimePermissionRequest> {
-        permissions::parse_permission_request(raw)
-    }
-
-    fn catalog_entry(&self) -> ProviderCatalogEntry {
-        unavailable_catalog("Codex availability has not been checked yet")
-    }
-
-    async fn catalog_entry_live(&self) -> ProviderCatalogEntry {
-        live_catalog().await
-    }
-
-    async fn default_model_id(&self) -> Option<String> {
-        live_catalog().await.default_model
-    }
-
-    fn spawn_startup_warmup(&self) {
-        tokio::spawn(async {
-            let _ = live_catalog().await;
-        });
-    }
-
-    fn supports_prompt_receipts(&self) -> bool {
-        true
-    }
-
-    fn worktree_config_paths(&self) -> Vec<Cow<'static, str>> {
-        static_config_paths(worktree_config::CONFIG_PATHS)
-    }
-
-    async fn runtime_slash_commands(
-        &self,
-        cwd: &str,
-    ) -> Result<Vec<RuntimeSlashCommand>, RuntimeError> {
-        commands::runtime_slash_commands(cwd).await
-    }
-
-    fn compaction_strategy(&self) -> Option<RuntimeCompactionStrategy> {
-        Some(RuntimeCompactionStrategy::LiveRuntime)
-    }
-
-    fn supports_permission_mode(
-        &self,
-        mode: &crate::domain::agents::adapter::RuntimePermissionMode,
-    ) -> bool {
-        // Codex maps Default/AcceptEdits → workspace-write+on-request,
-        // Plan → workspace-write+on-request+plan_mode hint, BypassPermissions
-        // → danger-full-access. Auto and DontAsk have no Codex equivalent.
-        use crate::domain::agents::adapter::RuntimePermissionMode;
-        matches!(
-            mode,
-            RuntimePermissionMode::Default
-                | RuntimePermissionMode::AcceptEdits
-                | RuntimePermissionMode::Plan
-                | RuntimePermissionMode::BypassPermissions
-        )
-    }
-
-    fn supports_access_mode(&self, _mode: &RuntimeAccessMode) -> bool {
-        true
-    }
-
-    fn access_mode_setting_key(&self) -> Option<Cow<'static, str>> {
-        Some(Cow::Borrowed(self::model::ACCESS_MODE_SETTING_KEY))
-    }
-
-    fn applies_access_mode_in_place(&self) -> bool {
-        true
-    }
-
-    fn default_permission_mode_wire(&self) -> Cow<'static, str> {
-        // Codex's chip lands on "Default" (workspace-write + on-request),
-        // matching `defaultEditModeFor` in lib/provider-modes.ts.
-        Cow::Borrowed("default")
-    }
-
-    async fn spawn(
-        &self,
-        content: Value,
-        config: RuntimeSpawnConfig,
-    ) -> Result<Box<dyn AgentRuntimeSession>, RuntimeError> {
-        let client =
-            CodexAppServerClient::spawn_with_options(app_server_spawn_options(config.env.clone()))
-                .await?;
-        client.initialize().await?;
-        let event_rx = client.subscribe();
-        let mut mcp_status_rx = client.subscribe();
-        let developer_instructions = codex_developer_instructions();
-        let mcp_config = thread_config(config.mcp_servers.as_ref(), Some(&developer_instructions));
-        let mcp_server_names = mcp_server_names(&mcp_config);
-        let thread_id = start_or_resume_thread(&client, &config, &mcp_config).await?;
-        let mcp_servers = mcp_server_statuses(&client, &mut mcp_status_rx, &mcp_server_names).await;
-        let session = CodexSession::new(
-            client,
-            thread_id,
-            event_rx,
-            session::CodexSessionOptions {
-                model: config.model,
-                effort: config.thinking_effort,
-                fast_mode: config.fast_mode,
-                permission_mode: config.permission_mode,
-                access_mode: config.access_mode,
-                cwd: config.cwd,
-                mcp_servers,
-                context_window: None,
-            },
-        );
-        session.send_init_event().await;
-        if !content.is_null() {
-            session.start_initial_turn(content).await?;
-        }
-        Ok(Box::new(session))
-    }
-}
+include!("adapter_impl.rs");
 
 #[cfg(test)]
 mod tests {
-    use super::{app_server_spawn_options, catalog_from_models, model_entry, CodexAdapter};
+    use super::{catalog_from_models, model_entry, profile_runtime, CodexAdapter};
     use crate::domain::agents::adapter::{AgentRuntimeAdapter, RuntimeUserShellStrategy};
     use codex_app_server_sdk_rs::{CodexModel, CodexServiceTier};
     use serde_json::Value;
@@ -517,8 +349,19 @@ mod tests {
     }
 
     #[test]
+    fn preserves_explicit_bare_model_id() {
+        let adapter = CodexAdapter;
+        let catalog = adapter.catalog_entry();
+
+        assert_eq!(
+            adapter.canonicalize_model_id("gpt-5.6-sol", &catalog.models),
+            "gpt-5.6-sol"
+        );
+    }
+
+    #[test]
     fn enables_request_user_input_in_default_mode() {
-        let options = app_server_spawn_options(None);
+        let options = profile_runtime::app_server_spawn_options(None, Vec::new(), None);
         assert!(options
             .enable_features
             .contains(&"default_mode_request_user_input".to_string()));
@@ -526,7 +369,7 @@ mod tests {
 
     #[test]
     fn leaves_live_request_timeout_to_sdk_default() {
-        let options = app_server_spawn_options(None);
+        let options = profile_runtime::app_server_spawn_options(None, Vec::new(), None);
         assert!(options.request_timeout.is_none());
     }
 

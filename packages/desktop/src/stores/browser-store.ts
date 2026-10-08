@@ -10,17 +10,26 @@ import type { BrowserStateSnapshot } from "@/shared/browser-types";
 interface BrowserStore {
   snapshot: BrowserStateSnapshot | null;
   countsByScope: Record<number, number>;
+  activeDownloadCountsByScope: Record<number, number>;
   setSnapshot: (snapshot: BrowserStateSnapshot) => void;
   setCountsByScope: (counts: Record<number, number>) => void;
+  setActiveDownloadCountsByScope: (counts: Record<number, number>) => void;
 }
 
 export const useBrowserStore = create<BrowserStore>((set) => ({
   snapshot: null,
   countsByScope: {},
+  activeDownloadCountsByScope: {},
   setSnapshot: (snapshot) => set({ snapshot }),
   setCountsByScope: (counts) =>
     set((state) =>
       countRecordsEqual(state.countsByScope, counts) ? state : { countsByScope: counts },
+    ),
+  setActiveDownloadCountsByScope: (counts) =>
+    set((state) =>
+      countRecordsEqual(state.activeDownloadCountsByScope, counts)
+        ? state
+        : { activeDownloadCountsByScope: counts },
     ),
 }));
 

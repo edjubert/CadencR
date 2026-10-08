@@ -100,7 +100,14 @@ pub(super) async fn spawn_pending_runtime_for_compact(
     )
     .await
     {
-        query.write().await.close().await;
+        if let Err(error) = query.write().await.close().await {
+            send_error(
+                sender,
+                envelope_id,
+                "RUNTIME_CLOSE_FAILED",
+                &error.to_string(),
+            );
+        }
         return None;
     }
 
@@ -201,6 +208,11 @@ async fn pending_spawn_config(
             mcp_servers: pending.mcp_servers.clone(),
             permission_handler: Some(Arc::new(bridge)),
             env: handle.config.env.clone().or_else(|| pending.env.clone()),
+            profile: pending.profile.clone(),
+            env_unset: pending.env_unset.clone(),
+            overrides: pending.overrides.clone(),
+            profile_revision: pending.profile_revision.clone(),
+            profile_state_identity: pending.profile_state_identity.clone(),
         },
     })
 }

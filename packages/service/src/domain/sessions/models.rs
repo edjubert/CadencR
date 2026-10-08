@@ -48,6 +48,7 @@ pub struct AgentSessionRow {
     pub context_window: Option<i64>,
     pub was_compacted: i64,
     pub draft_prompt: Option<String>,
+    pub message_revision: i64,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
@@ -120,10 +121,9 @@ pub struct AgentBlock {
     pub created_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// When true, `content` was tail-truncated server-side. Currently applied
-    /// to Bash blocks (both `tool_call` and `tool_result`) whose aggregated
-    /// output exceeds the configured line or byte cap. The full payload is
-    /// reachable via `GET /api/sessions/messages/{id}/full`.
+    /// When true, `content` is a bounded server-side preview of oversized
+    /// persisted content. The complete payload is reachable via
+    /// `GET /api/sessions/messages/{id}/full`.
     #[serde(rename = "truncatedContent", skip_serializing_if = "Option::is_none")]
     pub truncated_content: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -144,10 +144,24 @@ pub struct SessionState {
     pub blocks: Vec<AgentBlock>,
     #[serde(rename = "maxMessageId")]
     pub max_message_id: i64,
+    #[serde(rename = "maxContentRevision")]
+    pub max_content_revision: Option<i64>,
+    #[serde(rename = "hasMoreContentRevisions")]
+    pub has_more_content_revisions: Option<bool>,
+    #[serde(
+        rename = "hasMoreIncrementalMessages",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub has_more_incremental_messages: Option<bool>,
     #[serde(rename = "isIncremental")]
     pub is_incremental: bool,
     #[serde(rename = "toolCallUpdates", skip_serializing_if = "Option::is_none")]
     pub tool_call_updates: Option<HashMap<String, String>>,
+    #[serde(
+        rename = "truncatedToolCallUpdateIds",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub truncated_tool_call_update_ids: Option<Vec<String>>,
     #[serde(rename = "pendingQuestions")]
     pub pending_questions: Option<serde_json::Value>,
     #[serde(rename = "hasFileChanges")]

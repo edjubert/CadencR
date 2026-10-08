@@ -19,6 +19,8 @@ mod message_uuid_migration_tests;
 #[cfg(test)]
 mod narrow_fts_migration_tests;
 #[cfg(test)]
+mod project_authoring_marker_migration_tests;
+#[cfg(test)]
 mod reply_wait_claim_migration_tests;
 #[cfg(test)]
 mod rewind_fork_migration_tests;
@@ -121,6 +123,7 @@ pub async fn run_migrations(ctx: &MigrationContext<'_>) -> anyhow::Result<()> {
     } else {
         migrator.run(ctx.pool).await?;
     }
+    seed::repair_agent_message_content_revisions(ctx.pool).await?;
     seed::repair_agent_messages_perf_indexes(ctx.pool).await?;
 
     info!("Database migrations completed successfully");

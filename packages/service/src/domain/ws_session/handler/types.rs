@@ -44,6 +44,11 @@ pub(super) struct SessionConfig {
     /// Claude Code profile). Carried through resume transitions so the
     /// process always sees the profile the user selected.
     pub(super) env: Option<std::collections::HashMap<String, String>>,
+    pub(super) env_unset: Vec<String>,
+    pub(super) overrides: crate::domain::agents::adapter::RuntimeConfigOverrides,
+    pub(super) runtime_overrides_dirty: bool,
+    pub(super) profile_revision: Option<String>,
+    pub(super) profile_state_identity: Option<String>,
 }
 
 impl SessionConfig {
@@ -64,6 +69,11 @@ impl SessionConfig {
             allow_bypass_permissions: runtime.allow_bypass_permissions,
             claude_profile,
             env: runtime.env.clone(),
+            env_unset: runtime.env_unset.clone(),
+            overrides: runtime.overrides.clone(),
+            runtime_overrides_dirty: false,
+            profile_revision: runtime.profile_revision.clone(),
+            profile_state_identity: runtime.profile_state_identity.clone(),
         }
     }
 }

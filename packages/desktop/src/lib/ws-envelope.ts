@@ -199,10 +199,11 @@ export function createModelSet(sessionId: string, model: string, provider: strin
   });
 }
 
-export function createProviderSet(sessionId: string, provider: string): WsEnvelope {
+export function createProviderSet(sessionId: string, provider: string, model?: string): WsEnvelope {
   return createEnvelope("session", "provider.set", {
     session_id: sessionId,
     provider,
+    ...(model !== undefined ? { model } : {}),
   });
 }
 
@@ -237,6 +238,36 @@ export function createProfileSet(sessionId: string, profile: string): WsEnvelope
     profile,
   });
 }
+export type RuntimeConfigOverridePatch = {
+  model?: string | null;
+  thinking_effort?: string | null;
+  fast_mode?: boolean | null;
+};
+export function createRuntimeOverridesSet(
+  sessionId: string,
+  runtimeOverrides: RuntimeConfigOverridePatch,
+): WsEnvelope {
+  return createEnvelope("session", "runtime_overrides.set", {
+    session_id: sessionId,
+    runtime_overrides: runtimeOverrides,
+  });
+}
+
+export function createSessionConfigGet(sessionId: string): WsEnvelope {
+  return createEnvelope("session", "config.get", { session_id: sessionId });
+}
+
+export function createSessionConfigSet(
+  sessionId: string,
+  configId: string,
+  value: string | boolean,
+): WsEnvelope {
+  return createEnvelope("session", "config.set", {
+    session_id: sessionId,
+    config_id: configId,
+    value,
+  });
+}
 
 export function createDestroy(sessionId: string): WsEnvelope {
   return createEnvelope("session", "destroy", { session_id: sessionId });
@@ -257,8 +288,8 @@ export function createSessionCompact(sessionId: string): WsEnvelope {
   });
 }
 
-export function createCommandsGet(cwd: string, provider: string): WsEnvelope {
-  return createEnvelope("commands", "get", { cwd, provider });
+export function createCommandsGet(cwd: string, provider: string, profile?: string): WsEnvelope {
+  return createEnvelope("commands", "get", { cwd, provider, ...(profile ? { profile } : {}) });
 }
 
 export interface CommandsListPayload {

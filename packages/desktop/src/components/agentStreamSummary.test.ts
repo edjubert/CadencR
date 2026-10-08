@@ -26,6 +26,33 @@ function summaryOf(blocks: AgentBlockData[]): Record<string, number> {
 }
 
 describe("collapseTurnsToSummary", () => {
+  it.each(["", " \n\t"])("ignores trailing empty text %j before compaction", (empty) => {
+    const divider: AgentBlockData = { id: "compact", type: "compact_divider", content: "" };
+    const blocks = [user("u"), tool("tool", "Read"), text("answer"), text("empty", empty), divider];
+    const result = collapseTurnsToSummary(blocks);
+    expect(result.map((block) => block.id)).toEqual([
+      "u",
+      "tool-summary-tool",
+      "answer",
+      "compact",
+    ]);
+    expect(result[1].childBlocks?.map((block) => block.id)).toEqual(["tool", "empty"]);
+    expect(
+      collapseTurnsToSummary([user("u"), text("answer"), text("empty", empty)]).map(
+        (block) => block.id,
+      ),
+    ).toEqual(["u", "answer"]);
+  });
+
+  it("preserves active placeholders and removes empty-only final messages when idle", () => {
+    const blocks = [user("u"), tool("tool", "Read"), text("empty", "")];
+    expect(collapseTurnsToSummary(blocks, { activeStreaming: true })).toEqual(blocks);
+    expect(collapseTurnsToSummary(blocks).map((block) => block.type)).toEqual([
+      "user_message",
+      "tool_summary",
+    ]);
+  });
+
   it("folds a turn's tool calls into one recap before the final text", () => {
     const result = collapseTurnsToSummary([
       user("u1"),

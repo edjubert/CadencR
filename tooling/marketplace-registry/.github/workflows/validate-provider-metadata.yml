@@ -1,0 +1,34 @@
+name: Validate provider metadata
+
+on:
+  pull_request:
+    paths:
+      - "packages/**"
+      - "schemas/**"
+      - "scripts/**"
+      - "tests/**"
+
+permissions:
+  contents: read
+
+jobs:
+  inert-metadata:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+      - run: npm test
+      - run: npm run validate
+      - name: Build a throwaway canonical index
+        run: |
+          generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          expires_at="$(node -e 'console.log(new Date(Date.now() + 7 * 86400000).toISOString())')"
+          npm run build:index -- --generated-at "$generated_at" --expires-at "$expires_at" --output "$RUNNER_TEMP/managed-index.json"
+      # Never download or execute contributor archives in this job. If executable
+      # probes are added, place them in a separate disposable job with no secrets,
+      # no write permission, and no pull_request_target trigger.

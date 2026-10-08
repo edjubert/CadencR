@@ -1,53 +1,76 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@/test-utils";
+import { setProviderCatalogMetadata } from "@/lib/provider-catalog-registry";
 import { SidebarProviderBadge } from "./SidebarProviderBadge";
 
 vi.mock("@/components/ShortcutTooltip", () => ({
   ShortcutTooltip: ({ children }: { children: unknown }) => children,
 }));
+const preferences = vi.hoisted(() => ({ visible: true }));
+vi.mock("@/components/SidebarPreferences", () => ({
+  useSidebarProviderLogos: () => preferences.visible,
+}));
 
 describe("SidebarProviderBadge", () => {
-  it("renders the mono silhouette while idle", () => {
-    render(<SidebarProviderBadge providerId="claude_code" modelId="opus" />);
+  beforeEach(() => {
+    setProviderCatalogMetadata([]);
+    preferences.visible = true;
+  });
 
-    const mark = screen.getByRole("img", { name: /Claude · opus · Default$/ });
-    expect(mark).toHaveAttribute("data-provider-mark", "idle");
+  it("uses connector-owned artwork without status tint or animation", () => {
+    const icon = "data:image/svg+xml;base64,AA==";
+    setProviderCatalogMetadata([
+      {
+        id: "acme",
+        label: "Acme Agent",
+        icon_data: icon,
+        origin: "installed_local",
+        status: "available",
+        models: [],
+      },
+    ]);
+    render(<SidebarProviderBadge providerId="acme" />);
+    const mark = screen.getByRole("img", { name: /Acme Agent/ });
     expect(mark).toHaveClass("text-muted-foreground");
-    expect(mark.querySelector(".provider-mark-tint")).not.toBeNull();
-    expect(mark.querySelector("img")).toBeNull();
+    expect(mark).not.toHaveClass("animate-pulse", "text-blue-500");
+    expect(mark.querySelector(".provider-mark-tint")).toHaveStyle({
+      "--provider-mark": `url("${icon}")`,
+      "--provider-mark-size": "100%",
+    });
   });
 
-  it("tints the same silhouette blue and pulses while working", () => {
-    render(<SidebarProviderBadge providerId="claude_code" liveStatus="agent" />);
-
-    const mark = screen.getByRole("img", { name: /Working/ });
-    expect(mark).toHaveAttribute("data-provider-mark", "working");
-    expect(mark).toHaveClass("text-blue-500", "animate-pulse");
-    expect(mark.querySelector(".provider-mark-tint")).not.toBeNull();
+  it("falls back to a quiet bot for iconless connectors", () => {
+    render(<SidebarProviderBadge providerId="acme" />);
+    expect(screen.getByRole("img").querySelector("svg")).toHaveAttribute("aria-hidden", "true");
   });
 
-  it("stays decorative while waiting so the gate trigger owns the name", () => {
-    const { container } = render(
-      <SidebarProviderBadge providerId="claude_code" liveStatus="question" />,
+  it("preserves provider, model and effort details", () => {
+    render(<SidebarProviderBadge providerId="claude_code" modelId="opus" thinkingEffort="high" />);
+    expect(screen.getByRole("img", { name: /Claude · opus · High/ })).toHaveAttribute(
+      "data-provider-mark",
+      "mono",
     );
+  });
 
-    const mark = container.querySelector("[data-provider-mark]");
-    expect(mark).toHaveAttribute("data-provider-mark", "waiting");
-    expect(mark).not.toHaveClass("animate-pulse");
-    expect(mark?.querySelector(".provider-mark-tint")).not.toBeNull();
+  it.each([
+    ["claude_code", 56],
+    ["codex_cli", 43],
+    ["cursor", 56],
+    ["opencode", 46],
+  ])("normalizes %s to the same longest ink edge", (provider, inkEdge) => {
+    render(<SidebarProviderBadge providerId={String(provider)} />);
+    const mask = screen.getByRole("img").querySelector(".provider-mark-tint");
+    expect(mask).toHaveStyle({ "--provider-mark-size": `${(64 / Number(inkEdge)) * 100}%` });
+  });
+
+  it("hides branding when disabled", () => {
+    preferences.visible = false;
+    render(<SidebarProviderBadge providerId="codex_cli" />);
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
 
-  it("overlays unread on an idle mark and ignores it while working", () => {
-    const { rerender } = render(<SidebarProviderBadge providerId="claude_code" unread />);
-
-    const idle = screen.getByRole("img", { name: /Unread/ });
-    expect(idle).toHaveAttribute("data-provider-mark", "unread");
-    expect(idle.querySelector(".bg-blue-500")).not.toBeNull();
-
-    rerender(<SidebarProviderBadge providerId="claude_code" liveStatus="agent" unread />);
-    const working = screen.getByRole("img", { name: /Working/ });
-    expect(working).toHaveAttribute("data-provider-mark", "working");
-    expect(working).not.toHaveAccessibleName(/Unread/);
+  it("does not invent a provider for an unconfigured conversation", () => {
+    render(<SidebarProviderBadge />);
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
 });

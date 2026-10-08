@@ -1,8 +1,10 @@
 use codex_app_server_sdk_rs::{CodexAppServerClient, CodexCommandKind};
 
-use super::app_server_spawn_options;
 use super::timeouts::{with_probe_timeout, PROBE_TIMEOUT};
-use crate::domain::agents::adapter::{RuntimeError, RuntimeSlashCommand, RuntimeSlashCommandKind};
+use super::{profile_runtime::app_server_spawn_options, CodexAdapter};
+use crate::domain::agents::adapter::{
+    AgentRuntimeAdapter, RuntimeError, RuntimeSlashCommand, RuntimeSlashCommandKind,
+};
 
 impl From<CodexCommandKind> for RuntimeSlashCommandKind {
     fn from(kind: CodexCommandKind) -> Self {
@@ -15,10 +17,19 @@ impl From<CodexCommandKind> for RuntimeSlashCommandKind {
 
 pub(super) async fn runtime_slash_commands(
     cwd: &str,
+    profile: Option<&str>,
 ) -> Result<Vec<RuntimeSlashCommand>, RuntimeError> {
-    let client = CodexAppServerClient::spawn_with_options(app_server_spawn_options(None))
-        .await
-        .map_err(RuntimeError::from)?;
+    let resolved = CodexAdapter
+        .resolve_profile(profile, std::path::Path::new(cwd))
+        .await?
+        .expect("Codex always resolves a default profile");
+    let client = CodexAppServerClient::spawn_with_options(app_server_spawn_options(
+        Some(resolved.env),
+        resolved.env_unset,
+        Some(cwd.into()),
+    ))
+    .await
+    .map_err(RuntimeError::from)?;
     let result = async {
         client.initialize_with_timeout(PROBE_TIMEOUT).await?;
         with_probe_timeout("Codex skills/list", client.list_commands_in_directory(cwd)).await

@@ -1,15 +1,9 @@
-/**
- * Block mutation helpers — applying mutations to block arrays,
- * building message patches, and extracting todos.
- */
-
 import type { AgentBlockData } from "@/components/AgentBlock";
 import { isFileChangeTool } from "@/lib/tool-adapter";
 import type { TodoItem } from "@/types/agent";
 import type { BlockMutation, ParserSignals, StreamingState } from "./ws-message-processing";
 import { parseTaskTodosFromBlocks, taskTodoMutationSeen } from "./ws-task-todos";
-import { latestValidJsonSnapshot, mergeToolContent } from "./ws-tool-content";
-
+import { applyBlockContentMutation } from "./ws-tool-content-mutations";
 export type ParsedTodo = TodoItem;
 type InternalRootMutation =
   | BlockMutation
@@ -157,7 +151,7 @@ export function applyMutations(
       rootAppends.push(mut.block);
       recordRootAppend(streamState, mut.block, boundedRootAppendIndex + rootAppends.length - 1);
     } else {
-      rootUpdates.push(mut);
+      pushCoalescedUpdate(rootUpdates, mut);
     }
   }
 
@@ -175,6 +169,7 @@ export function applyMutations(
     ...rootAppends,
     ...prevBlocks.slice(boundedRootAppendIndex),
   ];
+  let changed = rootAppends.length > 0;
 
   for (const mut of rootUpdates) {
     if (mut.action === "replace_parent" || mut.action === "replace_block") {
@@ -183,24 +178,45 @@ export function applyMutations(
         result[idx] = mut.block;
         recordRootRefChange(streamState, mut.block.id, mut.block);
         recordDerivedBlock(streamState, mut.block);
+        changed = true;
       }
       continue;
     }
     const idx = rootResultIndexById(result, streamState, mut.block.id);
     if (idx !== -1) {
-      const existing = { ...result[idx] };
-      const merged = mergeToolContent(existing, mut.block.content, mut.action);
-      existing.content = merged.text;
-      if (merged.truncated) existing.truncatedContent = true;
-      syncToolUseMap(streamState, existing);
+      const previous = result[idx];
+      const existing = { ...previous };
+      if (!applyBlockContentMutation(streamState, existing, mut)) {
+        const stream = streamState.structuredToolStreams.get(existing.id);
+        if (stream) stream.owner = previous;
+        continue;
+      }
       result[idx] = existing;
       recordRootRefChange(streamState, existing.id, existing);
-    } else {
-      applyChildUpdate(streamState, mut);
+      changed = true;
+    } else if (applyChildUpdate(streamState, mut)) {
+      changed = true;
     }
   }
 
-  return result;
+  return changed ? result : prevBlocks;
+}
+
+function pushCoalescedUpdate(updates: InternalRootMutation[], mutation: BlockMutation): void {
+  const previous = updates.at(-1);
+  if (
+    mutation.action === "update" &&
+    previous?.action === "update" &&
+    previous.block.id === mutation.block.id &&
+    previous.block.type === mutation.block.type
+  ) {
+    previous.block = {
+      ...previous.block,
+      content: previous.block.content + mutation.block.content,
+    };
+    return;
+  }
+  updates.push(mutation);
 }
 
 function rootResultIndexById(
@@ -274,6 +290,7 @@ export function rebuildDerivedAgentStreamState(
   streamState.rootBlockPosById = new Map();
   streamState.toolResultMap = new Map();
   streamState.toolUseIdToBlock = new Map();
+  const staleStreams = new Set(streamState.structuredToolStreams.keys());
   // Full rebuild replaces both derived structures; bump so any pending
   // before/after version comparison on the hot path sees the change.
   streamState.rootBlocksVersion += 1;
@@ -283,11 +300,19 @@ export function rebuildDerivedAgentStreamState(
       streamState.rootBlockPosById.set(block.id, streamState.rootBlocks.length);
       streamState.rootBlocks.push(block);
     }
-    recordDerivedBlock(streamState, block);
+    recordDerivedBlock(streamState, block, staleStreams);
   }
+  for (const blockId of staleStreams) streamState.structuredToolStreams.delete(blockId);
 }
 
-function recordDerivedBlock(streamState: StreamingState, block: AgentBlockData): void {
+function recordDerivedBlock(
+  streamState: StreamingState,
+  block: AgentBlockData,
+  staleStreams?: Set<string>,
+): void {
+  const structuredStream = streamState.structuredToolStreams.get(block.id);
+  if (block.type === "tool_call" && structuredStream?.owner === block)
+    staleStreams?.delete(block.id);
   if (block.type === "tool_call" && block.toolUseId) {
     streamState.toolUseIdToBlock.set(block.toolUseId, block);
   }
@@ -297,7 +322,7 @@ function recordDerivedBlock(streamState: StreamingState, block: AgentBlockData):
     streamState.toolResultMapVersion += 1;
   }
   for (const child of block.childBlocks ?? []) {
-    recordDerivedBlock(streamState, child);
+    recordDerivedBlock(streamState, child, staleStreams);
   }
 }
 
@@ -353,33 +378,23 @@ function recordRootRefChange(
   }
 }
 
-function applyChildUpdate(streamState: StreamingState, mut: BlockMutation): void {
+function applyChildUpdate(streamState: StreamingState, mut: BlockMutation): boolean {
   for (const parentBlock of streamState.toolUseIdToBlock.values()) {
     if (!parentBlock.childBlocks) continue;
     const childIdx = parentBlock.childBlocks.findIndex((b) => b.id === mut.block.id);
     if (childIdx === -1) continue;
-    const child = { ...parentBlock.childBlocks[childIdx] };
-    const merged = mergeToolContent(child, mut.block.content, mut.action);
-    child.content = merged.text;
-    if (merged.truncated) child.truncatedContent = true;
-    syncToolUseMap(streamState, child);
+    const previous = parentBlock.childBlocks[childIdx];
+    const child = { ...previous };
+    if (!applyBlockContentMutation(streamState, child, mut)) {
+      const stream = streamState.structuredToolStreams.get(child.id);
+      if (stream) stream.owner = previous;
+      return false;
+    }
     parentBlock.childBlocks[childIdx] = child;
     // The child lives in a root block's subtree; its content changed in place
     // without a root ref swap, so the rootBlocks snapshot must still refresh.
     streamState.rootBlocksVersion += 1;
-    break;
+    return true;
   }
-}
-
-function syncToolUseMap(streamState: StreamingState, block: AgentBlockData): void {
-  if (block.type !== "tool_call") return;
-  const latest = latestValidJsonSnapshot(block.content);
-  if (!latest) return;
-  block.toolArgs = latest;
-  if (!block.toolUseId) return;
-  const canonical = streamState.toolUseIdToBlock.get(block.toolUseId);
-  if (canonical && canonical !== block) {
-    canonical.toolArgs = block.toolArgs;
-    canonical.content = block.content;
-  }
+  return false;
 }

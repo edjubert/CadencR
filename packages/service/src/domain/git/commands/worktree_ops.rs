@@ -10,12 +10,14 @@ use crate::shared::worktree_paths::compute_worktree_path;
 
 /// List all worktrees for a repository.
 pub async fn list_worktrees(repo_path: &Path) -> Result<Vec<WorktreeInfo>, AppError> {
+    crate::shared::git_context::require_git_metadata(repo_path).await?;
     let stdout = run_git(&["worktree", "list", "--porcelain"], repo_path).await?;
     Ok(parse_worktree_list(&stdout))
 }
 
 /// List local branch short names with one read-only Git call.
 pub async fn list_local_branches(repo_path: &Path) -> Result<HashSet<String>, AppError> {
+    crate::shared::git_context::require_git_metadata(repo_path).await?;
     let output = run_git_background(
         &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
         repo_path,
@@ -218,6 +220,7 @@ fn parse_worktree_branches(output: &str) -> HashMap<String, std::path::PathBuf> 
 /// checks) rely on this distinction to refuse destructive operations
 /// when they can't verify the worktree's state.
 pub async fn has_uncommitted_changes(worktree_path: &Path) -> Result<bool, AppError> {
+    crate::shared::git_context::require_git_metadata(worktree_path).await?;
     let stdout = run_git_background(&["status", "--porcelain"], worktree_path).await?;
     Ok(!stdout.trim().is_empty())
 }
@@ -225,6 +228,19 @@ pub async fn has_uncommitted_changes(worktree_path: &Path) -> Result<bool, AppEr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn safety_probes_reject_plain_and_missing_repositories() {
+        let dir = tempfile::tempdir().unwrap();
+        for path in [dir.path().to_path_buf(), dir.path().join("missing")] {
+            assert!(list_worktrees(&path).await.is_err());
+            assert!(list_local_branches(&path).await.is_err());
+            assert!(has_uncommitted_changes(&path).await.is_err());
+            assert!(super::super::get_original_branch(&path, "feature/test")
+                .await
+                .is_err());
+        }
+    }
 
     #[test]
     fn test_parse_worktree_list_porcelain() {

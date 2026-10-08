@@ -1,4 +1,5 @@
 mod input;
+mod interrupt;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -6,10 +7,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use codex_app_server_sdk_rs::{AppServerEvent, CodexAppServerClient};
+use codex_app_server_sdk_rs::{AppServerEventReceiver, CodexAppServerClient};
 use serde_json::Value;
 use tempfile::TempPath;
-use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
+use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::warn;
 
 use super::event_loop::spawn_event_loop;
@@ -23,7 +24,7 @@ use super::responses::response_value;
 use super::session_permissions::{
     is_plan_approval_request_id, permission_kind_for_request_id, take_pending,
 };
-use super::timeouts::with_probe_timeout;
+use super::timeouts::{with_control_timeout, with_probe_timeout};
 use super::turn_start::{turn_start_params, TurnStartOptions};
 use crate::domain::agents::adapter::{
     AgentRuntimeSession, RuntimeAccessMode, RuntimeError, RuntimeEvent, RuntimeMcpServerStatus,
@@ -37,13 +38,16 @@ pub(super) struct CodexSession {
     active_turn_id: Arc<RwLock<Option<String>>>,
     /// Interrupt fallback when `active_turn_id` is None — see `event_turn_state`.
     last_root_turn_id: Arc<RwLock<Option<String>>>,
+    child_turn_ids: Arc<RwLock<HashMap<String, Option<String>>>>,
     model: Arc<RwLock<Option<String>>>,
     effort: Arc<RwLock<Option<String>>>,
-    fast_mode: Arc<AtomicBool>,
+    effective_model: Arc<RwLock<Option<String>>>,
+    effective_effort: Arc<RwLock<Option<String>>>,
+    fast_mode: Arc<RwLock<Option<bool>>>,
     permission_mode: Arc<RwLock<Option<RuntimePermissionMode>>>,
     access_mode: Arc<RwLock<Option<RuntimeAccessMode>>>,
     cwd: PathBuf,
-    event_rx: Option<broadcast::Receiver<AppServerEvent>>,
+    event_rx: Option<AppServerEventReceiver>,
     local_rx: Option<mpsc::UnboundedReceiver<Result<RuntimeEvent, RuntimeError>>>,
     local_tx: mpsc::UnboundedSender<Result<RuntimeEvent, RuntimeError>>,
     pending_requests: Arc<Mutex<HashMap<String, PendingCodexRequest>>>,
@@ -57,7 +61,9 @@ pub(super) struct CodexSession {
 pub(super) struct CodexSessionOptions {
     pub(super) model: Option<String>,
     pub(super) effort: Option<String>,
-    pub(super) fast_mode: bool,
+    pub(super) effective_model: Option<String>,
+    pub(super) effective_effort: Option<String>,
+    pub(super) fast_mode: Option<bool>,
     pub(super) permission_mode: Option<RuntimePermissionMode>,
     pub(super) access_mode: Option<RuntimeAccessMode>,
     pub(super) cwd: PathBuf,
@@ -69,7 +75,7 @@ impl CodexSession {
     pub(super) fn new(
         client: CodexAppServerClient,
         thread_id: String,
-        event_rx: broadcast::Receiver<AppServerEvent>,
+        event_rx: AppServerEventReceiver,
         options: CodexSessionOptions,
     ) -> Self {
         let (local_tx, local_rx) = mpsc::unbounded_channel();
@@ -78,9 +84,12 @@ impl CodexSession {
             thread_id,
             active_turn_id: Arc::new(RwLock::new(None)),
             last_root_turn_id: Arc::new(RwLock::new(None)),
+            child_turn_ids: Arc::new(RwLock::new(HashMap::new())),
             model: Arc::new(RwLock::new(options.model)),
             effort: Arc::new(RwLock::new(options.effort)),
-            fast_mode: Arc::new(AtomicBool::new(options.fast_mode)),
+            effective_model: Arc::new(RwLock::new(options.effective_model)),
+            effective_effort: Arc::new(RwLock::new(options.effective_effort)),
+            fast_mode: Arc::new(RwLock::new(options.fast_mode)),
             permission_mode: Arc::new(RwLock::new(options.permission_mode)),
             access_mode: Arc::new(RwLock::new(options.access_mode)),
             cwd: options.cwd,
@@ -99,7 +108,7 @@ impl CodexSession {
     pub(super) async fn send_init_event(&self) {
         let event = init_event(
             &self.thread_id,
-            self.model.read().await.clone(),
+            self.effective_model.read().await.clone(),
             self.context_window,
             self.mcp_servers.read().await.clone(),
         );
@@ -118,7 +127,9 @@ impl CodexSession {
     ) -> Result<(), RuntimeError> {
         let model = self.model.read().await.clone();
         let effort = self.effort.read().await.clone();
-        let fast_mode = self.fast_mode.load(Ordering::Relaxed);
+        let collaboration_model = self.effective_model.read().await.clone();
+        let collaboration_effort = self.effective_effort.read().await.clone();
+        let fast_mode = *self.fast_mode.read().await;
         let permission_mode = self.permission_mode.read().await.clone();
         let access_mode = self.access_mode.read().await.clone();
         let mut params = turn_start_params(
@@ -130,6 +141,8 @@ impl CodexSession {
                 access_mode: access_mode.as_ref(),
                 model,
                 effort,
+                collaboration_model,
+                collaboration_effort,
                 fast_mode,
             },
         );
@@ -179,8 +192,9 @@ impl AgentRuntimeSession for CodexSession {
                 active_turn_id: Arc::clone(&self.active_turn_id),
                 last_root_turn_id: Arc::clone(&self.last_root_turn_id),
                 root_thread_id: self.thread_id.clone(),
+                child_turn_ids: Arc::clone(&self.child_turn_ids),
             },
-            self.model.clone(),
+            self.effective_model.clone(),
             Arc::clone(&self.closing),
         );
         spawn_local_forwarder(local_rx, tx);
@@ -251,25 +265,29 @@ impl AgentRuntimeSession for CodexSession {
     }
 
     async fn interrupt(&self) -> Result<(), RuntimeError> {
-        // Live turn: surface RPC failures so the UI shows Stop failed.
-        if let Some(turn_id) = self.active_turn_id.read().await.clone() {
-            return self
-                .client
-                .turn_interrupt(&self.thread_id, &turn_id)
-                .await
-                .map_err(RuntimeError::from);
+        // Snapshot before awaiting RPCs; completion events keep updating the tracker.
+        let children = self.child_turn_ids.read().await.clone();
+        let root_turn = self.active_turn_id.read().await.clone();
+        let root_fallback = self.last_root_turn_id.read().await.clone();
+        let mut targets = Vec::with_capacity(children.len() + 1);
+        let fallback = root_turn.is_none();
+        if let Some(turn) = root_turn.or(root_fallback) {
+            targets.push(interrupt::InterruptTarget {
+                thread: self.thread_id.clone(),
+                turn: Some(turn),
+                fallback,
+            });
         }
-        // Fallback (race between Stop and the next turn/started). Errors
-        // are treated as success — nothing to interrupt is the user's goal.
-        let Some(turn_id) = self.last_root_turn_id.read().await.clone() else {
-            return Ok(());
-        };
-        let _ = with_probe_timeout(
-            "Codex turn/interrupt (fallback)",
-            self.client.turn_interrupt(&self.thread_id, &turn_id),
-        )
-        .await;
-        Ok(())
+        targets.extend(
+            children
+                .into_iter()
+                .map(|(thread, turn)| interrupt::InterruptTarget {
+                    thread,
+                    turn,
+                    fallback: false,
+                }),
+        );
+        interrupt::interrupt_turns(&self.client, targets).await
     }
 
     async fn compact(&self) -> Result<(), RuntimeError> {
@@ -279,9 +297,9 @@ impl AgentRuntimeSession for CodexSession {
             .map_err(RuntimeError::from)
     }
 
-    async fn close(&mut self) {
+    async fn close(&mut self) -> Result<(), RuntimeError> {
         self.closing.store(true, Ordering::SeqCst);
-        let _ = with_probe_timeout(
+        let unsubscribe = with_control_timeout(
             "Codex thread/unsubscribe",
             self.client.thread_unsubscribe(&self.thread_id),
         )
@@ -289,10 +307,16 @@ impl AgentRuntimeSession for CodexSession {
         self.temp_files.lock().await.clear();
         self.pending_prompt_receipts.clear();
         self.client.shutdown().await;
+        unsubscribe.map(|_| ()).map_err(|error| {
+            RuntimeError::new(format!(
+                "Codex session closed, but thread/unsubscribe failed: {error}"
+            ))
+        })
     }
 
     async fn set_model(&self, model: &str) -> Result<(), RuntimeError> {
         *self.model.write().await = Some(model.to_string());
+        *self.effective_model.write().await = Some(model.to_string());
         Ok(())
     }
 
@@ -311,11 +335,12 @@ impl AgentRuntimeSession for CodexSession {
 
     async fn set_thinking_effort(&self, effort: Option<String>) -> Result<(), RuntimeError> {
         *self.effort.write().await = effort;
+        *self.effective_effort.write().await = self.effort.read().await.clone();
         Ok(())
     }
 
     async fn set_fast_mode(&self, enabled: bool) -> Result<(), RuntimeError> {
-        self.fast_mode.store(enabled, Ordering::Relaxed);
+        *self.fast_mode.write().await = Some(enabled);
         Ok(())
     }
 

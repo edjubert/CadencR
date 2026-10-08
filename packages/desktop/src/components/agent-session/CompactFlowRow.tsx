@@ -7,12 +7,18 @@ interface CompactFlowRowProps {
   basePath?: string;
 }
 
+function sameCompactFlowRow(previous: CompactFlowRowProps, next: CompactFlowRowProps): boolean {
+  if (previous.basePath !== next.basePath || previous.blocks.length !== next.blocks.length) {
+    return false;
+  }
+  return previous.blocks.every((block, index) => block === next.blocks[index]);
+}
+
 /**
- * Renders a group of consecutive non-text blocks as a flex-wrap of tiles
- * (the "Compact flow" verbosity mode). Tiles are content-sized — Bash shows
- * a command head, file-change tools show a numstat, others show the tool
- * name — so a row can naturally hold a different number of tiles depending
- * on content length.
+ * Renders one bounded chunk of consecutive non-text blocks as a flex-wrap of
+ * tiles (the "Compact flow" verbosity mode). `buildDisplayItems` owns the
+ * chunk bound so the outer stream virtualizer can discard off-screen chunks.
+ * Tiles remain content-sized, preserving the existing visual flow.
  */
 export const CompactFlowRow = memo(function CompactFlowRow({
   blocks,
@@ -29,4 +35,4 @@ export const CompactFlowRow = memo(function CompactFlowRow({
       ))}
     </div>
   );
-});
+}, sameCompactFlowRow);

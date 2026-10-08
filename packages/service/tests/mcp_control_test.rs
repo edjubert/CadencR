@@ -7,7 +7,7 @@ use cadencr_service::domain::settings_store::global_write_content;
 use tower::ServiceExt;
 
 use support::mcp_control::{
-    latest_codex_permission_mode, project_cross_project_send_message_request,
+    fake_codex_project, latest_codex_permission_mode, project_cross_project_send_message_request,
     seed_cross_project_send_target, seed_recent_send_audits, seed_send_target_session,
     seed_spawn_chain, seeded_control_pool, send_message_request, send_message_request_with_link,
     spawn_request, spawn_request_from_body, spawn_request_with_link,
@@ -190,6 +190,7 @@ async fn project_spawn_session_persists_explicit_thinking_level() {
 async fn project_spawn_session_inherits_configured_codex_permission_without_override() {
     let _settings_guard = SETTINGS_TEST_LOCK.lock().await;
     let pool = seeded_control_pool().await;
+    let _codex = fake_codex_project(&pool).await;
     global_write_content(r#"{"codex_permission_mode":"autoReview"}"#)
         .await
         .unwrap();
@@ -204,6 +205,7 @@ async fn project_spawn_session_inherits_configured_codex_permission_without_over
             "initial_message": "Please investigate.",
             "branch": { "mode": "none" },
             "provider": "codex_cli",
+            "profile": "default",
             "permission_mode": "default",
             "source_note": "delegated by project MCP"
         })))
@@ -218,6 +220,7 @@ async fn project_spawn_session_inherits_configured_codex_permission_without_over
 async fn project_spawn_session_explicit_codex_permission_override_wins() {
     let _settings_guard = SETTINGS_TEST_LOCK.lock().await;
     let pool = seeded_control_pool().await;
+    let _codex = fake_codex_project(&pool).await;
     global_write_content(r#"{"codex_permission_mode":"autoReview"}"#)
         .await
         .unwrap();
@@ -231,6 +234,7 @@ async fn project_spawn_session_explicit_codex_permission_override_wins() {
             "title": "Codex child",
             "branch": { "mode": "none" },
             "provider": "codex_cli",
+            "profile": "default",
             "permission_mode": "default",
             "codex_permission_mode": "fullAccess",
             "source_note": "delegated by project MCP"

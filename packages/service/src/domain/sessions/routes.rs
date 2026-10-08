@@ -15,6 +15,8 @@ use crate::error::AppError;
 pub struct AgentStateParams {
     /// JSON-encoded map of session_id -> last_message_id for incremental fetching
     pub after: Option<String>,
+    /// JSON-encoded map of session_id -> last observed mutable-content revision.
+    pub after_revisions: Option<String>,
     /// Max number of messages per session for full loads (default: 100, max: 200)
     pub limit: Option<i64>,
     /// JSON-encoded map of session_id -> before_message_id for loading older messages
@@ -82,12 +84,17 @@ pub async fn get_feature_agent_state_handler(
         .before
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok());
+    let after_revision_map: Option<HashMap<i64, i64>> = params
+        .after_revisions
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok());
     let limit = normalize_agent_message_limit(params.limit);
     Ok(Json(
         repository::get_feature_agent_state(
             &state.read_pool,
             feature_id,
             after_map,
+            after_revision_map,
             Some(limit),
             before_map,
         )

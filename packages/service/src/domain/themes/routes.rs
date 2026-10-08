@@ -6,7 +6,8 @@ use crate::app_state::AppState;
 use crate::error::AppError;
 
 use super::models::{
-    CreateThemeRequest, DeleteThemeResponse, UserTheme, WriteThemeRequest, WriteThemeResponse,
+    CreateThemeRequest, CreateThemeResponse, DeleteThemeResponse, UserTheme, WriteThemeRequest,
+    WriteThemeResponse,
 };
 use super::store;
 use super::workspace::{self, ThemeWorkspace};
@@ -29,21 +30,40 @@ pub async fn list_themes_handler() -> Result<Json<Vec<UserTheme>>, AppError> {
     Ok(Json(store::list().await?))
 }
 
-#[utoipa::path(post, path = "/api/themes", request_body = CreateThemeRequest, responses((status = 200, body = UserTheme)))]
+#[utoipa::path(post, path = "/api/themes", request_body = CreateThemeRequest, responses((status = 200, body = CreateThemeResponse)))]
 pub async fn create_theme_handler(
+    State(state): State<AppState>,
     Json(body): Json<CreateThemeRequest>,
-) -> Result<Json<UserTheme>, AppError> {
-    Ok(Json(
-        store::create()
-            .label(&body.label)
-            .appearance(body.appearance)
-            .css_vars(body.css_vars)
-            .xterm(body.xterm)
-            .chrome(body.chrome)
-            .maybe_copy_assets_from(body.copy_assets_from.as_deref())
-            .call()
-            .await?,
-    ))
+) -> Result<Json<CreateThemeResponse>, AppError> {
+    Ok(Json(create_theme(&state.write_pool, body).await?))
+}
+
+async fn create_theme(
+    pool: &sqlx::SqlitePool,
+    body: CreateThemeRequest,
+) -> Result<CreateThemeResponse, AppError> {
+    let theme = store::create()
+        .label(&body.label)
+        .appearance(body.appearance)
+        .css_vars(body.css_vars)
+        .xterm(body.xterm)
+        .chrome(body.chrome)
+        .maybe_copy_assets_from(body.copy_assets_from.as_deref())
+        .call()
+        .await?;
+    let workspace = workspace::ensure(pool, &theme.id)
+        .await
+        .map_err(|error| {
+            AppError::coded(
+                axum::http::StatusCode::CONFLICT,
+                "THEME_PROJECT_SETUP_FAILED",
+                format!(
+                    "theme `{}` was created, but its project could not be prepared: {error}. Retry by opening the theme or POST /api/themes/{}/workspace",
+                    theme.id, theme.id
+                ),
+            )
+        })?;
+    Ok(CreateThemeResponse { theme, workspace })
 }
 
 #[utoipa::path(
@@ -94,4 +114,93 @@ pub async fn theme_workspace_handler(
     Path(id): Path<String>,
 ) -> Result<Json<ThemeWorkspace>, AppError> {
     Ok(Json(workspace::ensure(&state.write_pool, &id).await?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::themes::models::ThemeAppearance;
+    use crate::domain::themes::test_support::{dracula_css_vars, dracula_xterm};
+
+    fn create_request(label: &str) -> CreateThemeRequest {
+        CreateThemeRequest {
+            label: label.into(),
+            appearance: ThemeAppearance::Dark,
+            css_vars: dracula_css_vars(),
+            xterm: dracula_xterm(),
+            chrome: Default::default(),
+            copy_assets_from: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn create_response_includes_a_marked_ready_workspace() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        crate::shared::migrate::run_migrations(
+            &crate::shared::migrate::MigrationContext::pool_only(&pool),
+        )
+        .await
+        .unwrap();
+        let response = create_theme(&pool, create_request("2026 Route Theme"))
+            .await
+            .expect("creates complete authoring workspace");
+
+        let marker: (String, Option<String>, Option<String>) =
+            sqlx::query_as("SELECT kind, authoring_target, plugin_id FROM projects WHERE id = ?")
+                .bind(response.workspace.project_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(response.theme.id, "2026-route-theme");
+        assert_eq!(
+            marker,
+            ("user".into(), Some("theme".into()), Some(response.theme.id))
+        );
+    }
+
+    #[tokio::test]
+    async fn retained_theme_can_retry_project_setup_after_creation_failure() {
+        let failed_pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        failed_pool.close().await;
+
+        let error = create_theme(&failed_pool, create_request("Retained Route Theme"))
+            .await
+            .expect_err("closed pool must fail project setup after retaining the theme");
+        assert!(matches!(
+            error,
+            AppError::Coded {
+                code: "THEME_PROJECT_SETUP_FAILED",
+                ..
+            }
+        ));
+        let retained = store::get("retained-route-theme")
+            .await
+            .expect("theme remains available for retry");
+
+        let healthy_pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        crate::shared::migrate::run_migrations(
+            &crate::shared::migrate::MigrationContext::pool_only(&healthy_pool),
+        )
+        .await
+        .unwrap();
+        let first = workspace::ensure(&healthy_pool, &retained.id)
+            .await
+            .expect("retained theme project setup retries successfully");
+        let second = workspace::ensure(&healthy_pool, &retained.id)
+            .await
+            .expect("project setup retry is idempotent");
+
+        assert_eq!(first.project_id, second.project_id);
+        assert_eq!(first.feature_id, second.feature_id);
+        let marker: (String, Option<String>, Option<String>) =
+            sqlx::query_as("SELECT kind, authoring_target, plugin_id FROM projects WHERE id = ?")
+                .bind(first.project_id)
+                .fetch_one(&healthy_pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            marker,
+            ("user".into(), Some("theme".into()), Some(retained.id))
+        );
+    }
 }

@@ -1,5 +1,5 @@
 import { useLayoutEffect } from "react";
-import { desktopBridge } from "@/lib/desktop-bridge";
+import { desktopBridge, isDesktopShell } from "@/lib/desktop-bridge";
 
 /**
  * The embedded browser is a native `WebContentsView` that always paints above
@@ -24,7 +24,7 @@ function sync(): void {
 /** Suppress the native browser view for as long as the caller is mounted. */
 export function useSuppressBrowserView(active = true): void {
   useLayoutEffect(() => {
-    if (!active) return;
+    if (!active || !isDesktopShell()) return;
     openCount += 1;
     sync();
     return () => {

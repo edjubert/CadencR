@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use super::models::{Project, ProjectModelSettings, ProjectProviderSettings, ProjectSetting};
+use super::models::{
+    Project, ProjectAuthoringTarget, ProjectModelSettings, ProjectProviderSettings, ProjectSetting,
+};
 use super::repository;
 use crate::error::AppError;
 use crate::shared::slug::slugify;
@@ -62,6 +64,40 @@ pub async fn create_project(
 ) -> Result<Project, AppError> {
     let (clean_name, canonical_path) = validate_new_project(name, path)?;
     repository::create_project(pool, &clean_name, &canonical_path).await
+}
+
+/// Create a first-class user project that owns one locally-authored plugin.
+///
+/// This is intentionally separate from the public ordinary-project API so a
+/// caller cannot forge authoring provenance in `CreateProjectRequest`.
+#[bon::builder]
+pub async fn create_author_project(
+    pool: &SqlitePool,
+    name: &str,
+    path: &str,
+    authoring_target: ProjectAuthoringTarget,
+    plugin_id: &str,
+) -> Result<Project, AppError> {
+    let (clean_name, canonical_path) = validate_new_project(name, path)?;
+    validate_plugin_id(plugin_id)?;
+    repository::create_author_project()
+        .pool(pool)
+        .name(&clean_name)
+        .path(&canonical_path)
+        .authoring_target(authoring_target)
+        .plugin_id(plugin_id)
+        .call()
+        .await
+}
+
+fn validate_plugin_id(plugin_id: &str) -> Result<(), AppError> {
+    if !plugin_id.is_empty() && slugify(plugin_id) == plugin_id {
+        Ok(())
+    } else {
+        Err(AppError::BadRequest(
+            "plugin id must be a stable slug".into(),
+        ))
+    }
 }
 
 /// Reject names with path-y shapes (`..`, `/`, leading `.`) and canonicalize
@@ -167,6 +203,97 @@ pub async fn set_project_provider_setting(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn migrated_pool() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        crate::shared::migrate::run_migrations(
+            &crate::shared::migrate::MigrationContext::pool_only(&pool),
+        )
+        .await
+        .unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn creates_tagged_author_project_as_ordinary_user_project() {
+        let pool = migrated_pool().await;
+        let directory = tempfile::tempdir().unwrap();
+        let project = create_author_project()
+            .pool(&pool)
+            .name("Provider: Acme")
+            .path(directory.path().to_str().unwrap())
+            .authoring_target(ProjectAuthoringTarget::Provider)
+            .plugin_id("acme-provider")
+            .call()
+            .await
+            .unwrap();
+
+        assert_eq!(
+            project.authoring_target,
+            Some(ProjectAuthoringTarget::Provider)
+        );
+        assert_eq!(project.plugin_id.as_deref(), Some("acme-provider"));
+        let kind: String = sqlx::query_scalar("SELECT kind FROM projects WHERE id = ?")
+            .bind(project.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(kind, "user");
+        let listed = list_projects(&pool).await.unwrap();
+        assert_eq!(listed[0].authoring_target, project.authoring_target);
+        assert_eq!(listed[0].plugin_id, project.plugin_id);
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_or_conflicting_authoring_identity() {
+        let pool = migrated_pool().await;
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let invalid = create_author_project()
+            .pool(&pool)
+            .name("Invalid")
+            .path(first.path().to_str().unwrap())
+            .authoring_target(ProjectAuthoringTarget::Theme)
+            .plugin_id("Not Stable")
+            .call()
+            .await;
+        assert!(matches!(invalid, Err(AppError::BadRequest(_))));
+
+        create_author_project()
+            .pool(&pool)
+            .name("Theme: Acme")
+            .path(first.path().to_str().unwrap())
+            .authoring_target(ProjectAuthoringTarget::Theme)
+            .plugin_id("acme")
+            .call()
+            .await
+            .unwrap();
+        let duplicate = create_author_project()
+            .pool(&pool)
+            .name("Theme: Acme Again")
+            .path(second.path().to_str().unwrap())
+            .authoring_target(ProjectAuthoringTarget::Theme)
+            .plugin_id("acme")
+            .call()
+            .await;
+        assert!(duplicate.is_err());
+    }
+
+    #[tokio::test]
+    async fn accepts_numeric_leading_theme_slug() {
+        let pool = migrated_pool().await;
+        let directory = tempfile::tempdir().unwrap();
+        let project = create_author_project()
+            .pool(&pool)
+            .name("Theme: 2026")
+            .path(directory.path().to_str().unwrap())
+            .authoring_target(ProjectAuthoringTarget::Theme)
+            .plugin_id("2026-theme")
+            .call()
+            .await
+            .unwrap();
+        assert_eq!(project.plugin_id.as_deref(), Some("2026-theme"));
+    }
 
     #[test]
     fn validate_rejects_parent_dir_name() {

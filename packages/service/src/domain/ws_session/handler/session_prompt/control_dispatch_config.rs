@@ -2,15 +2,14 @@ use std::sync::Arc;
 
 use crate::app_state::AppState;
 use crate::domain::agents::adapter::RuntimeSpawnConfig;
-use crate::domain::agents::{default_provider_id, resolve_effective_provider};
+use crate::domain::agents::permission_modes::effective_permission_mode;
+use crate::domain::agents::{default_provider_id, resolve_effective_provider, runtime_adapter};
 use crate::domain::settings;
 use crate::domain::workflow::worktree;
 use crate::domain::ws_session::persistence::SessionRow;
 use crate::error::AppError;
 
-use super::super::{
-    default_permission_mode, parse_permission_mode, QueryState, SdkHandle, SessionConfig,
-};
+use super::super::{QueryState, SdkHandle, SessionConfig};
 
 pub(super) async fn build_pending_handle(
     app_state: &AppState,
@@ -24,7 +23,7 @@ pub(super) async fn build_pending_handle(
     let provider = effective_provider(app_state, project_id, &runtime_cwd, &row).await;
     persist_resolved_provider(app_state, &row, &provider).await?;
     let (options, claude_profile) =
-        runtime_options(app_state, project_id, runtime_cwd, &provider, &row).await;
+        runtime_options(app_state, project_id, runtime_cwd, &provider, &row).await?;
     let config = SessionConfig::from_runtime(&options, claude_profile.clone());
     Ok(SdkHandle {
         state: QueryState::Pending(options),
@@ -56,13 +55,14 @@ async fn persist_resolved_provider(
     if row.runtime_provider.is_some() {
         return Ok(());
     }
-    crate::domain::ws_session::persistence::WsSessionPersistence::update_runtime_provider_static(
-        &app_state.write_pool,
-        row.id,
-        provider,
-        false,
-    )
-    .await?;
+    crate::domain::ws_session::persistence::WsSessionPersistence::update_runtime_selection_static()
+        .pool(&app_state.write_pool)
+        .session_id(row.id)
+        .runtime_provider(provider)
+        .maybe_model(row.model.as_deref())
+        .clear_thinking_effort(false)
+        .call()
+        .await?;
     Ok(())
 }
 
@@ -99,33 +99,63 @@ async fn runtime_options(
     cwd: std::path::PathBuf,
     provider: &str,
     row: &SessionRow,
-) -> (RuntimeSpawnConfig, Option<String>) {
+) -> Result<(RuntimeSpawnConfig, Option<String>), AppError> {
     let mut options = RuntimeSpawnConfig {
         cwd,
         model: row.model.clone(),
         thinking_effort: row.thinking_effort.clone(),
         fast_mode: row.fast_mode,
-        permission_mode: Some(
-            row.permission_mode
-                .as_deref()
-                .map(parse_permission_mode)
-                .unwrap_or_else(|| default_permission_mode(provider)),
-        ),
+        permission_mode: effective_permission_mode(provider, row.permission_mode.as_deref()),
         resume_session_id: row.runtime_session_id.clone(),
         ..Default::default()
     };
+    options.overrides = crate::domain::agents::runtime_overrides::restore(
+        crate::domain::agents::runtime_overrides::RestoreOptions::builder()
+            .provider(provider)
+            .maybe_runtime_session_id(row.runtime_session_id.as_deref())
+            .maybe_stored_json(row.runtime_overrides.as_deref())
+            .maybe_model(row.model.as_deref())
+            .maybe_thinking_effort(row.thinking_effort.as_deref())
+            .fast_mode(row.fast_mode)
+            .build(),
+    )
+    .map_err(AppError::BadRequest)?;
+    let Some(adapter) = runtime_adapter(provider) else {
+        // Keep the missing provider for resolve_adapter_or_report: its canonical
+        // dispatch rejection pauses the session and closes the failed receipt.
+        // Returning options here does not authorize a runtime or choose a fallback.
+        return Ok((options, None));
+    };
+    if row.runtime_overrides.is_none() && adapter.supports_profile_config_inheritance() {
+        crate::domain::ws_session::persistence::WsSessionPersistence::update_runtime_overrides_static(
+            &app_state.write_pool,
+            row.id,
+            &options.overrides,
+        )
+        .await
+        .map_err(|error| AppError::DatabaseError(error.to_string()))?;
+    }
     options.access_mode = runtime_access_mode(app_state, provider, row).await;
-    let claude_profile = super::super::session_runtime_config::apply_claude_settings(
+    let selected_profile = super::super::session_runtime_config::persisted_profile_selection(
+        provider,
+        row.profile.as_deref(),
+        row.runtime_session_id.as_deref(),
+        &options.cwd,
+    )
+    .await
+    .map_err(AppError::BadRequest)?;
+    let claude_profile = super::super::session_runtime_config::apply_provider_settings(
         app_state,
         project_id,
         row.feature_id,
         row.id,
         provider,
-        row.profile.as_deref(),
+        selected_profile.as_deref(),
         &mut options,
     )
-    .await;
-    (options, claude_profile)
+    .await
+    .map_err(AppError::BadRequest)?;
+    Ok((options, claude_profile))
 }
 
 async fn runtime_access_mode(
@@ -145,8 +175,98 @@ async fn runtime_access_mode(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::path::PathBuf;
 
     use super::*;
+
+    #[tokio::test]
+    async fn missing_adapter_defers_rejection_to_dispatch_but_validates_overrides() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let app_state = AppState::with_pool(pool);
+        let mut row = SessionRow {
+            id: 1,
+            feature_id: 1,
+            runtime_provider: Some("missing_provider".into()),
+            runtime_session_id: Some("existing-runtime".into()),
+            model: Some("existing-model".into()),
+            profile: Some("existing-profile".into()),
+            permission_mode: None,
+            codex_permission_mode: None,
+            status: "completed".into(),
+            pending_permission: None,
+            pending_questions: None,
+            input_tokens: None,
+            output_tokens: None,
+            context_window: None,
+            thinking_effort: Some("high".into()),
+            fast_mode: false,
+            runtime_overrides: None,
+        };
+        for stored_json in [None, Some(r#"{"model":"explicit-model"}"#)] {
+            row.runtime_overrides = stored_json.map(str::to_owned);
+            let (options, profile) = runtime_options(
+                &app_state,
+                1,
+                PathBuf::from("/tmp"),
+                "missing_provider",
+                &row,
+            )
+            .await
+            .expect("missing adapters are rejected by the ordinary dispatch cleanup");
+            assert_eq!(options.model.as_deref(), Some("existing-model"));
+            assert_eq!(
+                options.resume_session_id.as_deref(),
+                Some("existing-runtime")
+            );
+            assert_eq!(options.thinking_effort.as_deref(), Some("high"));
+            assert!(profile.is_none());
+            assert!(options.env.is_none());
+        }
+
+        row.runtime_overrides = Some("{".into());
+        let error = runtime_options(
+            &app_state,
+            1,
+            PathBuf::from("/tmp"),
+            "missing_provider",
+            &row,
+        )
+        .await
+        .err()
+        .expect("malformed provenance must still fail closed");
+        assert!(matches!(error, AppError::BadRequest(ref message)
+            if message.contains("invalid persisted runtime overrides")));
+    }
+
+    #[tokio::test]
+    async fn reconstructed_handle_drops_an_unsupported_permission_mode() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let app_state = AppState::with_pool(pool);
+        let row = SessionRow {
+            id: 1,
+            feature_id: 1,
+            runtime_provider: Some("cursor".to_string()),
+            runtime_session_id: None,
+            model: None,
+            profile: None,
+            permission_mode: Some("acceptEdits".to_string()),
+            codex_permission_mode: None,
+            status: "paused".to_string(),
+            pending_permission: None,
+            pending_questions: None,
+            input_tokens: None,
+            output_tokens: None,
+            context_window: None,
+            thinking_effort: None,
+            fast_mode: false,
+            runtime_overrides: None,
+        };
+
+        let (options, _) = runtime_options(&app_state, 1, PathBuf::from("/tmp"), "cursor", &row)
+            .await
+            .unwrap();
+        assert!(options.permission_mode.is_none());
+    }
 
     #[tokio::test]
     async fn reconstructed_claude_handle_restores_profile_environment() {
@@ -191,6 +311,7 @@ mod tests {
             context_window: None,
             thinking_effort: None,
             fast_mode: false,
+            runtime_overrides: None,
         };
 
         let handle = build_pending_handle(&app_state, 1, row).await.unwrap();

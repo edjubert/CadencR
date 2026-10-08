@@ -1,3 +1,4 @@
+import { PLATFORM_IS_MAC } from "@/lib/shortcuts/format";
 import {
   createContext,
   useContext,
@@ -58,7 +59,10 @@ interface ShortcutHintsApi {
 const ShortcutHintsContext = createContext<ShortcutHintsApi | null>(null);
 
 function shortcutIndex(event: KeyboardEvent, keys: readonly string[]): number | null {
-  if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return null;
+  const modifier = PLATFORM_IS_MAC
+    ? event.metaKey && !event.ctrlKey
+    : event.ctrlKey && !event.metaKey;
+  if (!modifier || event.altKey || event.shiftKey) return null;
   const index = keys.indexOf(event.key);
   return index >= 0 ? index : null;
 }
@@ -176,7 +180,7 @@ function useShortcutHintListeners({
         hideHints();
         return;
       }
-      if ((event.key === "Meta" || event.metaKey) && !hintsVisibleRef.current) {
+      if ((PLATFORM_IS_MAC ? event.metaKey : event.ctrlKey) && !hintsVisibleRef.current) {
         showHints();
         scheduleStaleHide();
       }
@@ -189,7 +193,7 @@ function useShortcutHintListeners({
       requestAnimationFrame(refreshHints);
     };
     const handleKeyUp = (event: KeyboardEvent): void => {
-      if (event.key === "Meta") hideHints();
+      if (event.key === (PLATFORM_IS_MAC ? "Meta" : "Control")) hideHints();
     };
     const handleWindowFocusChange = (): void => hideHints();
     window.addEventListener("keydown", handleKeyDown, true);
@@ -281,5 +285,5 @@ export function useNavShortcutHint<TNav extends HTMLElement = HTMLElement>(): {
     });
   }, [api]);
 
-  return { navRef, badgeRef };
+  return useMemo(() => ({ navRef, badgeRef }), []);
 }

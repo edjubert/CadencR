@@ -1,114 +1,100 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@/test-utils";
 import type { Feature } from "@/api/generated";
+import { ShortcutHintsProvider } from "@/hooks/useNavShortcutHints";
+import { PLATFORM_IS_MAC } from "@/lib/shortcuts/format";
+import { PinnedConversationRow } from "./PinnedConversationRow";
 
-const mocks = vi.hoisted(() => ({
-  title: { title: null as string | null, isAutoNaming: false },
-  status: "idle" as "idle" | "agent" | "question",
-  isUnread: false,
-  prefetch: vi.fn(),
-}));
+const mocks = vi.hoisted(() => ({ title: { title: null as string | null, isAutoNaming: false } }));
+beforeEach(() => {
+  mocks.title = { title: null, isAutoNaming: false };
+});
 
+vi.mock("@/components/ProjectBadge", () => ({ ProjectBadge: () => <span>Project</span> }));
+vi.mock("@/hooks/useFeaturePrefetch", () => ({ useFeaturePrefetch: () => vi.fn() }));
 vi.mock("@/hooks/useFeatureTitle", () => ({
   useFeatureTitle: () => mocks.title,
 }));
-
-vi.mock("@/stores/session-status-selectors", () => ({
-  useFeatureStatus: () => ({ status: mocks.status, kind: null }),
+vi.mock("@/components/ShortcutTooltip", () => ({
+  ShortcutTooltip: ({ children }: { children: unknown }) => children,
 }));
 
-vi.mock("@/stores/unread-store", () => ({
-  useIsFeatureUnread: () => mocks.isUnread,
-}));
+const feature = {
+  id: 42,
+  project_id: 1,
+  title: "Pinned conversation",
+  runtime_provider: "codex_cli",
+} as Feature;
 
-vi.mock("@/hooks/useFeaturePrefetch", () => ({
-  useFeaturePrefetch: () => mocks.prefetch,
-}));
+describe("pinned sidebar identity", () => {
+  it("uses the trailing logo/number slot and the same modifier navigation", () => {
+    const onNavigate = vi.fn();
+    render(
+      <ShortcutHintsProvider enabled>
+        <PinnedConversationRow
+          feature={feature}
+          activeFeatureId={null}
+          onNavigate={onNavigate}
+          onUnpin={vi.fn()}
+        />
+      </ShortcutHintsProvider>,
+    );
+    const row = screen.getByRole("button", { name: /Pinned conversation/ });
+    const titleLine = row.querySelector("[data-feature-title-line]");
+    expect(titleLine?.lastElementChild).toHaveAttribute("data-sidebar-identity-slot");
+    expect(screen.getByLabelText("Agent idle")).toBeInTheDocument();
+    const modifier = PLATFORM_IS_MAC ? { metaKey: true } : { ctrlKey: true };
+    fireEvent.keyDown(window, { key: PLATFORM_IS_MAC ? "Meta" : "Control", ...modifier });
+    expect(row.querySelector("[data-nav-shortcut-badge]")).toHaveAttribute("data-visible", "true");
+    fireEvent.keyDown(window, { key: "1", ...modifier });
+    expect(onNavigate).toHaveBeenCalledWith(feature);
+  });
+});
 
-vi.mock("@/components/ProjectBadge", () => ({
-  ProjectBadge: () => <span data-testid="color-dot" />,
-}));
-
-vi.mock("@/components/ProjectFeatureRow", () => ({
-  shouldIgnoreFeatureRowKeyDown: () => false,
-}));
-
-import { PinnedConversationRow } from "./PinnedConversationRow";
-
-function feature(overrides: Partial<Feature> = {}): Feature {
-  return {
-    id: 1,
-    project_id: 7,
-    title: "REST Title",
-    status: "active",
-    type: "ws-session",
-    created_at: "2026-01-01T00:00:00Z",
-    is_pinned: true,
-    ...overrides,
-  } as unknown as Feature;
-}
-
-function renderRow(props: Partial<React.ComponentProps<typeof PinnedConversationRow>> = {}) {
+function renderRow(activeFeatureId: number | null = null) {
   const onNavigate = vi.fn();
   const onUnpin = vi.fn();
-  render(
+  const view = render(
     <PinnedConversationRow
-      feature={feature()}
-      activeFeatureId={null}
+      feature={feature}
+      activeFeatureId={activeFeatureId}
       onNavigate={onNavigate}
       onUnpin={onUnpin}
-      {...props}
     />,
   );
-  return { onNavigate, onUnpin };
+  return { ...view, onNavigate, onUnpin };
 }
 
 describe("PinnedConversationRow", () => {
-  beforeEach(() => {
-    mocks.title = { title: null, isAutoNaming: false };
-    mocks.status = "idle";
-    mocks.isUnread = false;
-    mocks.prefetch.mockClear();
-  });
-
   it("falls back to the REST title when no live title has arrived", () => {
     renderRow();
-    expect(screen.getByText("REST Title")).toBeInTheDocument();
+    expect(screen.getByText("Pinned conversation")).toBeInTheDocument();
   });
-
   it("prefers the live WS-pushed title when present", () => {
     mocks.title = { title: "Live Title", isAutoNaming: false };
     renderRow();
     expect(screen.getByText("Live Title")).toBeInTheDocument();
-    expect(screen.queryByText("REST Title")).not.toBeInTheDocument();
+    expect(screen.queryByText("Pinned conversation")).not.toBeInTheDocument();
   });
-
   it("shows a skeleton instead of the title while auto-naming", () => {
     mocks.title = { title: null, isAutoNaming: true };
     renderRow();
-    expect(screen.queryByText("REST Title")).not.toBeInTheDocument();
+    expect(screen.queryByText("Pinned conversation")).not.toBeInTheDocument();
   });
-
   it("navigates on row click", async () => {
-    const user = userEvent.setup();
-    const { onNavigate } = renderRow();
-    await user.click(screen.getByText("REST Title"));
+    const { user, onNavigate } = renderRow();
+    await user.click(screen.getByText("Pinned conversation"));
     expect(onNavigate).toHaveBeenCalledTimes(1);
   });
-
   it("does not navigate when the row is already active", async () => {
-    const user = userEvent.setup();
-    const { onNavigate } = renderRow({ activeFeatureId: 1 });
-    await user.click(screen.getByText("REST Title"));
+    const { user, onNavigate } = renderRow(feature.id);
+    await user.click(screen.getByText("Pinned conversation"));
     expect(onNavigate).not.toHaveBeenCalled();
   });
-
   it("unpins without navigating when the unpin button is clicked", async () => {
-    const user = userEvent.setup();
-    const { onNavigate, onUnpin } = renderRow();
+    const { user, onNavigate, onUnpin } = renderRow();
     await user.click(screen.getByRole("button", { name: "Unpin" }));
-    expect(onUnpin).toHaveBeenCalledWith(1);
+    expect(onUnpin).toHaveBeenCalledWith(feature.id);
     expect(onNavigate).not.toHaveBeenCalled();
   });
 });

@@ -6,7 +6,9 @@
 use std::collections::HashMap;
 
 use super::super::models::*;
+use super::block_conversion::convert_block;
 use super::tool_blocks::{handle_tool_call, handle_tool_result};
+use super::wire_preview::CONTENT_PREVIEW_MAX_BYTES;
 
 pub(super) struct MutableBlock {
     pub(super) id: String,
@@ -25,42 +27,6 @@ pub(super) struct MutableBlock {
     pub(super) has_child_slots: bool, // Task/Agent get child slots
     pub(super) child_indices: Vec<usize>,
     pub(super) truncated_content: Option<bool>,
-}
-
-fn convert_block(idx: usize, all: &[MutableBlock]) -> AgentBlock {
-    let b = &all[idx];
-    let child_blocks = if b.has_child_slots || !b.child_indices.is_empty() {
-        Some(
-            b.child_indices
-                .iter()
-                .map(|&ci| convert_block(ci, all))
-                .collect(),
-        )
-    } else {
-        None
-    };
-    AgentBlock {
-        id: b.id.clone(),
-        message_uuid: b.message_uuid.clone(),
-        prompt_delivery_state: b.prompt_delivery_state.clone(),
-        type_: b.type_.clone(),
-        content: b.content.clone(),
-        tool_name: b.tool_name.clone(),
-        tool_args: if b.type_ == "tool_call" {
-            Some(b.content.clone())
-        } else {
-            None
-        },
-        is_error: b.is_error,
-        tool_use_id: b.tool_use_id.clone(),
-        parent_tool_use_id: b.parent_tool_use_id.clone(),
-        child_blocks,
-        source_tool_name: b.source_tool_name.clone(),
-        created_at: b.created_at.clone(),
-        model: b.model.clone(),
-        truncated_content: b.truncated_content,
-        origin: b.origin.clone(),
-    }
 }
 
 /// Push `block` and link it to its parent (or root) list. Returns the
@@ -102,7 +68,9 @@ fn push_or_merge_streaming(
         root_indices.last().copied()
     };
     let should_merge = last_idx_opt.is_some_and(|li| {
-        all[li].type_ == block_type && all[li].parent_tool_use_id.as_deref() == parent_id
+        all[li].type_ == block_type
+            && all[li].parent_tool_use_id.as_deref() == parent_id
+            && all[li].content.len().saturating_add(msg.content.len()) <= CONTENT_PREVIEW_MAX_BYTES
     });
 
     if should_merge {
@@ -309,6 +277,23 @@ mod tests {
         assert_eq!(blocks.len(), 1, "consecutive thinking blocks should merge");
         assert_eq!(blocks[0].type_, "thinking");
         assert_eq!(blocks[0].content, "first thought second thought");
+    }
+
+    #[test]
+    fn oversized_streaming_rows_remain_separate_for_full_content_roundtrip() {
+        let first = "a".repeat(CONTENT_PREVIEW_MAX_BYTES + 1);
+        let messages = vec![
+            make_message(41, 1, "text", &first),
+            make_message(42, 1, "text_delta", "tail"),
+        ];
+
+        let blocks = build_blocks(&messages);
+
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].id, "msg-41");
+        assert_eq!(blocks[0].truncated_content, Some(true));
+        assert_eq!(blocks[1].id, "msg-42");
+        assert_eq!(blocks[1].content, "tail");
     }
 
     #[test]

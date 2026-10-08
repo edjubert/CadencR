@@ -15,15 +15,15 @@ import { forwardRef } from "react";
  * as a tappable hint floating over the row even when the row itself is
  * highlighted with `bg-accent`.
  */
-export const SidebarShortcutBadge = forwardRef<HTMLSpanElement>(
-  function SidebarShortcutBadge(_, ref) {
+export const SidebarShortcutBadge = forwardRef<HTMLSpanElement, { inline?: boolean }>(
+  function SidebarShortcutBadge({ inline = false }, ref) {
     return (
       <span
         ref={ref}
         data-nav-shortcut-badge
         data-visible="false"
         aria-hidden="true"
-        className="pointer-events-none absolute right-2 top-1/2 z-10 flex size-4 -translate-y-1/2 items-center justify-center rounded border border-border bg-secondary text-[10px] font-medium leading-none text-secondary-foreground opacity-0 shadow-md transition-opacity duration-150 data-[visible=true]:opacity-100"
+        className={`pointer-events-none absolute ${inline ? "right-0" : "right-2"} top-1/2 z-10 flex size-4 -translate-y-1/2 items-center justify-center rounded border border-border bg-secondary text-[10px] font-medium leading-none text-secondary-foreground opacity-0 shadow-md transition-opacity duration-150 data-[visible=true]:opacity-100`}
       />
     );
   },

@@ -6,6 +6,7 @@ import {
   externalAutomationMatches,
   isElementPayload,
   metadataFor,
+  profileFromSelection,
   pushBounded,
   reclaimFocusForShortcut,
 } from "./browser-manager-utils";
@@ -70,8 +71,24 @@ describe("browser-manager-utils", () => {
       id: "tab-1",
       url: "about:blank",
       devToolsOpen: false,
+      pinned: false,
+      suspended: false,
+      zoomPercent: 100,
       scopeId: 7,
     });
+  });
+
+  it("resolves profile selections without changing the persistent default partition", () => {
+    const normal = profileFromSelection("default");
+    const prefixedNormal = profileFromSelection("persistent:default");
+    const firstPrivate = profileFromSelection("fresh");
+    const secondPrivate = profileFromSelection("fresh");
+
+    expect(normal).toEqual({ id: "default", label: "default", mode: "persistent" });
+    expect(prefixedNormal).toEqual(normal);
+    expect(firstPrivate.mode).toBe("fresh");
+    expect(secondPrivate.mode).toBe("fresh");
+    expect(firstPrivate.id).not.toBe(secondPrivate.id);
   });
 
   describe("reclaimFocusForShortcut", () => {
@@ -93,14 +110,21 @@ describe("browser-manager-utils", () => {
       }
     });
 
-    it("leaves focus alone for shortcuts that stay in the browser", () => {
+    it("reclaims renderer focus for browser chrome controls", () => {
+      for (const shortcut of ["find", "focus-url"] as BrowserShortcut[]) {
+        const { win, focus } = fakeWindow();
+        reclaimFocusForShortcut(win, shortcut);
+        expect(focus).toHaveBeenCalledOnce();
+      }
+    });
+
+    it("leaves focus alone for shortcuts handled by the guest page", () => {
       for (const shortcut of [
         "pane-browser",
         "reload",
         "zoom-in",
         "zoom-out",
         "new-tab",
-        "focus-url",
       ] as BrowserShortcut[]) {
         const { win, focus } = fakeWindow();
         reclaimFocusForShortcut(win, shortcut);

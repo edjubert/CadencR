@@ -39,6 +39,8 @@ let sidecarStopPromise: Promise<void> | null = null;
 let browserIpcRegistered = false;
 let browserManager: BrowserManager | null = null;
 let browserBridge: BrowserBridgeHandle | null = null;
+let browserFlushPromise: Promise<void> | null = null;
+let shutdownReady = false;
 /** Dev-env load result from module scope; the failure is re-raised by `bootstrap()`. */
 let devProfile: DevProfile | null = null;
 let startupRecovery: StartupRecoveryState | null = null;
@@ -149,8 +151,14 @@ function createWindow(): BrowserWindow {
 
 function confirmClose(): void {
   allowClose = true;
-  if (pendingQuit) app.quit();
-  else mainWindow?.close();
+  if (pendingQuit) {
+    void stopSidecarThenQuit().catch(handleShutdownFailure);
+    return;
+  }
+  const closingWindow = mainWindow;
+  void prepareBrowserWindowClose()
+    .then(() => closingWindow?.close())
+    .catch(handleShutdownFailure);
 }
 
 function wireMainProcess(): void {
@@ -285,13 +293,14 @@ app.on("before-quit", (event) => {
     requestQuit();
     return;
   }
-  if (sidecar) {
+  if (!shutdownReady) {
     event.preventDefault();
-    void stopSidecarThenQuit();
+    void stopSidecarThenQuit().catch(handleShutdownFailure);
   }
 });
 
 async function prepareForUpdateInstall(): Promise<void> {
+  await prepareBrowserShutdown();
   allowClose = true;
   pendingQuit = false;
   shutdownPower();
@@ -299,12 +308,36 @@ async function prepareForUpdateInstall(): Promise<void> {
   shutdownAutoUpdater();
   await stopSidecarForExit();
   await stopBrowserBridge();
+  shutdownReady = true;
 }
 
 async function stopSidecarThenQuit(): Promise<void> {
+  await prepareBrowserShutdown();
   await stopSidecarForExit();
   await stopBrowserBridge();
+  shutdownReady = true;
   app.quit();
+}
+
+async function prepareBrowserShutdown(): Promise<void> {
+  if (!browserManager) return;
+  browserFlushPromise ??= browserManager.prepareForShutdown().finally(() => {
+    browserFlushPromise = null;
+  });
+  await browserFlushPromise;
+}
+
+async function prepareBrowserWindowClose(): Promise<void> {
+  if (!browserManager) return;
+  await browserManager.prepareForWindowClose();
+}
+
+function handleShutdownFailure(error: unknown): void {
+  allowClose = false;
+  pendingQuit = false;
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`Could not complete shutdown safely: ${message}`);
+  dialog.showErrorBox("Could not close Cadencr", message);
 }
 
 async function stopBrowserBridge(): Promise<void> {

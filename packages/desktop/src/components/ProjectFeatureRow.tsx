@@ -1,7 +1,13 @@
-import { memo, useCallback, useRef, type ReactElement, type ReactNode } from "react";
+import {
+  memo,
+  useCallback,
+  useRef,
+  type ReactElement,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import type { AllocatedPort, Feature, FeatureWorktreeInfo } from "@/api/generated";
-import { SidebarShortcutBadge } from "@/components/SidebarShortcutBadge";
 import { ProjectFeatureContextMenu } from "@/components/ProjectFeatureContextMenu";
 import {
   FeatureRowActions,
@@ -37,6 +43,7 @@ interface ProjectFeatureRowProps {
   worktree: FeatureWorktreeInfo | undefined;
   shellCount: number;
   browserCount: number;
+  downloadCount: number;
   /** Ports this conversation's own terminal/agent processes are listening on. */
   ports: readonly AllocatedPort[];
   isEditingLabel: boolean;
@@ -51,7 +58,12 @@ interface ProjectFeatureRowProps {
   onArchiveOrDelete: (featureId: number) => void;
   onUnarchive: (featureId: number) => void;
   onTogglePin: (featureId: number, pinned: boolean) => void;
-  onCloseActivity: (featureId: number, shellCount: number, browserCount: number) => void;
+  onCloseActivity: (
+    featureId: number,
+    shellCount: number,
+    browserCount: number,
+    downloadCount: number,
+  ) => void;
   /** Expand/collapse twisty rendered by FeatureSubtree. */
   hierarchyControl?: ReactNode;
   /** Zero-based nesting depth; indentation stays inside the full-width row. */
@@ -67,6 +79,7 @@ interface FeatureRowDetailsProps {
   state: ProjectFeatureRowState;
   onOpenConversation: () => void;
   onOpenPort: (port: number) => void;
+  badgeRef: RefObject<HTMLSpanElement | null>;
 }
 
 function FeatureRowDetails({
@@ -74,6 +87,7 @@ function FeatureRowDetails({
   state,
   onOpenConversation,
   onOpenPort,
+  badgeRef,
 }: FeatureRowDetailsProps): ReactElement {
   const {
     feature,
@@ -82,6 +96,7 @@ function FeatureRowDetails({
     hasWorktree,
     shellCount,
     browserCount,
+    downloadCount,
     ports,
     isEditingLabel,
     labelDraft,
@@ -94,44 +109,45 @@ function FeatureRowDetails({
     onArchiveOrDelete,
   } = props;
   return (
-    <>
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <FeatureRowTitleLine
-          feature={feature}
-          liveTitle={liveTitle}
-          isAutoNaming={isAutoNaming}
-          isArchived={state.isArchived}
-          hasWorktree={hasWorktree}
-          liveStatus={state.liveStatus}
-          isActive={state.isActive}
-          isUnread={state.isUnread}
-          onOpenConversation={onOpenConversation}
-        />
-        <FeatureRowMetaLine
-          feature={feature}
-          prStatus={state.prStatus}
-          gitStats={state.gitStats}
-          shellCount={shellCount}
-          browserCount={browserCount}
-          ports={ports}
-          isEditingLabel={isEditingLabel}
-          labelDraft={labelDraft}
-          labelSuggestions={labelSuggestions}
-          isSavingLabel={isSavingLabel}
-          onLabelDraftChange={onLabelDraftChange}
-          onSaveLabel={onSaveLabel}
-          onCancelLabelEdit={onCancelLabelEdit}
-          onOpenPort={onOpenPort}
-        />
-      </div>
-      <FeatureRowActions
-        featureId={feature.id}
+    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+      <FeatureRowTitleLine
+        feature={feature}
+        liveTitle={liveTitle}
+        isAutoNaming={isAutoNaming}
         isArchived={state.isArchived}
-        isPinned={state.isPinned}
-        onTogglePin={onTogglePin}
-        onArchiveOrDelete={onArchiveOrDelete}
+        hasWorktree={hasWorktree}
+        liveStatus={state.liveStatus}
+        isActive={state.isActive}
+        isUnread={state.isUnread}
+        onOpenConversation={onOpenConversation}
+        badgeRef={badgeRef}
+      >
+        <FeatureRowActions
+          featureId={feature.id}
+          isArchived={state.isArchived}
+          isPinned={state.isPinned}
+          onTogglePin={onTogglePin}
+          onArchiveOrDelete={onArchiveOrDelete}
+        />
+      </FeatureRowTitleLine>
+      <FeatureRowMetaLine
+        feature={feature}
+        prStatus={state.prStatus}
+        gitStats={state.gitStats}
+        shellCount={shellCount}
+        browserCount={browserCount}
+        downloadCount={downloadCount}
+        ports={ports}
+        isEditingLabel={isEditingLabel}
+        labelDraft={labelDraft}
+        labelSuggestions={labelSuggestions}
+        isSavingLabel={isSavingLabel}
+        onLabelDraftChange={onLabelDraftChange}
+        onSaveLabel={onSaveLabel}
+        onCancelLabelEdit={onCancelLabelEdit}
+        onOpenPort={onOpenPort}
       />
-    </>
+    </div>
   );
 }
 
@@ -152,6 +168,7 @@ function FeatureRowMenu({
     worktree,
     shellCount,
     browserCount,
+    downloadCount,
     onNavigate,
     onTogglePin,
     onCloseActivity,
@@ -166,9 +183,10 @@ function FeatureRowMenu({
       pullRequest={state.prStatus?.pr}
       isArchived={state.isArchived}
       isPinned={state.isPinned}
-      hasActivity={shellCount > 0 || browserCount > 0}
+      hasActivity={shellCount > 0 || browserCount > 0 || downloadCount > 0}
       shellCount={shellCount}
       browserCount={browserCount}
+      downloadCount={downloadCount}
       onNavigate={onNavigate}
       onTogglePin={onTogglePin}
       onStartLabelEditAfterMenuClose={onStartLabelEditAfterMenuClose}
@@ -244,7 +262,7 @@ export const ProjectFeatureRow = memo(function ProjectFeatureRow(
           data-nav-id={String(feature.id)}
           data-nav-project-id={String(projectId)}
           data-feature-depth={hierarchyDepth}
-          className={`group/feature relative flex min-w-0 cursor-pointer items-center gap-0.5 rounded-md py-1.5 pl-3 pr-1.5 text-sm outline-none transition-colors hover:bg-sidebar-accent ${
+          className={`group/feature relative flex min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1.5 text-[12.5px] outline-none transition-colors hover:bg-sidebar-accent ${
             state.isActive ? "bg-sidebar-accent" : ""
           } ${state.isArchived ? "opacity-50" : ""}`}
           onClick={(e) => {
@@ -261,10 +279,9 @@ export const ProjectFeatureRow = memo(function ProjectFeatureRow(
             }
           }}
         >
-          <SidebarShortcutBadge ref={badgeRef} />
           <div
             data-feature-hierarchy-gutter
-            className="flex h-3 w-2 shrink-0 items-center justify-center"
+            className="flex size-3.5 shrink-0 items-center justify-center"
             style={{ marginInlineStart: hierarchyDepth * FEATURE_NESTING_INDENT_PX }}
           >
             {hierarchyControl}
@@ -275,6 +292,7 @@ export const ProjectFeatureRow = memo(function ProjectFeatureRow(
             state={state}
             onOpenConversation={handleOpenConversation}
             onOpenPort={handleOpenPort}
+            badgeRef={badgeRef}
           />
         </div>
       </ContextMenuTrigger>

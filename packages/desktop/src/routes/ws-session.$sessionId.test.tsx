@@ -256,6 +256,15 @@ vi.mock("@/api/agentRuntime", () => ({
     isLoading: false,
     isError: false,
   })),
+  useAgentProfiles: vi.fn(() => ({
+    data: {
+      active_profile: "default",
+      default_profile: "default",
+      profiles: [{ id: "bedrock", label: "Bedrock", is_default: false }],
+    },
+    isLoading: false,
+    isError: false,
+  })),
 }));
 
 vi.mock("@/api/generated", () => ({
@@ -277,6 +286,8 @@ vi.mock("@/api/generated", () => ({
     mutateAsync: vi.fn().mockResolvedValue({ success: true }),
     isPending: false,
   })),
+  useStartRoute: vi.fn(() => ({ mutateAsync: vi.fn().mockResolvedValue(undefined as never) })),
+  useOpenFileRoute: vi.fn(() => ({ mutateAsync: vi.fn().mockResolvedValue(undefined as never) })),
   getListBranchesQueryKey: vi.fn((params: { project_id: number }) => [
     "listBranches",
     params.project_id,

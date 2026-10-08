@@ -3,7 +3,7 @@ impl WsSessionPersistence {
     pub async fn persist_runtime_event(
         &mut self,
         runtime_event: &RuntimeEvent,
-    ) -> Option<PersistedMessageRef> {
+    ) -> Option<PersistedEventRef> {
         let Some(session_id) = self.session_db_id else {
             return None;
         };
@@ -16,13 +16,15 @@ impl WsSessionPersistence {
                     event,
                     runtime_event.parent_tool_use_id(),
                 )
-                .await;
+                .await
+                .map(PersistedEventRef::Message);
         }
 
         if let Some(message) = runtime_event.user_message() {
-            self.persist_user_tool_results(session_id, message, runtime_event.parent_tool_use_id())
+            let results = self
+                .persist_user_tool_results(session_id, message, runtime_event.parent_tool_use_id())
                 .await;
-            return None;
+            return (!results.is_empty()).then_some(PersistedEventRef::ToolResults(results));
         }
 
         if let Some(message) = runtime_event.assistant_message() {
@@ -56,9 +58,11 @@ impl WsSessionPersistence {
                 .bind(session_id)
                 .execute(&self.write_pool)
                 .await;
-            return result
-                .ok()
-                .map(|row| PersistedMessageRef { id: row.last_insert_rowid() });
+            return result.ok().map(|row| {
+                PersistedEventRef::Message(PersistedMessageRef {
+                    id: row.last_insert_rowid(),
+                })
+            });
         }
 
         None
@@ -130,76 +134,14 @@ impl WsSessionPersistence {
                 .await
             }
             RuntimeStreamEvent::ContentBlockDelta { index, delta } => {
-                self.persist_content_block_delta(
-                    session_id,
-                    &stream_scope,
-                    *index,
-                    delta,
-                    ptuid,
-                )
-                .await
+                self.persist_content_block_delta(session_id, &stream_scope, *index, delta, ptuid)
+                    .await
             }
             RuntimeStreamEvent::ContentBlockStop { index } => {
                 self.persist_content_block_stop(&stream_scope, *index).await;
                 None
             }
             RuntimeStreamEvent::Other => None,
-        }
-    }
-
-    async fn persist_user_tool_results(
-        &self,
-        session_id: i64,
-        message: &RuntimeUserMessage,
-        ptuid: Option<&str>,
-    ) {
-        for item in &message.content {
-            if let RuntimeUserContentBlock::ToolResult {
-                tool_use_id,
-                is_error,
-                content,
-            } = item
-            {
-                let content = match content {
-                    serde_json::Value::String(text) => text.clone(),
-                    other => serde_json::to_string(other).unwrap_or_default(),
-                };
-                let message_type = if *is_error { "tool_error" } else { "tool_result" };
-
-                let inserted = Self::insert_message(
-                    &self.write_pool,
-                    session_id,
-                    "tool",
-                    &content,
-                    message_type,
-                    None,
-                    tool_use_id.as_deref(),
-                    ptuid,
-                    None,
-                )
-                .await;
-
-                match inserted {
-                    Ok(_) => {
-                        // The authoritative row must exist before its duplicate
-                        // can be removed from the live tool_call.
-                        if let Some(tool_use_id) = tool_use_id.as_deref() {
-                            Self::drop_duplicated_tool_call_output(
-                                &self.write_pool,
-                                session_id,
-                                tool_use_id,
-                                &content,
-                            )
-                            .await;
-                        }
-                    }
-                    Err(error) => tracing::warn!(
-                        session_id,
-                        tool_use_id,
-                        "failed to persist tool result; keeping tool_call output: {error}"
-                    ),
-                }
-            }
         }
     }
 
@@ -416,11 +358,7 @@ mod session_events_tests {
         }
 
         let root_event = stream_event("thread", None, RuntimeStreamEvent::Other);
-        let child_event = stream_event(
-            "thread",
-            Some("tool-parent"),
-            RuntimeStreamEvent::Other,
-        );
+        let child_event = stream_event("thread", Some("tool-parent"), RuntimeStreamEvent::Other);
         assert_eq!(
             persistence.current_model_for_event(&root_event),
             Some("root-model")
@@ -439,7 +377,10 @@ mod session_events_tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].get::<String, _>("content"), "Root");
         assert_eq!(rows[0].get::<Option<String>, _>("parent_tool_use_id"), None);
-        assert_eq!(rows[0].get::<Option<String>, _>("model").as_deref(), Some("root-model"));
+        assert_eq!(
+            rows[0].get::<Option<String>, _>("model").as_deref(),
+            Some("root-model")
+        );
         assert_eq!(rows[1].get::<String, _>("content"), "Child");
         assert_eq!(
             rows[1]
@@ -485,7 +426,9 @@ mod session_events_tests {
             .await
             .expect("delta row id");
 
-        assert_eq!(start_ref.id, delta_ref.id);
+        assert!(
+            matches!((start_ref, delta_ref), (PersistedEventRef::Message(start), PersistedEventRef::Message(delta)) if start.id == delta.id)
+        );
 
         let rows = sqlx::query("SELECT content, message_type FROM agent_messages ORDER BY id")
             .fetch_all(&pool)
@@ -496,5 +439,4 @@ mod session_events_tests {
         assert_eq!(rows[0].get::<String, _>("message_type"), "text");
         assert_eq!(rows[0].get::<String, _>("content"), "Hello");
     }
-
 }

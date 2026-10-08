@@ -1,51 +1,90 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { render, cleanup } from "@/test-utils";
-import { Markdown, __markdownCacheTestHelpers as cache } from "./Markdown";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@/test-utils";
+import { CodeBlockActionsContext } from "./CodeBlockActionsContext";
+import { Markdown } from "./Markdown";
+import {
+  __markdownCacheTestHelpers as cache,
+  markdownTreeCache,
+} from "./markdown/markdown-tree-cache";
+import { __highlightCacheTestHelpers as highlightCache } from "./markdown/highlight-cache";
+
+const identity = (cacheKey: string, content: string) => ({
+  cacheKey,
+  content,
+  sendToTerminal: undefined,
+});
 
 describe("Markdown — module-level tree cache", () => {
   beforeEach(() => {
     cache.clear();
+    highlightCache.clear();
   });
 
-  it("populates the cache and reuses entries when cacheKey is provided", () => {
+  it("populates and reuses an entry for the same settled block", () => {
     const content = "# Cached heading\n\nWith body text.";
-    expect(cache.size()).toBe(0);
-
     render(<Markdown content={content} cacheKey="block-1" />);
-    // First render: cache miss → entry written. Key is content + sendToTerminal flag.
     expect(cache.size()).toBe(1);
-    expect(cache.has(content, false)).toBe(true);
+    expect(cache.has(identity("block-1", content))).toBe(true);
 
     cleanup();
-    // Second render of the same content with a different `cacheKey` (same
-    // content) must reuse the existing cache entry — size stays at 1.
+    render(<Markdown content={content} cacheKey="block-1" />);
+    expect(cache.size()).toBe(1);
+  });
+
+  it("keeps separate identities for distinct blocks with identical content", () => {
+    const content = "Same content";
+    render(<Markdown content={content} cacheKey="block-1" />);
+    cleanup();
     render(<Markdown content={content} cacheKey="block-2" />);
-    expect(cache.size()).toBe(1);
+
+    expect(cache.size()).toBe(2);
   });
 
-  it("bypasses the cache when cacheKey is undefined", () => {
-    const content = "# Streaming heading\n\nMid-flight content.";
-    expect(cache.size()).toBe(0);
+  it("replaces stale content for one stable block identity", () => {
+    const view = render(<Markdown content="first" cacheKey="block-1" />);
+    view.rerender(<Markdown content="second" cacheKey="block-1" />);
 
-    render(<Markdown content={content} />);
-    expect(cache.size()).toBe(0);
+    expect(cache.size()).toBe(1);
+    expect(cache.has(identity("block-1", "first"))).toBe(false);
+    expect(cache.has(identity("block-1", "second"))).toBe(true);
+  });
 
+  it("evicts old trees before retained content exceeds the weight budget", () => {
+    for (let index = 0; index < 8; index += 1) {
+      const content = `${index}${"x".repeat(300_000)}`;
+      markdownTreeCache.getOrCreate(identity(`block-${index}`, content), () => <span />);
+    }
+
+    expect(cache.size()).toBeLessThan(8);
+    expect(cache.weight()).toBeLessThanOrEqual(cache.maxWeight);
+  });
+
+  it("bypasses both caches for a keyed block explicitly marked streaming", () => {
+    const content = "```typescript\nconst partial = true;\n";
+    render(<Markdown content={content} cacheKey="streaming-block" isStreaming />);
+
+    expect(cache.size()).toBe(0);
+    expect(highlightCache.snapshot().size).toBe(0);
+  });
+
+  it("does not reuse a tree that captured a stale terminal callback", () => {
+    const content = "```bash\necho safe\n```";
+    const first = vi.fn();
+    const second = vi.fn();
+    const renderWith = (sendToTerminal: (command: string) => void) =>
+      render(
+        <CodeBlockActionsContext.Provider value={{ sendToTerminal }}>
+          <Markdown content={content} cacheKey="shell-block" />
+        </CodeBlockActionsContext.Provider>,
+      );
+
+    renderWith(first);
     cleanup();
-    render(<Markdown content={content} />);
-    expect(cache.size()).toBe(0);
-  });
+    renderWith(second);
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
 
-  it("caches identical streaming-block content across re-renders", () => {
-    // Regression for the ResizeObserver-loop fix: AgentBlock now passes
-    // `block.id` as cacheKey even while a block is streaming. The first
-    // render writes an entry; re-rendering with the same content (Virtuoso
-    // remeasure, sibling re-render, panel resize) must reuse it instead of
-    // re-running lowlight.highlight synchronously.
-    const content = "# Streaming snapshot\n\n```\nhello world\n```";
-    const { rerender } = render(<Markdown content={content} cacheKey="streaming-block" />);
-    expect(cache.size()).toBe(1);
-
-    rerender(<Markdown content={content} cacheKey="streaming-block" />);
-    expect(cache.size()).toBe(1);
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledWith("echo safe\n");
+    expect(cache.size()).toBe(2);
   });
 });

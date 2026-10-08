@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { BrowserWindow, WebContents } from "electron";
+import type { ManagedTab, TabEventHost } from "./browser-tab-events";
 import { browserAutomationAccess } from "./browser-policy";
 import {
   browserPartitionForProfile,
@@ -13,6 +14,7 @@ import type {
   BrowserShortcut,
   BrowserTabMetadata,
 } from "./browser-types";
+import { DEFAULT_BROWSER_RESPONSIVE_STATE } from "../../src/shared/browser-responsive";
 
 const DEFAULT_URL = "about:blank";
 
@@ -56,11 +58,12 @@ export function zoomWebContents(wc: WebContents, direction: "in" | "out"): void 
   wc.setZoomFactor(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, wc.getZoomFactor() * multiplier)));
 }
 
-// Pane switches that move focus *out* of the browser. When one is relayed from a
-// focused guest page, OS keyboard focus stays on the (now-hidden) native view
-// unless we hand it back to the renderer window — otherwise the next keystroke
-// hits a dead responder (the macOS error beep) instead of the agent prompt.
-const PANE_SHORTCUTS_LEAVING_BROWSER = new Set<BrowserShortcut>([
+// Chords whose target lives in renderer chrome. When one is relayed from a
+// focused guest, reclaim OS focus before the renderer focuses its own control.
+const RENDERER_FOCUS_SHORTCUTS = new Set<BrowserShortcut>([
+  "find",
+  "focus-url",
+  "downloads",
   "pane-agent",
   "pane-terminal",
   "pane-git",
@@ -71,7 +74,7 @@ export function reclaimFocusForShortcut(
   win: BrowserWindow | null,
   shortcut: BrowserShortcut,
 ): void {
-  if (win && PANE_SHORTCUTS_LEAVING_BROWSER.has(shortcut)) win.webContents.focus();
+  if (win && RENDERER_FOCUS_SHORTCUTS.has(shortcut)) win.webContents.focus();
 }
 
 export function tabDiagnostics(
@@ -90,13 +93,32 @@ export function secureWebPreferences(profile: BrowserProfile): Electron.WebPrefe
   return {
     partition: browserPartitionForProfile(profile),
     nodeIntegration: false,
+    nodeIntegrationInWorker: false,
+    nodeIntegrationInSubFrames: false,
     contextIsolation: true,
     sandbox: true,
     webSecurity: true,
     allowRunningInsecureContent: false,
     experimentalFeatures: false,
     plugins: false,
+    webviewTag: false,
     devTools: true,
+  };
+}
+
+/** Harden child preferences while retaining opaque fields used by Electron's opener plumbing. */
+export function secureChildWebPreferences(
+  profile: BrowserProfile,
+  native?: Electron.WebPreferences,
+): Electron.WebPreferences {
+  return {
+    ...native,
+    session: undefined,
+    preload: undefined,
+    nodeIntegrationInWorker: false,
+    nodeIntegrationInSubFrames: false,
+    webviewTag: false,
+    ...secureWebPreferences(profile),
   };
 }
 
@@ -115,14 +137,38 @@ export function metadataFor(
     sessionProfileId: profileId,
     isActive: false,
     devToolsOpen: false,
+    pinned: false,
+    suspended: false,
+    zoomPercent: 100,
+    responsive: { ...DEFAULT_BROWSER_RESPONSIVE_STATE },
     scopeId,
   };
 }
 
-export function profileFromSelection(profileId: string): BrowserProfile {
-  if (profileId === "fresh") return createBrowserProfile("fresh");
-  if (profileId === "feature") return createBrowserProfile("feature", "feature");
-  return createBrowserProfile("persistent", profileId.replace(/^persistent:/, ""));
+export function updateTabMetadata(
+  tab: ManagedTab,
+  patch: Partial<BrowserTabMetadata>,
+  host: Pick<TabEventHost, "emitState">,
+): void {
+  const wc = tab.webContents;
+  tab.metadata = {
+    ...tab.metadata,
+    ...patch,
+    canGoBack: wc.canGoBack(),
+    canGoForward: wc.canGoForward(),
+  };
+  host.emitState();
+}
+
+/**
+ * Resolve a stable external selection into its actual Electron profile. `fresh`
+ * deliberately generates a new identity once; callers opening child tabs must
+ * retain the returned profile rather than resolving the selection again.
+ */
+export function profileFromSelection(selectionId: string): BrowserProfile {
+  if (selectionId === "fresh") return createBrowserProfile("fresh");
+  if (selectionId === "feature") return createBrowserProfile("feature", "feature");
+  return createBrowserProfile("persistent", selectionId.replace(/^persistent:/, ""));
 }
 
 export function consoleEntry(

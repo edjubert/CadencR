@@ -89,9 +89,32 @@ pub(crate) async fn handle_model_set(
         send_error(sender, &envelope.id, "SDK_ERROR", &error);
         return;
     }
+    let overrides = if crate::domain::agents::providers::runtime_adapter(&snapshot.runtime_provider)
+        .is_some_and(|adapter| adapter.supports_profile_config_inheritance())
+    {
+        handle.config.overrides.model = Some(model.clone());
+        if let QueryState::Pending(options) = &mut handle.state {
+            options.overrides.model = Some(model.clone());
+        }
+        Some(handle.config.overrides.clone())
+    } else {
+        None
+    };
 
     let runtime_provider = handle.runtime_provider.clone();
     drop(sessions);
+    if let Some(overrides) = overrides.as_ref() {
+        if let Err(error) = WsSessionPersistence::update_runtime_overrides_static(
+            &app_state.write_pool,
+            db_session_id,
+            overrides,
+        )
+        .await
+        {
+            send_error(sender, &envelope.id, "DB_ERROR", &error.to_string());
+            return;
+        }
+    }
 
     let seeded_window = seed_context_window(&model, &runtime_provider).await;
     persist_model_selection(

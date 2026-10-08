@@ -105,6 +105,7 @@ mod tests {
     fn ctx(ordinal: usize, uuid: Option<&str>) -> BranchContext {
         BranchContext {
             cwd: std::path::PathBuf::from("/tmp/project"),
+            profile: None,
             source_runtime_session_id: "ses_src".to_string(),
             cut_provider_uuid: uuid.map(ToOwned::to_owned),
             cut_user_ordinal: ordinal,

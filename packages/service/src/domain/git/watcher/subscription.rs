@@ -55,7 +55,7 @@ pub(super) async fn resolve_paths(
     state: &AppState,
     feature_id: i64,
 ) -> Result<(PathBuf, String), AppError> {
-    let git_path = crate::domain::git::service::resolve_feature_git_path(state, feature_id)
+    let git_path = crate::domain::git::service::resolve_feature_working_path(state, feature_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("feature {feature_id} has no git path")))?;
     let canonical = std::fs::canonicalize(&git_path).unwrap_or_else(|_| PathBuf::from(&git_path));

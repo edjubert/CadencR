@@ -127,10 +127,14 @@ function mergeServerSession(
     current.blocks = [...current.blocks];
   }
   if (session.maxMessageId > current.maxMessageId) current.maxMessageId = session.maxMessageId;
-  const updates = (session as unknown as { toolCallUpdates?: Record<string, string> | null })
-    .toolCallUpdates;
-  if (updates && Object.keys(updates).length > 0 && applyToolCallUpdates(current.blocks, updates)) {
-    current.blocks = [...current.blocks];
+  const updates = applyToolCallUpdates(
+    current.blocks,
+    session.toolCallUpdates,
+    new Set(session.truncatedToolCallUpdateIds ?? []),
+  );
+  if (updates !== current.blocks) {
+    current.blocks = updates;
+    current.toolUseIdMap = buildToolUseIdMap(updates);
   }
   if (session.todos != null) current.todos = session.todos as TodoItem[];
 }

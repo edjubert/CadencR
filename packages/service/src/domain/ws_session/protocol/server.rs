@@ -40,6 +40,7 @@ pub struct SessionInitializedPayload {
     pub fast_mode: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    pub runtime_overrides: crate::domain::agents::adapter::RuntimeConfigOverrides,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codex_permission_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -276,11 +277,18 @@ pub struct FeatureUpdatedPayload {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ProviderSetOkPayload {
     pub provider: String,
+    /// Always sent alongside the provider: the frontend stores the pair
+    /// atomically and cannot accept a half-update.
+    pub model: String,
     pub supports_prompt_receipts: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codex_permission_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub access_mode: Option<String>,
+    pub profile: Option<String>,
+    pub runtime_overrides: crate::domain::agents::adapter::RuntimeConfigOverrides,
+    pub thinking_effort: Option<String>,
+    pub fast_mode: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -290,8 +298,10 @@ pub struct ModeChangedPayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ModelSetOkPayload {
-    pub provider: String,
     pub model: String,
+    /// The provider that owns `model`. Present so the frontend never has to
+    /// pair a model id with a separately-tracked provider.
+    pub provider: String,
     pub context_window: Option<u64>,
 }
 
@@ -316,6 +326,14 @@ pub struct ProfileChangedPayload {
     pub provider: String,
     pub model: Option<String>,
     pub profile: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective: Option<crate::domain::agents::adapter::RuntimeEffectiveConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RuntimeOverridesChangedPayload {
+    pub runtime_overrides: crate::domain::agents::adapter::RuntimeConfigOverrides,
+    pub effective: crate::domain::agents::adapter::RuntimeEffectiveConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -435,5 +453,36 @@ mod tests {
         assert!(payload.description.is_some());
         assert!(payload.preview.is_some());
         assert!(payload.pattern.is_some());
+    }
+
+    #[test]
+    fn model_set_ok_carries_the_owning_provider() {
+        let payload = ModelSetOkPayload {
+            model: "lmstudio/qwen-3.6:35b-a3b".to_string(),
+            provider: "opencode".to_string(),
+            context_window: None,
+        };
+
+        let value = serde_json::to_value(&payload).unwrap();
+        assert_eq!(value["provider"], "opencode");
+        assert_eq!(value["model"], "lmstudio/qwen-3.6:35b-a3b");
+    }
+
+    #[test]
+    fn provider_set_ok_carries_the_active_model() {
+        let payload = ProviderSetOkPayload {
+            provider: "opencode".to_string(),
+            profile: None,
+            runtime_overrides: Default::default(),
+            thinking_effort: None,
+            fast_mode: false,
+            model: "lmstudio/qwen-3.6:35b-a3b".to_string(),
+            supports_prompt_receipts: false,
+            codex_permission_mode: None,
+            access_mode: None,
+        };
+
+        let value = serde_json::to_value(&payload).unwrap();
+        assert_eq!(value["model"], "lmstudio/qwen-3.6:35b-a3b");
     }
 }

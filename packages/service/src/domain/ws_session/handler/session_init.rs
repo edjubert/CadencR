@@ -1,13 +1,13 @@
 use super::super::persistence::WsSessionPersistence;
 use super::super::protocol::*;
 use super::{
-    default_permission_mode, parse_permission_mode, send_error, send_runtime_session_id,
-    thinking_effort, QueryState, SdkHandle, SdkSessions, SessionConfig, WsSender,
+    send_error, send_runtime_session_id, thinking_effort, QueryState, SdkHandle, SdkSessions,
+    SessionConfig, WsSender,
 };
 use crate::app_state::AppState;
 use crate::domain::agents::adapter::RuntimeSpawnConfig;
-use crate::domain::agents::{default_provider_id, resolve_effective_provider, runtime_adapter};
-use crate::domain::settings;
+use crate::domain::agents::permission_modes::effective_permission_mode;
+use crate::domain::agents::runtime_adapter;
 use crate::domain::workflow::worktree;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
@@ -17,6 +17,12 @@ mod session_init_effort;
 mod session_init_fast_mode;
 #[path = "session_init_feature.rs"]
 mod session_init_feature;
+#[path = "session_init_input.rs"]
+mod session_init_input;
+#[path = "session_init_profile.rs"]
+mod session_init_profile;
+#[path = "session_init_provider.rs"]
+mod session_init_provider;
 #[path = "session_init_restore.rs"]
 mod session_init_restore;
 
@@ -27,39 +33,8 @@ pub(super) async fn handle_init(
     sdk_sessions: &SdkSessions,
     app_state: &AppState,
 ) {
-    let payload: SessionInitPayload = match serde_json::from_value(envelope.payload.clone()) {
-        Ok(p) => p,
-        Err(e) => {
-            send_error(sender, &envelope.id, "INVALID_PAYLOAD", &e.to_string());
-            return;
-        }
-    };
-    // feature_id is required for DB-first sessions
-    let feature_id = match payload.feature_id {
-        Some(fid) => fid,
-        None => {
-            send_error(
-                sender,
-                &envelope.id,
-                "MISSING_FEATURE_ID",
-                "feature_id is required for session init",
-            );
-            return;
-        }
-    };
-
-    // cwd is required
-    let cwd = match payload.cwd {
-        Some(ref cwd) if !cwd.is_empty() => cwd.clone(),
-        _ => {
-            send_error(
-                sender,
-                &envelope.id,
-                "MISSING_CWD",
-                "cwd is required for session init",
-            );
-            return;
-        }
+    let Some((payload, feature_id, cwd)) = session_init_input::parse(&envelope, sender) else {
+        return;
     };
 
     // Register the WS sender so HTTP handlers (e.g. auto-rename) can push
@@ -80,21 +55,13 @@ pub(super) async fn handle_init(
         return;
     };
 
-    let configured_provider = settings::resolve_setting(
-        &app_state.read_pool,
-        &crate::domain::agents::runtime::runtime_setting_key("session"),
-        Some(feature_id),
-        Some(project_id),
-        Some(default_provider_id()),
+    let (initial_provider, configured_initial_access_mode) = session_init_provider::resolve(
+        app_state,
+        feature_id,
+        project_id,
+        payload.provider.as_deref(),
     )
-    .await
-    .unwrap_or_else(|| default_provider_id().to_string());
-    let initial_provider = payload
-        .provider
-        .clone()
-        .unwrap_or_else(|| configured_provider.clone());
-    let configured_initial_access_mode =
-        super::access::configured_access_mode(&initial_provider, &app_state.read_pool).await;
+    .await;
     let configured_initial_access_wire = configured_initial_access_mode
         .as_ref()
         .map(crate::domain::agents::adapter::access_mode_wire);
@@ -149,30 +116,47 @@ pub(super) async fn handle_init(
     }
 
     let stored_model = row.as_ref().and_then(|r| r.model.clone());
-    let effective_model = stored_model.clone().or(payload.model.clone());
     let stored_thinking_effort = row.as_ref().and_then(|r| r.thinking_effort.clone());
     let stored_fast_mode = row.as_ref().is_some_and(|r| r.fast_mode);
-    let selected_provider = runtime_provider.or(payload.provider.clone());
-    let effective_provider = match selected_provider {
-        Some(provider) => provider,
-        None => {
-            resolve_effective_provider(
-                &app_state.read_pool,
-                Some(std::path::Path::new(&cwd)),
-                configured_provider,
-                effective_model.as_deref(),
-            )
-            .await
-        }
+    // `payload` has no `profile` field for session.init — the profile lives on
+    // the persisted session row, same source `effective_profile` reads below.
+    let profile_for_resolver = row.as_ref().and_then(|r| r.profile.clone());
+
+    // A session that already ran keeps the provider it ran with. The resolver
+    // only decides for sessions that have not pinned one yet.
+    let pinned_provider = runtime_provider.or(payload.provider.clone());
+    let (effective_provider, mut effective_model) = match pinned_provider {
+        Some(provider) => (provider, stored_model.clone().or(payload.model.clone())),
+        None => match crate::domain::agents::resolve_selection(
+            &app_state.read_pool,
+            Some(std::path::Path::new(&cwd)),
+            "session",
+            Some(feature_id),
+            Some(project_id),
+            profile_for_resolver.as_deref(),
+        )
+        .await
+        {
+            Ok(selection) => (selection.provider_id, Some(selection.model_id)),
+            Err(error) => {
+                send_error(
+                    sender,
+                    &envelope.id,
+                    "NO_MODEL_AVAILABLE",
+                    &error.to_string(),
+                );
+                return;
+            }
+        },
     };
 
-    let (effective_thinking_effort, cleared_unsupported_effort) = session_init_effort::resolve(
+    let (mut effective_thinking_effort, cleared_unsupported_effort) = session_init_effort::resolve(
         app_state,
         db_session_id,
         &effective_provider,
         effective_model.as_deref(),
         payload.thinking_effort.clone(),
-        stored_thinking_effort,
+        stored_thinking_effort.clone(),
     )
     .await;
     let resume_session_id = row.as_ref().and_then(|r| {
@@ -198,29 +182,28 @@ pub(super) async fn handle_init(
         return;
     };
 
-    if let Err(error) = WsSessionPersistence::update_runtime_provider_static(
-        &app_state.write_pool,
-        db_session_id,
-        &effective_provider,
-        cleared_unsupported_effort,
-    )
-    .await
+    if let Err(error) = WsSessionPersistence::update_runtime_selection_static()
+        .pool(&app_state.write_pool)
+        .session_id(db_session_id)
+        .runtime_provider(&effective_provider)
+        .maybe_model(effective_model.as_deref())
+        .clear_thinking_effort(cleared_unsupported_effort)
+        .call()
+        .await
     {
         warn!(
             db_session_id,
             runtime_provider = %effective_provider,
             %error,
-            "failed to persist session runtime provider"
+            "failed to persist session runtime selection"
         );
-        if cleared_unsupported_effort {
-            send_error(
-                sender,
-                &envelope.id,
-                "DB_ERROR",
-                "Failed to clear thinking effort",
-            );
-            return;
-        }
+        send_error(
+            sender,
+            &envelope.id,
+            "DB_ERROR",
+            "Failed to persist session runtime selection",
+        );
+        return;
     }
 
     // Build SDK options — prefer the model stored in the DB (last used) over the frontend settings model
@@ -244,13 +227,8 @@ pub(super) async fn handle_init(
     // Honor the client's choice when supplied; otherwise fall back to the
     // active provider's default. The DB-read and provider-switch paths
     // already apply this default — session.init was the missing site.
-    runtime_config.permission_mode = Some(
-        payload
-            .permission_mode
-            .as_deref()
-            .map(parse_permission_mode)
-            .unwrap_or_else(|| default_permission_mode(&effective_provider)),
-    );
+    runtime_config.permission_mode =
+        effective_permission_mode(&effective_provider, payload.permission_mode.as_deref());
     let configured_access_mode = if effective_provider == initial_provider {
         configured_initial_access_mode
     } else {
@@ -268,17 +246,40 @@ pub(super) async fn handle_init(
         .map(crate::domain::agents::adapter::access_mode_wire)
         .map(ToOwned::to_owned);
     runtime_config.system_prompt = payload.system_prompt.clone();
-    let effective_profile = super::session_runtime_config::apply_claude_settings(
-        app_state,
-        project_id,
-        feature_id,
-        db_session_id,
-        &effective_provider,
-        row.as_ref().and_then(|session| session.profile.as_deref()),
-        &mut runtime_config,
+    let profile_config = match session_init_profile::resolve(
+        session_init_profile::ResolveOptions::builder()
+            .app_state(app_state)
+            .project_id(project_id)
+            .feature_id(feature_id)
+            .db_session_id(db_session_id)
+            .provider(&effective_provider)
+            .maybe_row(row.as_ref())
+            .maybe_stored_model(stored_model.as_deref())
+            .maybe_stored_effort(stored_thinking_effort.as_deref())
+            .stored_fast_mode(stored_fast_mode)
+            .maybe_effective_model(effective_model)
+            .maybe_effective_effort(effective_thinking_effort)
+            .runtime_config(&mut runtime_config)
+            .build(),
     )
-    .await;
-    let effective_fast_mode = match session_init_fast_mode::resolve(
+    .await
+    {
+        Ok(config) => config,
+        Err((code, message)) => {
+            send_error(sender, &envelope.id, code, &message);
+            return;
+        }
+    };
+    let session_init_profile::ResolvedProfileConfig {
+        effective_profile,
+        effective_model: resolved_model,
+        effective_thinking_effort: resolved_effort,
+        profile_effective_fast_mode,
+        inherits_profile_config,
+    } = profile_config;
+    effective_model = resolved_model;
+    effective_thinking_effort = resolved_effort;
+    let mut effective_fast_mode = match session_init_fast_mode::resolve(
         app_state,
         session_init_fast_mode::RestoreFastModeOptions {
             db_session_id,
@@ -303,6 +304,11 @@ pub(super) async fn handle_init(
             return;
         }
     };
+    effective_fast_mode = session_init_fast_mode::profile_effective_or_legacy(
+        inherits_profile_config,
+        profile_effective_fast_mode,
+        effective_fast_mode,
+    );
     runtime_config.fast_mode = effective_fast_mode;
 
     info!(
@@ -314,6 +320,7 @@ pub(super) async fn handle_init(
     let desired_permission_mode = runtime_config.permission_mode.clone();
     let desired_access_mode = runtime_config.access_mode.clone();
     let desired_thinking_effort = runtime_config.thinking_effort.clone();
+    let runtime_overrides = runtime_config.overrides.clone();
     let config = SessionConfig::from_runtime(&runtime_config, effective_profile.clone());
     let handle = SdkHandle {
         state: QueryState::Pending(runtime_config),
@@ -350,6 +357,7 @@ pub(super) async fn handle_init(
             thinking_effort: effective_thinking_effort,
             fast_mode: effective_fast_mode,
             profile: effective_profile,
+            runtime_overrides,
             codex_permission_mode: if effective_provider
                 == crate::domain::agents::codex::PROVIDER_ID
             {

@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { getReadFileQueryKey, useWriteFile } from "@/api/generated";
 import { toastError } from "@/lib/api-errors";
 import { useEditorStore } from "@/stores/editor-store";
-import { readFileResponseFromContent } from "./useEditorSave";
+import { readFileResponseFromContent } from "./editor-file-cache";
 
 interface UseExcalidrawSaveArgs {
   projectId: number;

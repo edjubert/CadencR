@@ -1,12 +1,12 @@
 /**
  * Tracks which features have an unread agent completion: the agent finished
  * its turn (agent → idle) while the user was NOT viewing that feature. The
- * sidebar renders a blue dot for these; it clears the moment the conversation
+ * sidebar renders a green check for these; it clears the moment the conversation
  * is opened.
  *
  * Per-client and in-memory by design — "unread" is relative to *this* window
  * (a remote phone and the host each track their own), and there is nothing to
- * restore on reload: a fresh load has read nothing, so it shows no dots.
+ * restore on reload: a fresh load has read nothing, so it shows no unread checks.
  *
  * Conforms to frontend-performance.md: consumers read the per-feature boolean
  * via `useIsFeatureUnread`, never the whole map.

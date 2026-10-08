@@ -23,7 +23,7 @@ describe("ClaudeProfileCombobox", () => {
       />,
     );
 
-    await user.click(screen.getByRole("combobox", { name: /Claude profile/i }));
+    await user.click(screen.getByRole("combobox", { name: "Profile" }));
     await user.type(screen.getByPlaceholderText("Search profiles…"), "bed");
     await user.click(await screen.findByRole("option", { name: "bedrock" }));
 
@@ -45,13 +45,31 @@ describe("ClaudeProfileCombobox", () => {
       />,
     );
 
-    await user.click(screen.getByRole("combobox", { name: /Claude profile/i }));
+    await user.click(screen.getByRole("combobox", { name: "Profile" }));
     const content = document.querySelector("[data-slot='popover-content']");
     expect(content).toHaveAttribute("data-side", "top");
 
     await user.click(await screen.findByRole("option", { name: "bedrock" }));
 
     await waitFor(() => expect(onChange).toHaveBeenCalledWith("bedrock"));
+  });
+
+  it("finds a profile by its human label when its id differs", async () => {
+    const user = userEvent.setup();
+    render(
+      <ClaudeProfileCombobox
+        value="default"
+        profiles={[{ name: "profile-7f3b", label: "QA workspace", env: {} }]}
+        isLoading={false}
+        isError={false}
+        onChange={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Profile" }));
+    await user.type(screen.getByRole("combobox", { name: "Search profiles" }), "workspace");
+
+    expect(await screen.findByRole("option", { name: "QA workspace" })).toBeInTheDocument();
   });
 
   it("badges the configured active profile, which need not be the selected one", async () => {
@@ -67,7 +85,7 @@ describe("ClaudeProfileCombobox", () => {
       />,
     );
 
-    await user.click(screen.getByRole("combobox", { name: /Claude profile/i }));
+    await user.click(screen.getByRole("combobox", { name: "Profile" }));
 
     expect(await screen.findByRole("option", { name: /Default/ })).toHaveTextContent("Active");
     expect(screen.getByRole("option", { name: "bedrock" })).not.toHaveTextContent("Active");

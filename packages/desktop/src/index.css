@@ -1,3 +1,4 @@
+@import "./sidebar-rows.css";
 @import "tailwindcss";
 @import "tw-animate-css";
 /*
@@ -332,15 +333,13 @@ html[data-animations="off"] .pr-chip-checks-running::after {
   filter: invert(1);
 }
 
-/* Fill a mono provider silhouette with currentColor (working blue, waiting
- * amber/primary). Mask uses the asset's alpha so we never swap in the color
- * logo just to show status. */
+/* Quiet mono identity, optically normalized using the bundled alpha bounds. */
 @utility provider-mark-tint {
   background-color: currentColor;
   -webkit-mask-image: var(--provider-mark);
   mask-image: var(--provider-mark);
-  -webkit-mask-size: contain;
-  mask-size: contain;
+  -webkit-mask-size: var(--provider-mark-size, contain);
+  mask-size: var(--provider-mark-size, contain);
   -webkit-mask-repeat: no-repeat;
   mask-repeat: no-repeat;
   -webkit-mask-position: center;

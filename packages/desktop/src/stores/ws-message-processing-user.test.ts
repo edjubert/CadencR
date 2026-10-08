@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { AgentBlockData } from "@/components/AgentBlock";
 import { createStreamingState, type ParserSignals } from "./ws-message-processing";
 import { processUserMessage } from "./ws-message-processing-user";
+import { applyBlockContentBudget } from "@/lib/block-content-budget";
+import { mergeCanonicalBlocks } from "./ws-user-message-reconciliation";
 
 function signals(): ParserSignals {
   return {
@@ -28,6 +30,53 @@ const LAUNCH_ACK = [
 ];
 
 describe("processUserMessage subagent completion", () => {
+  it("preserves each persisted result id through truncation and reconnect", () => {
+    const state = createStreamingState();
+    const message = {
+      type: "user",
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "a",
+            agent_message_id: 41,
+            content: "x".repeat(150_000),
+          },
+          { type: "tool_result", tool_use_id: "b", agent_message_id: "42", content: "second" },
+        ],
+      },
+    };
+    const blocks = processUserMessage(message, state, signals()).map((m) =>
+      applyBlockContentBudget(m.block),
+    );
+    expect(blocks.map((b) => b.id)).toEqual(["msg-41", "msg-42"]);
+    expect(blocks[0].truncatedContent).toBe(true);
+    expect(
+      mergeCanonicalBlocks(
+        blocks,
+        blocks.map((b, index) => ({ ...b, messageDbId: index + 41 })),
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("accepts a legacy envelope id only for one result and rejects invalid ids", () => {
+    const state = createStreamingState();
+    const single = { ...taskResultMessage("a"), agent_message_id: 51 };
+    expect(processUserMessage(single, state, signals())[0].block.id).toBe("msg-51");
+    const multi = {
+      ...single,
+      message: {
+        content: [
+          { type: "tool_result", tool_use_id: "a", agent_message_id: -1 },
+          { type: "tool_result", tool_use_id: "b", agent_message_id: "9007199254740992" },
+        ],
+      },
+    };
+    expect(processUserMessage(multi, state, signals()).map((m) => m.block.id)).toEqual([
+      "ws-1",
+      "ws-2",
+    ]);
+  });
   it("marks the Task/Agent tool_call complete when its own tool_result arrives", () => {
     const state = createStreamingState();
     const task: AgentBlockData = {

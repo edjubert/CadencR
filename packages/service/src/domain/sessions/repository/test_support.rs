@@ -60,7 +60,8 @@ pub(super) async fn setup_test_db() -> SqlitePool {
             output_tokens INTEGER,
             context_window INTEGER,
             was_compacted INTEGER NOT NULL DEFAULT 0,
-            draft_prompt TEXT
+            draft_prompt TEXT,
+            message_revision INTEGER NOT NULL DEFAULT 0
         )"#,
     )
     .execute(&pool)
@@ -80,7 +81,23 @@ pub(super) async fn setup_test_db() -> SqlitePool {
             parent_tool_use_id TEXT,
             created_at TEXT,
             model TEXT
+            ,content_revision INTEGER NOT NULL DEFAULT 0
         )"#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "CREATE TRIGGER agent_messages_content_revision
+         AFTER UPDATE OF content ON agent_messages
+         WHEN NEW.content IS NOT OLD.content
+         BEGIN
+           UPDATE agent_sessions SET message_revision = message_revision + 1 WHERE id = NEW.session_id;
+           UPDATE agent_messages SET content_revision =
+             (SELECT message_revision FROM agent_sessions WHERE id = NEW.session_id)
+           WHERE id = NEW.id;
+         END",
     )
     .execute(&pool)
     .await

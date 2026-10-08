@@ -1,8 +1,14 @@
 import type { AgentBlockData } from "@/components/AgentBlock";
 import { applyBlockContentBudget } from "@/lib/block-content-budget";
 import { normalizeMessageUuid } from "@/lib/message-uuid";
+import { isFileChangeTool } from "@/lib/tool-adapter";
+import { parseToolArgsObject } from "@/lib/tool-args";
 import { movePendingPromptBlocksToTail } from "./ws-pending-prompts";
 
+import { blockMessageDbId } from "./ws-message-identity";
+import { recoverToolMessageIds } from "./ws-tool-message-identity";
+
+export { blockMessageDbId, messageDbIdFromBlockId } from "./ws-message-identity";
 export { normalizeMessageUuid } from "@/lib/message-uuid";
 
 export interface CanonicalUserMessage {
@@ -30,18 +36,6 @@ export function canonicalUserMessageBlock(message: CanonicalUserMessage): AgentB
     ...(message.origin ? { origin: message.origin } : {}),
     ...(message.promptDeliveryState ? { promptDeliveryState: message.promptDeliveryState } : {}),
   });
-}
-
-/** Numeric SQLite cursor carried explicitly or encoded in `msg-<id>`. */
-export function blockMessageDbId(block: AgentBlockData): number | null {
-  if (typeof block.messageDbId === "number") return block.messageDbId;
-  return messageDbIdFromBlockId(block.id);
-}
-
-export function messageDbIdFromBlockId(id: string): number | null {
-  if (!id.startsWith("msg-")) return null;
-  const parsed = Number(id.slice(4));
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 /**
@@ -72,6 +66,7 @@ export function mergeCanonicalBlocks(
   incoming: AgentBlockData[],
 ): AgentBlockData[] {
   if (incoming.length === 0) return existing;
+  existing = recoverToolMessageIds(existing, incoming);
   const indexes = buildIdentityIndexes(existing);
   let working = existing;
   let changed = false;
@@ -85,7 +80,20 @@ export function mergeCanonicalBlocks(
       registerIdentity(indexes, block, index);
       continue;
     }
-    if (block.type !== "user_message") continue;
+    if (block.type !== "user_message") {
+      const original = working[matchIndex];
+      const held = enrichFileChangeCall(original, block);
+      if (!block.childBlocks?.length && held === original) continue;
+      const mergedChildren = block.childBlocks?.length
+        ? mergeCanonicalBlocks(held.childBlocks ?? [], block.childBlocks)
+        : held.childBlocks;
+      if (mergedChildren === held.childBlocks && held === original) continue;
+      if (!changed) working = [...existing];
+      changed = true;
+      working[matchIndex] =
+        mergedChildren === held.childBlocks ? held : { ...held, childBlocks: mergedChildren };
+      continue;
+    }
     const nextBlock = mergeCanonicalUserBlock(working[matchIndex], block);
     if (canonicalBlocksEqual(working[matchIndex], nextBlock)) continue;
     if (!changed) working = [...existing];
@@ -100,6 +108,19 @@ export function mergeCanonicalBlocks(
       ? working
       : mergeAdditionsByDatabaseOrder(working.slice(0, existing.length), additions);
   return movePendingPromptBlocksToTail(merged);
+}
+
+function enrichFileChangeCall(held: AgentBlockData, incoming: AgentBlockData): AgentBlockData {
+  if (held.type !== "tool_call" || !isFileChangeTool(held.toolName)) return held;
+  const current = parseToolArgsObject(held.toolArgs ?? held.content);
+  if (!current || "patch_text" in current) return held;
+  if (incoming.truncatedContent) {
+    return held.truncatedContent ? held : { ...held, truncatedContent: true };
+  }
+  const enriched = parseToolArgsObject(incoming.toolArgs ?? incoming.content);
+  if (!enriched || !("patch_text" in enriched)) return held;
+  const content = JSON.stringify({ ...current, patch_text: enriched.patch_text });
+  return applyBlockContentBudget({ ...held, content, toolArgs: content });
 }
 
 export function sameMessageIdentity(left: AgentBlockData, right: AgentBlockData): boolean {

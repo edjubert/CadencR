@@ -62,14 +62,14 @@ export function handleInitialized(ctx: StoreAccessors, sessionId: string, payloa
     supportsPromptReceipts: p.supports_prompt_receipts ?? false,
   };
   if (p.sessionDbId != null) updates.sessionDbId = p.sessionDbId;
-  if (p.provider || p.model) {
-    updates.currentProviderId = p.provider ?? "";
-    updates.currentModelId = p.model ?? "";
-    updates.runtimeProvider = p.provider ?? "";
-  } else {
-    updates.runtimeProvider = session.currentProviderId;
+  // Empty models are valid for providers that negotiate models at runtime.
+  // Older initialization payloads also omit the model; never retain another
+  // provider's model when accepting their authoritative provider.
+  if (p.provider) {
+    updates.currentSelection = { providerId: p.provider, modelId: p.model ?? "" };
   }
   if (p.profile) updates.currentProfile = p.profile;
+  if (p.runtime_overrides) updates.runtimeOverrides = p.runtime_overrides;
   const accessMode = p.access_mode ?? p.codex_permission_mode;
   if (accessMode) {
     updates.accessMode = parseAccessMode(accessMode);

@@ -8,8 +8,9 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Duration;
 
-use agent_client_protocol::schema::v1::CancelNotification;
+use agent_client_protocol::schema::v1::{CancelNotification, CloseSessionRequest};
 use async_trait::async_trait;
 use serde_json::Value;
 use tokio::sync::{mpsc, RwLock};
@@ -37,6 +38,10 @@ use super::super::turn_lifecycle::{PromptCancel, PromptTurnLock};
 /// Channel buffer for the per-session runtime stream. Matches the size used
 /// by other adapters; deltas are coalesced upstream so even noisy turns fit.
 pub const MESSAGE_CHANNEL_CAPACITY: usize = 1024;
+// Must stay below the process-wide stream-reader shutdown deadline (2s): a
+// peer that advertises `session/close` but never replies must still leave time
+// to close the local runtime channel before the reader is joined.
+const SESSION_CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Provider-neutral ACP session.
 pub struct AcpRuntimeSession {
@@ -46,6 +51,7 @@ pub struct AcpRuntimeSession {
     pub(in crate::domain::agents::acp::runtime) current_effort: Arc<RwLock<Option<String>>>,
     pub(in crate::domain::agents::acp::runtime) current_mode: Arc<RwLock<String>>,
     pub(in crate::domain::agents::acp::runtime) session_config: AcpSessionConfigState,
+    pub(in crate::domain::agents::acp::runtime) supports_session_close: bool,
     /// Tracks whether the agent supports `session/set_config_option`.
     /// Defaults to `true`; flipped to `false` on the first `MethodNotFound`
     /// response so we stop wasting round trips and let the legacy
@@ -74,7 +80,7 @@ pub struct AcpRuntimeSession {
     /// channel). Aborted on `close()`.
     pub(in crate::domain::agents::acp::runtime) side_channel_task: Option<JoinHandle<()>>,
     pub(in crate::domain::agents::acp::runtime) local_tx:
-        mpsc::Sender<Result<RuntimeEvent, RuntimeError>>,
+        Option<mpsc::Sender<Result<RuntimeEvent, RuntimeError>>>,
     pub(in crate::domain::agents::acp::runtime) hooks: Arc<dyn AcpProviderHooks>,
     /// Shared streaming-block indexer (also held by the event loop) used to
     /// drain still-open text/thinking blocks at turn end (W4).
@@ -98,6 +104,12 @@ pub struct AcpRuntimeSession {
 }
 
 impl AcpRuntimeSession {
+    pub(super) fn local_tx(&self) -> &mpsc::Sender<Result<RuntimeEvent, RuntimeError>> {
+        self.local_tx
+            .as_ref()
+            .expect("ACP runtime sender unavailable after close")
+    }
+
     pub async fn current_session_id(&self) -> Option<String> {
         self.session_id.read().await.clone()
     }
@@ -125,6 +137,10 @@ impl AgentRuntimeSession for AcpRuntimeSession {
         self.current_session_id().await
     }
 
+    fn allows_resume_persistence(&self) -> bool {
+        self.hooks.supports_durable_resume()
+    }
+
     async fn available_mcp_servers(&self) -> Result<Vec<RuntimeMcpServerStatus>, RuntimeError> {
         Ok(self.mcp_servers.read().await.clone())
     }
@@ -148,12 +164,13 @@ impl AgentRuntimeSession for AcpRuntimeSession {
         content: Value,
         client_message_id: Option<String>,
     ) -> Result<(), RuntimeError> {
-        if let Ok(_guard) = self.prompt_turn_lock.try_lock() {
-            return self.prompt_input(content, client_message_id, true).await;
-        }
-
-        tracing::debug!("ACP prompt turn already active; sending follow-up as steering prompt");
-        self.prompt_input(content, client_message_id, false).await
+        // ACP v1 has no portable steering request. A second `session/prompt`
+        // while the first is active is agent-defined: Pi queues it, while other
+        // agents may reject or merge it. Serialise turns at the host boundary so
+        // every accepted user message gets one authoritative turn result and the
+        // frontend cannot remain stuck in `agent` after a queued follow-up.
+        let _guard = self.prompt_turn_lock.lock().await;
+        self.prompt_input(content, client_message_id, true).await
     }
 
     async fn run_user_shell_command(&self, command: &str) -> Result<(), RuntimeError> {
@@ -180,14 +197,37 @@ impl AgentRuntimeSession for AcpRuntimeSession {
         Ok(())
     }
 
-    async fn close(&mut self) {
+    async fn close(&mut self) -> Result<(), RuntimeError> {
         self.closing.store(true, Ordering::SeqCst);
-        // Best-effort cancel before tearing down. Ignore failures.
+        // Prefer the stable lifecycle request when advertised. A connector
+        // that accepts it must cancel ongoing work and release the session's
+        // resources. Fall back to the baseline cancel notification if the
+        // optional request fails so teardown remains bounded and best-effort.
         if let Some(session_id) = self.current_session_id().await {
-            let _ = self
-                .client
-                .send_notification_typed(CancelNotification::new(session_id))
-                .await;
+            let should_cancel = if self.supports_session_close {
+                match self
+                    .client
+                    .send_request_typed(
+                        CloseSessionRequest::new(session_id.clone()),
+                        SESSION_CLOSE_TIMEOUT,
+                    )
+                    .await
+                {
+                    Ok(_) => false,
+                    Err(error) => {
+                        tracing::warn!(%error, "ACP session/close failed; falling back to session/cancel");
+                        true
+                    }
+                }
+            } else {
+                true
+            };
+            if should_cancel {
+                let _ = self
+                    .client
+                    .send_notification_typed(CancelNotification::new(session_id))
+                    .await;
+            }
         }
         reject_all_pending(&self.client, &self.pending_permissions).await;
         // Drop session-scoped permission grants on close.
@@ -198,7 +238,12 @@ impl AgentRuntimeSession for AcpRuntimeSession {
         if let Some(task) = self.side_channel_task.take() {
             task.abort();
         }
+        // The stream receiver is owned outside the runtime. Drop our last
+        // steady-state sender after stopping producer tasks so it observes EOF
+        // even while the closed runtime remains registered for resume metadata.
+        self.local_tx.take();
         self.client.shutdown().await;
+        Ok(())
     }
 
     async fn set_model(&self, model: &str) -> Result<(), RuntimeError> {

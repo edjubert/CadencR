@@ -6,7 +6,7 @@ if ! node scripts/build-agents-md.mjs --check; then
   exit 1
 fi
 
-cmd="pnpm turbo run format:check lint ts-check test knip"
+cmd="pnpm turbo run format:check lint ts-check test knip && node --test scripts/marketplace-registry.test.mjs"
 log_file="$(mktemp -t cadencr-precommit-log.XXXXXX)" || exit 1
 tmp_dir="$(mktemp -d -t cadencr-precommit.XXXXXX)" || {
   rm -f "$log_file"

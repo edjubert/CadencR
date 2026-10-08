@@ -18,15 +18,17 @@ export default defineConfig({
     output: {
       target: "./src/api/generated/index.ts",
       client: "react-query",
+      httpClient: "axios",
       mode: "single",
       override: {
+        aliasCombinedTypes: true,
         mutator: {
           path: "./src/api/client.ts",
           name: "customInstance",
         },
         query: {
-          useQuery: true,
-          useMutation: true,
+          // V8 treats explicit flags as method overrides; retain GET queries
+          // and write mutations by letting the generator classify each verb.
           version: 5,
         },
       },

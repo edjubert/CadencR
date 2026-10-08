@@ -1,3 +1,4 @@
+import { handleRuntimeOverridesChanged } from "./ws-envelope-runtime-handlers";
 import type { SlashCommand } from "@/lib/slash-command";
 import { promptCommandPolicyFromPayload } from "@/lib/prompt-command-policy";
 import { invalidateFeatureQueries } from "@/lib/featureUpdated";
@@ -16,6 +17,7 @@ import {
   parseModelPayload,
   parseProviderPayload,
   parseProfilePayload,
+  parseSessionConfigSnapshotPayload,
 } from "./ws-envelope-payload";
 import { normalizeContextWindow } from "@/types/agent";
 import { truncateBlocksAtMessage } from "./ws-session-branch";
@@ -23,7 +25,7 @@ import { handleWorktreeEvent } from "./ws-worktree-handler";
 import { useGitStatusStore } from "./useGitStatusStore";
 import { isRecord } from "./ws-message-processing";
 import { parseAccessMode } from "@/types/access-mode";
-import { updateSession } from "./ws-session-types";
+import { createSessionConfigState, updateSession } from "./ws-session-types";
 import { transitionTurn } from "./ws-turn-lifecycle";
 import { findProviderMode } from "@/lib/provider-modes";
 import { OPENCODE_AGENT_MODE_PREFIX, parsePermissionMode } from "@/types/permission-mode";
@@ -47,7 +49,6 @@ import {
 } from "./ws-envelope-turn-handlers";
 import { SESSION_ACTION, type SessionActionName } from "./ws-session-action-names";
 import { discardStreamDeltas } from "./ws-delta-coalescer";
-
 export type { StoreAccessors } from "./ws-envelope-types";
 
 // Main envelope handler
@@ -64,7 +65,16 @@ export function handleEnvelope(
     if (cb) {
       session.pendingWsRequests.delete(envelope.ref);
       cb(envelope.payload);
-      return;
+      // Most correlated replies contain request-only acknowledgements. Runtime
+      // override replies are different: the payload is also the canonical
+      // confirmed snapshot that drives the visible controls. Apply it after
+      // resolving the request rather than waiting for a separate broadcast.
+      if (
+        envelope.domain !== "session" ||
+        envelope.action !== SESSION_ACTION.runtimeOverridesChanged
+      ) {
+        return;
+      }
     }
   }
 
@@ -110,11 +120,14 @@ function handleCommandsDomain(
   sessionId: string,
   envelope: { action: string; ref?: string; payload: unknown },
 ): void {
-  if (envelope.action === "list") {
+  if (envelope.action === "list" || envelope.action === "updated") {
     const p = parseCommandsListPayload(envelope.payload);
     if (!p) return;
     const session = ctx.getSession(sessionId);
-    if (!envelope.ref || envelope.ref !== session.slashCommandsRequestRef) {
+    if (
+      envelope.action === "list" &&
+      (!envelope.ref || envelope.ref !== session.slashCommandsRequestRef)
+    ) {
       return;
     }
     const cmds: SlashCommand[] = (p.commands ?? []).map((c) => ({
@@ -127,9 +140,12 @@ function handleCommandsDomain(
         slashCommands: cmds,
         promptCommandPolicy: promptCommandPolicyFromPayload(p.prompt_command_policy),
         slashCommandsLoading: false,
+        ...(envelope.action === "list" ? { slashCommandsRequestRef: null } : {}),
       }),
     );
+    return;
   }
+  console.warn("[ws-session] unknown commands action; dropping envelope", envelope.action);
 }
 
 type SessionActionHandler = (ctx: StoreAccessors, sessionId: string, payload: unknown) => void;
@@ -160,6 +176,7 @@ const SESSION_ACTION_HANDLERS: Record<SessionActionName, SessionActionHandler> =
   [SESSION_ACTION.effortSetOk]: handleEffortSetOk,
   [SESSION_ACTION.fastModeSetOk]: handleFastModeSetOk,
   [SESSION_ACTION.profileChanged]: handleProfileChanged,
+  [SESSION_ACTION.runtimeOverridesChanged]: handleRuntimeOverridesChanged,
   [SESSION_ACTION.compactStarted]: handleCompactStarted,
   [SESSION_ACTION.compactOk]: handleCompactOk,
   [SESSION_ACTION.cleared]: handleCleared,
@@ -178,6 +195,7 @@ const SESSION_ACTION_HANDLERS: Record<SessionActionName, SessionActionHandler> =
   // refreshes via the `feature.created` broadcast, so this ref-less
   // `branch.forked` broadcast needs no per-session handling here.
   [SESSION_ACTION.branchForked]: ignoreSessionAction,
+  [SESSION_ACTION.configSnapshot]: handleSessionConfigSnapshot,
   [SESSION_ACTION.ended]: handleTurnComplete,
   [SESSION_ACTION.turnComplete]: handleTurnComplete,
 };
@@ -216,8 +234,34 @@ function handleRuntimeSessionId(ctx: StoreAccessors, sessionId: string, payload:
   const p = parseRuntimeSessionIdPayload(payload);
   const sessionIdValue = p?.runtime_session_id;
   if (sessionIdValue && sessionIdValue !== ctx.getSession(sessionId).runtimeSessionId) {
-    ctx.set(updateSession(ctx.get(), sessionId, { runtimeSessionId: sessionIdValue }));
+    ctx.set(
+      updateSession(ctx.get(), sessionId, {
+        runtimeSessionId: sessionIdValue,
+        ...createSessionConfigState(),
+      }),
+    );
   }
+}
+
+function handleSessionConfigSnapshot(
+  ctx: StoreAccessors,
+  sessionId: string,
+  payload: unknown,
+): void {
+  const snapshot = parseSessionConfigSnapshotPayload(payload);
+  if (!snapshot) {
+    console.warn("[ws-session] invalid config.snapshot broadcast", payload);
+    return;
+  }
+  ctx.set(
+    updateSession(ctx.get(), sessionId, {
+      sessionConfig: snapshot.config,
+      sessionConfigLoading: false,
+      sessionConfigSupported: true,
+      sessionConfigError: null,
+      pendingSessionConfigId: null,
+    }),
+  );
 }
 
 function handleAccessModeChanged(ctx: StoreAccessors, sessionId: string, payload: unknown): void {
@@ -236,7 +280,8 @@ function handleModeChanged(ctx: StoreAccessors, sessionId: string, payload: unkn
   const session = p?.mode ? ctx.getSession(sessionId) : null;
   const parsedMode = p?.mode ? parsePermissionMode(p.mode) : null;
   if (!parsedMode || !session) return;
-  const providerId = session.currentProviderId || session.runtimeProvider;
+  const providerId = session.currentSelection?.providerId;
+  if (providerId == null) return;
   const acceptsMode =
     !!findProviderMode(providerId, parsedMode) || parsedMode.startsWith(OPENCODE_AGENT_MODE_PREFIX);
   if (acceptsMode) {
@@ -246,17 +291,28 @@ function handleModeChanged(ctx: StoreAccessors, sessionId: string, payload: unkn
 
 function handleProviderSetOk(ctx: StoreAccessors, sessionId: string, payload: unknown): void {
   const p = parseProviderPayload(payload);
-  if (!p?.provider) return;
+  // An empty model is deliberate — the backend says this provider exposes no
+  // usable model — and must not discard the provider change with it. Only a
+  // missing field means "no update to apply".
+  if (!p?.provider || p.model === undefined) return;
   const session = ctx.getSession(sessionId);
-  const providerChanged = p.provider !== session.currentProviderId;
+  const providerChanged = p.provider !== session.currentSelection?.providerId;
   const accessMode = p.access_mode ?? p.codex_permission_mode;
   ctx.set(
     updateSession(ctx.get(), sessionId, {
-      currentProviderId: p.provider,
-      runtimeProvider: p.provider,
-      ...(providerChanged ? { currentModelId: "" } : {}),
-      ...(providerChanged ? { fastMode: false } : {}),
+      currentSelection: { providerId: p.provider, modelId: p.model },
+      ...(p.profile !== undefined || providerChanged
+        ? { currentProfile: p.profile ?? undefined }
+        : {}),
+      ...(p.runtime_overrides !== undefined || providerChanged
+        ? { runtimeOverrides: p.runtime_overrides }
+        : {}),
+      ...(p.thinking_effort !== undefined || providerChanged
+        ? { currentThinkingEffort: p.thinking_effort ?? undefined }
+        : {}),
+      fastMode: p.fast_mode ?? (providerChanged ? false : session.fastMode),
       mcpServers: null,
+      ...createSessionConfigState(),
       supportsPromptReceipts: p.supports_prompt_receipts ?? false,
       ...(accessMode
         ? {
@@ -269,22 +325,24 @@ function handleProviderSetOk(ctx: StoreAccessors, sessionId: string, payload: un
 
 function handleModelSetOk(ctx: StoreAccessors, sessionId: string, payload: unknown): void {
   const p = parseModelPayload(payload);
-  if (!p) return;
+  if (!p?.model || !p.provider) return;
   const session = ctx.getSession(sessionId);
+  const existing = session.contextUsage;
   // The window belongs to the model, so the outgoing one is never carried over.
   // The backend seeds the incoming model's window when its adapter can answer;
   // otherwise the bar hides until the next `result`, which beats scaling by the
   // old model's window (1M → 200k reads 5x low, 200k → 1M reads 5x high).
   const nextContextWindow = normalizeContextWindow(p.context_window);
-  const nextUsage = session.contextUsage
-    ? { ...session.contextUsage, contextWindow: nextContextWindow }
+  const nextUsage = existing
+    ? { ...existing, contextWindow: nextContextWindow }
     : { inputTokens: 0, outputTokens: 0, contextWindow: nextContextWindow, wasCompacted: false };
   ctx.set(
     updateSession(ctx.get(), sessionId, {
-      currentProviderId: p.provider,
-      currentModelId: p.model,
-      runtimeProvider: p.provider,
+      currentSelection: { providerId: p.provider, modelId: p.model },
       contextUsage: nextUsage,
+      ...(session.runtimeSessionId && session.sessionConfigSupported === true
+        ? createSessionConfigState()
+        : {}),
     }),
   );
 }
@@ -307,8 +365,21 @@ function handleFastModeSetOk(ctx: StoreAccessors, sessionId: string, payload: un
 function handleProfileChanged(ctx: StoreAccessors, sessionId: string, payload: unknown): void {
   const p = parseProfilePayload(payload);
   if (p?.profile) {
-    if (ctx.get().sessions[sessionId]?.currentProfile === p.profile) return;
-    ctx.set(updateSession(ctx.get(), sessionId, { currentProfile: p.profile }));
+    const current = ctx.get().sessions[sessionId]?.currentSelection;
+    ctx.set(
+      updateSession(ctx.get(), sessionId, {
+        currentProfile: p.profile,
+        ...(p.effective
+          ? {
+              currentSelection: current
+                ? { providerId: current.providerId, modelId: p.effective.model ?? "" }
+                : null,
+              currentThinkingEffort: p.effective.thinking_effort ?? undefined,
+              fastMode: p.effective.fast_mode,
+            }
+          : {}),
+      }),
+    );
   }
 }
 

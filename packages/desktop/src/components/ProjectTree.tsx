@@ -35,6 +35,7 @@ import {
 import { ContextMenuActionItem } from "@/components/ContextMenuActionItem";
 import { wsSessionIdFromFeature } from "@/lib/ws-session-id";
 import { invalidateByUrlPrefix } from "@/lib/queryClient";
+import { clearProjectAutoExpandSkip, shouldSkipProjectAutoExpand } from "@/lib/project-auto-expand";
 import { ProjectBadge } from "@/components/ProjectBadge";
 import { PROJECT_COLORS } from "@/lib/project-colors";
 import { useNewProjectOnboarding } from "@/lib/project-onboarding";
@@ -43,8 +44,6 @@ import { toast } from "sonner";
 import { SidebarProjectsHeader } from "./SidebarProjectsHeader";
 import { ProjectFeatures } from "./ProjectFeatures";
 import { desktopBridge, isDesktopShell } from "@/lib/desktop-bridge";
-import { ShortcutHintsProvider } from "@/hooks/useNavShortcutHints";
-import { useSidebarCollapsed } from "@/components/SidebarContext";
 import { ProjectRowButton } from "./ProjectRowButton";
 import { ProjectTreeDialogs } from "./ProjectTreeDialogs";
 
@@ -115,7 +114,6 @@ function useProjectTreeMutations(
 
 function useProjectTreeController(props: ProjectTreeProps) {
   const ordered = useOrderedProjects();
-  const { collapsed } = useSidebarCollapsed();
   const [isSelectingFolder, setIsSelectingFolder] = useState(false);
   const onboarding = useNewProjectOnboarding();
   const mutations = useProjectTreeMutations(ordered.projects, onboarding.maybeOnboard);
@@ -124,9 +122,18 @@ function useProjectTreeController(props: ProjectTreeProps) {
   const [importProject, setImportProject] = useState<ProjectDialogTarget | null>(null);
   const [deleteProject, setDeleteProject] = useState<ProjectDialogTarget | null>(null);
   useEffect(() => {
-    if (props.activeProjectId != null) {
-      setExpanded((previous) => ({ ...previous, [props.activeProjectId!]: true }));
+    const activeId = props.activeProjectId;
+    // Leaving the project list (e.g. opening Settings) must not leave a stale
+    // pinned-navigation marker behind: returning to the project later is an
+    // ordinary navigation and should expand it.
+    if (activeId == null) {
+      clearProjectAutoExpandSkip();
+      return;
     }
+    // A pinned-row navigation marks its project so the tree stays folded.
+    if (shouldSkipProjectAutoExpand(activeId)) return;
+    clearProjectAutoExpandSkip();
+    setExpanded((previous) => ({ ...previous, [activeId]: true }));
   }, [props.activeProjectId]);
   const startSession = useCallback(
     (projectId: number) => {
@@ -151,7 +158,6 @@ function useProjectTreeController(props: ProjectTreeProps) {
   return useMemo(
     () => ({
       addProject,
-      collapsed,
       deleteProject,
       expanded,
       importProject,
@@ -168,7 +174,6 @@ function useProjectTreeController(props: ProjectTreeProps) {
     }),
     [
       addProject,
-      collapsed,
       deleteProject,
       expanded,
       importProject,
@@ -187,35 +192,33 @@ export type ProjectTreeController = ReturnType<typeof useProjectTreeController>;
 export function ProjectTree(props: ProjectTreeProps) {
   const controller = useProjectTreeController(props);
   return (
-    <ShortcutHintsProvider enabled={!controller.collapsed}>
-      <div className="flex h-full min-h-0 min-w-0 flex-col gap-2 overflow-hidden">
-        <SidebarProjectsHeader
-          onAddProject={controller.addProject}
-          isAddingProject={
-            controller.isSelectingFolder || controller.mutations.createProject.isPending
-          }
-          canAddProject={isDesktopShell()}
-          onRefresh={() => void controller.ordered.refresh()}
-          isRefreshing={controller.ordered.isRefreshing}
-        />
-        <ScrollArea className="flex-1 min-h-0 min-w-0 overflow-hidden">
-          <div className="flex min-w-0 flex-col gap-0.5 px-1">
-            {controller.ordered.projects.map((project) => (
-              <ProjectTreeRow
-                key={project.id}
-                project={project}
-                props={props}
-                controller={controller}
-              />
-            ))}
-            {controller.ordered.projects.length === 0 && (
-              <p className="px-2 py-4 text-center text-xs text-muted-foreground">No projects yet</p>
-            )}
-          </div>
-        </ScrollArea>
-        <ProjectTreeDialogs controller={controller} />
-      </div>
-    </ShortcutHintsProvider>
+    <div className="flex h-full min-h-0 min-w-0 flex-col gap-2 overflow-hidden">
+      <SidebarProjectsHeader
+        onAddProject={controller.addProject}
+        isAddingProject={
+          controller.isSelectingFolder || controller.mutations.createProject.isPending
+        }
+        canAddProject={isDesktopShell()}
+        onRefresh={() => void controller.ordered.refresh()}
+        isRefreshing={controller.ordered.isRefreshing}
+      />
+      <ScrollArea className="flex-1 min-h-0 min-w-0 overflow-hidden">
+        <div className="flex min-w-0 flex-col gap-0.5 px-1">
+          {controller.ordered.projects.map((project) => (
+            <ProjectTreeRow
+              key={project.id}
+              project={project}
+              props={props}
+              controller={controller}
+            />
+          ))}
+          {controller.ordered.projects.length === 0 && (
+            <p className="px-2 py-4 text-center text-xs text-muted-foreground">No projects yet</p>
+          )}
+        </div>
+      </ScrollArea>
+      <ProjectTreeDialogs controller={controller} />
+    </div>
   );
 }
 
@@ -242,7 +245,12 @@ function ProjectTreeRow({
             ) : (
               <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
             )}
-            <ProjectBadge projectId={project.id} />
+            <span
+              data-sidebar-project-badge
+              className="inline-flex size-3.5 shrink-0 items-center justify-center"
+            >
+              <ProjectBadge projectId={project.id} className="max-w-none" />
+            </span>
             <span className="min-w-0 truncate">{project.name}</span>
             <ProjectRowActions project={project} controller={controller} />
           </ProjectRowButton>

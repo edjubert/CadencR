@@ -24,87 +24,25 @@ import { ThinkingBlock } from "@/components/ThinkingBlock";
 import { CompactDivider, ClearDivider, TurnSummaryDivider } from "@/components/StreamDividers";
 import { ToolSummaryBlock } from "@/components/agent-session/ToolSummaryBlock";
 import { ErrorBlock } from "@/components/ErrorBlock";
+import { FullContentPreview } from "@/components/FullContentPreview";
 import { CodeBlockHeader } from "@/components/CodeBlockHeader";
 import { useCodeBlockActions } from "@/components/CodeBlockActionsContext";
 import { isTaskTodoTool } from "@/lib/tool-adapter";
 import { parseToolArgsObject, stringArg } from "@/lib/tool-args";
 import { semanticSkillPresentation, shouldHideToolCall } from "@/lib/tool-display-policy";
 import { verbosityControlsCollapse, type AgentVerbosityMode } from "@/lib/agent-verbosity";
-import type { PromptDeliveryState } from "@/types/agent";
-import { messageDbIdFromBlockId } from "@/stores/ws-user-message-reconciliation";
-import type { AgentMessageOrigin } from "@/api/generated";
+import { blockMessageDbId } from "@/stores/ws-message-identity";
 import type { SessionReplyEnvelope } from "@/lib/session-reply";
 
-export type BlockType =
-  | "text"
-  | "code"
-  | "tool_call"
-  | "tool_result"
-  | "thinking"
-  | "user_message"
-  | "turn_summary"
-  | "tool_summary"
-  | "compact_divider"
-  | "clear_divider"
-  | "error";
+export type { AgentBlockData, BlockType } from "@/components/agent-block-types";
+import { shouldGateFullContent, type AgentBlockData } from "@/components/agent-block-types";
 
 export function buildToolResultMap(blocks: AgentBlockData[]): Map<string, AgentBlockData> {
   const map = new Map<string, AgentBlockData>();
-  for (const b of blocks) {
-    if (b.type === "tool_result" && b.toolUseId) map.set(b.toolUseId, b);
+  for (const block of blocks) {
+    if (block.type === "tool_result" && block.toolUseId) map.set(block.toolUseId, block);
   }
   return map;
-}
-
-export interface AgentBlockData {
-  id: string;
-  type: BlockType;
-  content: string;
-  /** For tool_call blocks */
-  toolName?: string;
-  /** For tool_call blocks — JSON string of arguments */
-  toolArgs?: string;
-  /** For tool_result blocks */
-  isError?: boolean;
-  /** For code blocks */
-  language?: string;
-  /** The tool_use_id from the SDK (for tool_call blocks) */
-  toolUseId?: string;
-  /** Parent tool_use_id if this block comes from a subagent */
-  parentToolUseId?: string | null;
-  /** Child blocks nested under this Task block, or a tool_summary's turn detail */
-  childBlocks?: AgentBlockData[];
-  /** Whether this Task's subagent has completed */
-  taskComplete?: boolean;
-  /**
-   * Whether this Task's subagent runs in the background. Claude's harness may
-   * launch a subagent asynchronously: the Agent tool returns an immediate
-   * "Async agent launched" ack (not the real output), and the subagent's work
-   * streams afterward, interleaved with the main agent. Such a subagent must
-   * NOT be completed by its own tool_result (the ack) nor by a context switch
-   * away from it — only `turn_complete` truly ends it.
-   */
-  taskBackground?: boolean;
-  /** Persisted DB message id used for chronological ordering and branching. */
-  messageDbId?: number;
-  /** Stable Cadencr-owned logical identity for a persisted user message. */
-  messageUuid?: string;
-  /** The tool name that produced this tool_result (resolved from parent tool_call) */
-  sourceToolName?: string;
-  /** ISO timestamp from the DB message */
-  createdAt?: string;
-  /** Model name for assistant messages (e.g. "claude-opus-4-6") */
-  model?: string;
-  /** Plan approval status — set after user approves or rejects */
-  planApprovalStatus?: "approved" | "rejected";
-  /** Whether `content` was server-side truncated and needs full-content fetch on expand. */
-  truncatedContent?: boolean;
-  /** Receipt state for local user prompt blocks when a runtime supports it. */
-  promptDeliveryState?: PromptDeliveryState;
-  /** For `error` blocks — machine-readable code from the backend. */
-  errorCode?: string;
-  /** Provenance for machine-generated user messages. */
-  origin?: AgentMessageOrigin | null;
 }
 
 interface AgentBlockProps {
@@ -117,6 +55,7 @@ interface AgentBlockProps {
   isCollapsedByPolicy?: boolean;
   onExpandedChange?: (next: boolean) => void;
   sessionReply?: SessionReplyEnvelope | null;
+  contentMode?: "normal" | "loaded-full";
 }
 
 export const AgentBlock = memo(function AgentBlock({
@@ -128,7 +67,9 @@ export const AgentBlock = memo(function AgentBlock({
   isCollapsedByPolicy = false,
   onExpandedChange,
   sessionReply,
+  contentMode = "normal",
 }: AgentBlockProps) {
+  const loadedFullContent = contentMode === "loaded-full";
   // Cache the rendered markdown tree for STABLE blocks (keyed by block id) so
   // Virtuoso recycling reuses it across mounts. The actively streaming block is
   // deliberately NOT cached: its content changes every batch, so caching each
@@ -144,10 +85,40 @@ export const AgentBlock = memo(function AgentBlock({
   const controlledExpanded = verbosityControlsCollapse(verbosityMode)
     ? !isCollapsedByPolicy
     : undefined;
+  if (shouldGateFullContent(block)) {
+    const messageId = blockMessageDbId(block) ?? undefined;
+    return (
+      <FullContentPreview preview={block.content} messageId={messageId}>
+        {(content) => (
+          <AgentBlock
+            block={{
+              ...block,
+              content,
+              toolArgs: block.type === "tool_call" ? content : block.toolArgs,
+              truncatedContent: false,
+            }}
+            isStreaming={false}
+            basePath={basePath}
+            toolResultMap={toolResultMap}
+            verbosityMode={verbosityMode}
+            isCollapsedByPolicy={isCollapsedByPolicy}
+            onExpandedChange={onExpandedChange}
+            sessionReply={sessionReply}
+            contentMode="loaded-full"
+          />
+        )}
+      </FullContentPreview>
+    );
+  }
   switch (block.type) {
     case "text":
       return (
-        <TextBlock content={block.content} cacheKey={markdownCacheKey} isStreaming={isStreaming} />
+        <TextBlock
+          content={block.content}
+          cacheKey={markdownCacheKey}
+          isStreaming={isStreaming}
+          disableCache={loadedFullContent}
+        />
       );
     case "code":
       return <CodeBlock content={block.content} language={block.language} />;
@@ -162,7 +133,7 @@ export const AgentBlock = memo(function AgentBlock({
         />
       );
     case "tool_result":
-      return <ToolResultContent block={block} />;
+      return <ToolResultContent block={block} showGeneric={loadedFullContent} />;
     case "thinking":
       return (
         <ThinkingBlock
@@ -171,6 +142,7 @@ export const AgentBlock = memo(function AgentBlock({
           isStreaming={isStreaming}
           expanded={controlledExpanded}
           onExpandedChange={onExpandedChange}
+          disableCache={loadedFullContent}
         />
       );
     case "user_message":
@@ -236,7 +208,7 @@ function ToolCallContent({
         content={resultOutput ?? extractBashOutput(block.toolArgs)}
         running={!result && isToolCallRunning(block.toolArgs)}
         isError={result?.isError ?? isToolCallError(block.toolArgs)}
-        messageId={messageDbIdFromBlockId(outputBlock.id) ?? undefined}
+        messageId={blockMessageDbId(outputBlock) ?? undefined}
         truncatedContent={outputBlock.truncatedContent === true}
         expanded={controlledExpanded}
         onExpandedChange={onExpandedChange}
@@ -258,15 +230,27 @@ function ToolCallContent({
   );
 }
 
-function ToolResultContent({ block }: { block: AgentBlockData }): ReactNode {
-  if (block.sourceToolName === "Bash" || isFileChangeTool(block.sourceToolName)) return null;
+function ToolResultContent({
+  block,
+  showGeneric = false,
+}: {
+  block: AgentBlockData;
+  showGeneric?: boolean;
+}): ReactNode {
+  if (block.sourceToolName === "Bash") return null;
+  if (isFileChangeTool(block.sourceToolName) && !showGeneric) return null;
   if (block.isError && shouldHideToolCall(block.sourceToolName)) {
     return <ErrorBlock content={block.content} />;
   }
   if (block.sourceToolName === "Agent" || block.sourceToolName === "Task") {
     return <AgentResultBlock content={block.content} />;
   }
-  return null;
+  if (!showGeneric) return null;
+  return (
+    <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted/30 p-3 text-xs text-foreground">
+      {block.content}
+    </pre>
+  );
 }
 
 function UserMessageContent({
@@ -320,10 +304,12 @@ const TextBlock = memo(function TextBlock({
   content,
   cacheKey,
   isStreaming,
+  disableCache,
 }: {
   content: string;
   cacheKey?: string;
   isStreaming?: boolean;
+  disableCache?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   // Throttle re-parse of the actively streaming block; copy always uses the
@@ -338,7 +324,12 @@ const TextBlock = memo(function TextBlock({
 
   return (
     <div className="group/textblock">
-      <Markdown content={displayContent} cacheKey={cacheKey} isStreaming={isStreaming} />
+      <Markdown
+        content={displayContent}
+        cacheKey={cacheKey}
+        isStreaming={isStreaming}
+        disableCache={disableCache}
+      />
       <div className="opacity-0 group-hover/textblock:opacity-100 transition-colors">
         <button
           type="button"

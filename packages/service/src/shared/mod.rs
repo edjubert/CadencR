@@ -7,6 +7,7 @@ pub mod env_file;
 pub mod file_watch;
 pub mod fs_durability;
 pub mod git_cli;
+pub mod git_context;
 pub mod image_file;
 pub mod login_env;
 pub mod migrate;

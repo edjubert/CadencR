@@ -21,7 +21,7 @@ pub(super) async fn spawn_compact_turn(session: &AcpRuntimeSession) -> Result<()
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .map_err(|_| RuntimeError::new("manual compaction is already running"))?;
 
-    let local_tx = session.local_tx.clone();
+    let local_tx = session.local_tx().clone();
     let turn = CompactTurn {
         client: session.client.clone(),
         session_id_lock: Arc::clone(&session.session_id),
@@ -132,6 +132,8 @@ mod tests {
             context_window: None,
             current_mode: None,
             session_config: Default::default(),
+            supports_session_close: false,
+            may_replay_history: false,
         }
     }
 

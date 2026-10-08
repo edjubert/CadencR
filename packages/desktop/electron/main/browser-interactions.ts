@@ -1,5 +1,6 @@
 import type { WebContents } from "electron";
 import { flashHighlight } from "./browser-dom";
+import { scaleBrowserInputPoint } from "./browser-input-geometry";
 import { expectScriptResult, isRecord } from "./browser-manager-utils";
 import {
   fillTargetScript,
@@ -35,19 +36,39 @@ export async function resolveTarget(
   );
 }
 
-export async function clickTarget(wc: WebContents, target: BrowserTarget): Promise<ResolvedTarget> {
+export async function clickTarget(
+  wc: WebContents,
+  target: BrowserTarget,
+  authorize: () => void = () => undefined,
+  beforeInput: () => void = () => undefined,
+  inputScale: () => number = () => 1,
+): Promise<ResolvedTarget> {
   const resolved = await resolveTarget(wc, target);
+  authorize();
   await flashHighlight(wc, resolved.boundingBox);
+  authorize();
   const { x, y } = resolved.center;
-  wc.sendInputEvent({ type: "mouseDown", x, y, button: "left", clickCount: 1 });
-  wc.sendInputEvent({ type: "mouseUp", x, y, button: "left", clickCount: 1 });
+  const point = scaleBrowserInputPoint(x, y, inputScale());
+  beforeInput();
+  wc.sendInputEvent({ type: "mouseDown", ...point, button: "left", clickCount: 1 });
+  wc.sendInputEvent({ type: "mouseUp", ...point, button: "left", clickCount: 1 });
   return resolved;
 }
 
-export async function hoverTarget(wc: WebContents, target: BrowserTarget): Promise<ResolvedTarget> {
+export async function hoverTarget(
+  wc: WebContents,
+  target: BrowserTarget,
+  authorize: () => void = () => undefined,
+  inputScale: () => number = () => 1,
+): Promise<ResolvedTarget> {
   const resolved = await resolveTarget(wc, target);
+  authorize();
   await flashHighlight(wc, resolved.boundingBox);
-  wc.sendInputEvent({ type: "mouseMove", x: resolved.center.x, y: resolved.center.y });
+  authorize();
+  wc.sendInputEvent({
+    type: "mouseMove",
+    ...scaleBrowserInputPoint(resolved.center.x, resolved.center.y, inputScale()),
+  });
   return resolved;
 }
 

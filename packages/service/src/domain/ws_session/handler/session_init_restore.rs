@@ -102,7 +102,8 @@ mod tests {
                 pending_permission TEXT,
                 pending_questions TEXT,
                 thinking_effort TEXT,
-                fast_mode INTEGER NOT NULL DEFAULT 0
+                fast_mode INTEGER NOT NULL DEFAULT 0,
+                runtime_overrides TEXT
             )"#,
         )
         .execute(&pool)
@@ -138,6 +139,7 @@ mod tests {
             context_window: None,
             thinking_effort: None,
             fast_mode: false,
+            runtime_overrides: None,
         };
         let (_, payload) = row.pending_gate_payload().expect("payload");
         assert_eq!(payload.request_id, "req_1");
@@ -185,6 +187,7 @@ mod tests {
             context_window: None,
             thinking_effort: None,
             fast_mode: false,
+            runtime_overrides: None,
         }
     }
 

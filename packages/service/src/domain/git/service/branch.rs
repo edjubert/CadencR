@@ -259,7 +259,8 @@ pub async fn has_uncommitted_changes(
     .await?
     .ok_or_else(|| AppError::NotFound("No worktree found for this feature".into()))?;
 
-    let has_changes = commands::has_uncommitted_changes(Path::new(&wt_path)).await?;
+    let has_changes = crate::shared::git_context::has_git_metadata(Path::new(&wt_path)).await?
+        && commands::has_uncommitted_changes(Path::new(&wt_path)).await?;
     Ok(HasUncommittedChangesResponse { has_changes })
 }
 
@@ -285,6 +286,51 @@ mod tests {
             .unwrap();
         assert_eq!(repo_path, "/tmp/project");
         assert_eq!(target, "develop");
+    }
+
+    #[tokio::test]
+    async fn branch_deletion_rejects_unverifiable_repositories() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = setup_diff_refs_schema().await;
+        sqlx::query("INSERT INTO projects (id, name, path) VALUES (1, 'project', ?)")
+            .bind(dir.path().to_string_lossy().as_ref())
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO features (id, project_id, title) VALUES (1, 1, 'feat')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        repository::set_feature_setting(&pool, 1, SETTING_WORKTREE_BRANCH, "feature/test")
+            .await
+            .unwrap();
+        let state = AppState::with_pool(pool);
+        for path in [dir.path().to_path_buf(), dir.path().join("missing")] {
+            sqlx::query("UPDATE projects SET path = ? WHERE id = 1")
+                .bind(path.to_string_lossy().as_ref())
+                .execute(&state.write_pool)
+                .await
+                .unwrap();
+            assert!(delete_feature_branch(
+                &state,
+                DeleteFeatureBranchParams {
+                    project_id: 1,
+                    feature_id: 1,
+                    force: true,
+                }
+            )
+            .await
+            .is_err());
+            assert!(check_branch_delete(
+                &state,
+                BranchDeleteCheckParams {
+                    project_id: 1,
+                    feature_id: 1,
+                }
+            )
+            .await
+            .is_err());
+        }
     }
 
     #[tokio::test]

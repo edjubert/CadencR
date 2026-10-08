@@ -14,7 +14,7 @@
  */
 import { forwardRef, useImperativeHandle, useRef, useState, type ForwardedRef } from "react";
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@/test-utils";
+import { act, fireEvent, render, screen, waitFor } from "@/test-utils";
 import userEvent from "@testing-library/user-event";
 
 const attachmentMocks = vi.hoisted(() => ({
@@ -222,8 +222,9 @@ describe("AgentPromptBar async onSend", () => {
     expect(screen.getByRole("textbox")).toBeDisabled();
 
     resolveSend();
-    await screen.findByRole("textbox");
-    expect(screen.getByLabelText("Send message")).toHaveAttribute("aria-busy", "false");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Send message")).toHaveAttribute("aria-busy", "false"),
+    );
   });
 
   it("restores image attachments when async onSend rejects", async () => {

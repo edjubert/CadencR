@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useState, type ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
-import { render, screen, waitFor } from "@/test-utils";
+import { fireEvent, render, screen, waitFor } from "@/test-utils";
 import { ArchiveFeatureDialog } from "./ArchiveFeatureDialog";
 import type { Feature, GitStatusSnapshot } from "@/api/generated";
 
@@ -12,6 +12,7 @@ const {
   mockGitStatus,
   mockKillTerminals,
   mockListFeatureActivity,
+  mockArchivePreview,
 } = vi.hoisted(() => ({
   mockDeleteWorktree: vi.fn(),
   mockDeleteBranch: vi.fn(),
@@ -19,6 +20,7 @@ const {
   mockGitStatus: vi.fn(),
   mockKillTerminals: vi.fn(),
   mockListFeatureActivity: vi.fn(),
+  mockArchivePreview: vi.fn(),
 }));
 
 vi.mock("@/api/generated", () => ({
@@ -28,6 +30,7 @@ vi.mock("@/api/generated", () => ({
   useGetGitStatus: mockGitStatus,
   useKillTerminalSessions: vi.fn(() => ({ mutateAsync: mockKillTerminals })),
   useListFeatureActivity: mockListFeatureActivity,
+  useGetFeatureArchivePreview: mockArchivePreview,
 }));
 
 vi.mock("sonner", () => ({
@@ -84,9 +87,9 @@ function renderDialog(
     showBranchRemoval?: boolean;
   } = {},
 ) {
-  const onArchive = vi.fn();
+  const onArchive = vi.fn().mockResolvedValue({ archived_ids: [feature.id] });
   const onOpenChange = vi.fn();
-  render(
+  const view = render(
     <ArchiveFeatureDialog
       open
       feature={feature}
@@ -99,7 +102,7 @@ function renderDialog(
       onArchive={onArchive}
     />,
   );
-  return { onArchive, onOpenChange };
+  return { onArchive, onOpenChange, ...view };
 }
 
 describe("ArchiveFeatureDialog", () => {
@@ -119,6 +122,12 @@ describe("ArchiveFeatureDialog", () => {
     mockGitStatus.mockReturnValue({ data: undefined, isLoading: false });
     mockKillTerminals.mockResolvedValue({ killed: 0 });
     mockListFeatureActivity.mockReturnValue({ data: [] });
+    mockArchivePreview.mockReturnValue({
+      data: { parent_ids: [], descendant_ids: [] },
+      isFetching: false,
+      error: null,
+      refetch: vi.fn(),
+    });
   });
 
   function withRunningShells(count: number): void {
@@ -137,12 +146,17 @@ describe("ArchiveFeatureDialog", () => {
 
     await user.keyboard("{Meta>}{Enter}{/Meta}");
 
-    expect(onArchive).toHaveBeenCalledWith(1);
+    await waitFor(() =>
+      expect(onArchive).toHaveBeenCalledWith(1, {
+        include_parent: false,
+        include_descendants: false,
+      }),
+    );
   });
 
   it("ignores repeated confirm keys while the archive dialog is closing", async () => {
     const user = userEvent.setup();
-    const onArchive = vi.fn();
+    const onArchive = vi.fn().mockResolvedValue({ archived_ids: [1] });
 
     function DelayedCloseHarness(): ReactElement {
       const [dialogFeature, setDialogFeature] = useState(feature);
@@ -156,8 +170,8 @@ describe("ArchiveFeatureDialog", () => {
           showWorktreeRemoval
           showBranchRemoval
           onOpenChange={vi.fn()}
-          onArchive={(featureId) => {
-            onArchive(featureId);
+          onArchive={async (featureId, options) => {
+            onArchive(featureId, options);
             setDialogFeature(nextFeature);
           }}
         />
@@ -171,7 +185,189 @@ describe("ArchiveFeatureDialog", () => {
     await user.keyboard("{Enter}");
 
     expect(onArchive).toHaveBeenCalledTimes(1);
-    expect(onArchive).toHaveBeenCalledWith(1);
+    expect(onArchive).toHaveBeenCalledWith(1, {
+      include_parent: false,
+      include_descendants: false,
+    });
+  });
+
+  it.each([
+    { parent: false, descendants: false },
+    { parent: true, descendants: false },
+    { parent: false, descendants: true },
+    { parent: true, descendants: true },
+  ])("submits independent linked-session choices: $parent/$descendants", async (choice) => {
+    mockArchivePreview.mockReturnValue({
+      data: { parent_ids: [8], descendant_ids: [9, 10] },
+      isFetching: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    const user = userEvent.setup();
+    const { onArchive } = renderDialog();
+
+    if (choice.parent) await user.click(screen.getByText("Archive parent"));
+    if (choice.descendants) await user.click(screen.getByText("Archive 2 descendants"));
+    await user.click(screen.getByRole("button", { name: /archive/i }));
+
+    expect(onArchive).toHaveBeenCalledWith(1, {
+      include_parent: choice.parent,
+      include_descendants: choice.descendants,
+    });
+  });
+
+  it("shows only eligible relative choices", () => {
+    mockArchivePreview.mockReturnValue({
+      data: { parent_ids: [], descendant_ids: [9] },
+      isFetching: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    renderDialog();
+
+    expect(screen.queryByText("Archive parent")).not.toBeInTheDocument();
+    expect(screen.getByText("Archive 1 descendant")).toBeInTheDocument();
+  });
+
+  it("shows preview loading and an actionable error", async () => {
+    const refetch = vi.fn();
+    mockArchivePreview.mockReturnValueOnce({
+      data: undefined,
+      isFetching: true,
+      error: null,
+      refetch,
+    });
+    const { unmount } = renderDialog();
+    expect(screen.getByText("Checking linked sessions…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /archive/i })).toBeDisabled();
+    unmount();
+
+    mockArchivePreview.mockReturnValue({
+      data: undefined,
+      isFetching: false,
+      error: new Error("preview unavailable"),
+      refetch,
+    });
+    const user = userEvent.setup();
+    renderDialog();
+    expect(screen.getByRole("alert")).toHaveTextContent("preview unavailable");
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(refetch).toHaveBeenCalledOnce();
+  });
+
+  it("uses layout-aware P and C mnemonics without modifiers", () => {
+    mockArchivePreview.mockReturnValue({
+      data: { parent_ids: [8], descendant_ids: [9] },
+      isFetching: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    renderDialog();
+    const dialog = screen.getByRole("dialog");
+
+    fireEvent.keyDown(dialog, { key: "p", code: "KeyQ" });
+    fireEvent.keyDown(dialog, { key: "c", code: "KeyC" });
+    expect(screen.getByRole("checkbox", { name: /archive parent/i })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /archive 1 descendant/i })).toBeChecked();
+
+    fireEvent.keyDown(dialog, { key: "p", code: "KeyP", metaKey: true });
+    expect(screen.getByRole("checkbox", { name: /archive parent/i })).toBeChecked();
+  });
+
+  it("resets relative selections for a different feature", async () => {
+    mockArchivePreview.mockReturnValue({
+      data: { parent_ids: [8], descendant_ids: [] },
+      isFetching: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <ArchiveFeatureDialog
+        open
+        feature={feature}
+        projectId={1}
+        hasLiveWorktree={false}
+        hasResidualWorktreeDirectory={false}
+        showWorktreeRemoval={false}
+        showBranchRemoval={false}
+        onOpenChange={vi.fn()}
+        onArchive={vi.fn().mockResolvedValue({ archived_ids: [] })}
+      />,
+    );
+    await user.click(screen.getByText("Archive parent"));
+    expect(screen.getByRole("checkbox", { name: /archive parent/i })).toBeChecked();
+    rerender(
+      <ArchiveFeatureDialog
+        open
+        feature={nextFeature}
+        projectId={1}
+        hasLiveWorktree={false}
+        hasResidualWorktreeDirectory={false}
+        showWorktreeRemoval={false}
+        showBranchRemoval={false}
+        onOpenChange={vi.fn()}
+        onArchive={vi.fn().mockResolvedValue({ archived_ids: [] })}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: /archive parent/i })).not.toBeChecked(),
+    );
+  });
+
+  it("waits for archive success before closing and cleanup", async () => {
+    let resolveArchive!: (value: unknown) => void;
+    const onArchive = vi.fn(() => new Promise((resolve) => (resolveArchive = resolve)));
+    const onOpenChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ArchiveFeatureDialog
+        open
+        feature={feature}
+        projectId={1}
+        hasLiveWorktree={false}
+        hasResidualWorktreeDirectory={false}
+        showWorktreeRemoval
+        showBranchRemoval={false}
+        onOpenChange={onOpenChange}
+        onArchive={onArchive}
+      />,
+    );
+    await user.click(screen.getByText("Remove worktree"));
+    await user.click(screen.getByRole("button", { name: /archive/i }));
+    expect(screen.getByRole("button", { name: "Archiving…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(mockDeleteWorktree).not.toHaveBeenCalled();
+    resolveArchive({ archived_ids: [1] });
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    await waitFor(() => expect(mockDeleteWorktree).toHaveBeenCalledOnce());
+  });
+
+  it("keeps the dialog open and skips cleanup when archiving fails", async () => {
+    const onArchive = vi.fn().mockRejectedValue(new Error("archive refused"));
+    const onOpenChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ArchiveFeatureDialog
+        open
+        feature={feature}
+        projectId={1}
+        hasLiveWorktree={false}
+        hasResidualWorktreeDirectory={false}
+        showWorktreeRemoval
+        showBranchRemoval={false}
+        onOpenChange={onOpenChange}
+        onArchive={onArchive}
+      />,
+    );
+    await user.click(screen.getByText("Remove worktree"));
+    await user.click(screen.getByRole("button", { name: /archive/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("archive refused");
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(mockDeleteWorktree).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /archive/i })).toBeEnabled();
   });
 
   it("hides the kill-terminals option when the feature has no live shells", () => {

@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { suppressAutoScrollPin } from "@/lib/agent-scroll-suppression";
 import { CollapsibleSection } from "@/components/ui/collapsible-section";
 
 interface CollapsibleBlockProps {
@@ -7,6 +8,8 @@ interface CollapsibleBlockProps {
   totalCount: number;
   /** Number of items to show when collapsed (shows last N) */
   visibleCount: number;
+  /** Older items exist outside the local preview; expanding loads them. */
+  hasMore?: boolean;
   /** Unit label for the truncation indicator (e.g. "lines", "actions") */
   unit: string;
   /** Header content (icons, labels, etc.) — placed before the toggle button */
@@ -53,6 +56,7 @@ interface CollapsibleBlockProps {
 export function CollapsibleBlock({
   totalCount,
   visibleCount,
+  hasMore = false,
   unit,
   header,
   headerTrailing,
@@ -66,8 +70,8 @@ export function CollapsibleBlock({
   onHeaderClick,
 }: CollapsibleBlockProps) {
   const [showAll, setShowAll] = useState(false);
-  const needsCollapse = totalCount > visibleCount;
-  const hiddenCount = totalCount - visibleCount;
+  const needsCollapse = hasMore || totalCount > visibleCount;
+  const hiddenCount = Math.max(0, totalCount - visibleCount);
 
   return (
     <div className={cn("my-1 rounded-md border overflow-hidden", className)}>
@@ -86,10 +90,15 @@ export function CollapsibleBlock({
             className={cn("shrink-0", toggleClassName)}
             onClick={(e) => {
               e.stopPropagation();
+              suppressAutoScrollPin();
               setShowAll((prev) => !prev);
             }}
           >
-            {showAll ? `Show last ${visibleCount}` : `Show all ${totalCount}`}
+            {showAll
+              ? `Show last ${visibleCount}`
+              : hasMore
+                ? "Load previous lines"
+                : `Show all ${totalCount}`}
           </button>
         )}
         {headerTrailing}
@@ -98,7 +107,7 @@ export function CollapsibleBlock({
         <div className={bodyClassName}>
           {!showAll && needsCollapse && (
             <div className={cn("text-xs", truncationClassName)}>
-              ... ({hiddenCount} {unit} above)
+              {hasMore ? "... (earlier output available)" : `... (${hiddenCount} ${unit} above)`}
             </div>
           )}
           {children({ showAll: showAll || !needsCollapse })}

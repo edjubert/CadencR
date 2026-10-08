@@ -94,7 +94,12 @@ async fn handle_commands_get(envelope: WsEnvelope, sender: &WsSender) {
     // the fresh catalog via `commands.updated` when it lands. If
     // there's no adapter, or the adapter has no probe (default impl),
     // we just reply with `refreshing: false`.
-    let cached = super::super::slash_commands::resolve_commands(&payload.cwd, provider).await;
+    let cached = super::super::slash_commands::resolve_commands_for_profile(
+        &payload.cwd,
+        provider,
+        payload.profile.as_deref(),
+    )
+    .await;
     let cached_payload_commands = to_payload_commands(cached);
 
     let adapter = runtime_adapter(provider);
@@ -123,6 +128,7 @@ async fn handle_commands_get(envelope: WsEnvelope, sender: &WsSender) {
     if let Some(adapter) = adapter.filter(|a| a.supports_runtime_slash_command_refresh()) {
         let cwd = payload.cwd.clone();
         let provider = provider.to_string();
+        let profile = payload.profile.clone();
         let sender = sender.clone();
         tokio::spawn(async move {
             if let Err(error) = adapter.refresh_runtime_slash_commands(&cwd).await {
@@ -137,7 +143,12 @@ async fn handle_commands_get(envelope: WsEnvelope, sender: &WsSender) {
             // Re-resolve through the shared resolver so built-ins
             // (e.g. `/compact`) stay merged on top of the refreshed
             // adapter catalog.
-            let merged = super::super::slash_commands::resolve_commands(&cwd, &provider).await;
+            let merged = super::super::slash_commands::resolve_commands_for_profile(
+                &cwd,
+                &provider,
+                profile.as_deref(),
+            )
+            .await;
             let merged_payload = to_payload_commands(merged);
             let env = WsEnvelope::new(
                 "commands",

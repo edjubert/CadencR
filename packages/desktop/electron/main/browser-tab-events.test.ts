@@ -42,10 +42,12 @@ describe("guestChrome", () => {
     expect(guestChrome(withMod({ key: "g", code: "KeyG", shift: true }))).toBe("pane-git");
     expect(guestChrome(withMod({ key: "e", code: "KeyE", shift: true }))).toBe("pane-editor");
     expect(guestChrome(withMod({ key: "b", code: "KeyB", shift: true }))).toBe("pane-browser");
+    expect(guestChrome(withMod({ key: "m", code: "Semicolon", shift: true }))).toBeNull();
   });
 
-  it("toggles DevTools on the Alt-modified chord", () => {
-    expect(guestChrome(withMod({ key: "i", alt: true }))).toBe("devtools");
+  it("leaves Alt-modified DevTools chords to the registry matcher", () => {
+    expect(guestChrome(withMod({ key: "i", alt: true }))).toBeNull();
+    expect(guestChrome(withMod({ key: "j", alt: true }), "devtools")).toBe("devtools");
     expect(guestChrome(withMod({ key: "j", alt: true }))).toBeNull();
   });
 
@@ -56,6 +58,7 @@ describe("guestChrome", () => {
   });
 
   it("ignores a Shift chord on an unmapped key", () => {
+    expect(guestChrome(withMod({ key: "j", code: "KeyJ", shift: true }))).toBeNull();
     expect(guestChrome(withMod({ key: "k", code: "KeyK", shift: true }))).toBeNull();
   });
 

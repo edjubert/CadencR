@@ -81,6 +81,26 @@ pub struct UpdateStatusRequest {
     pub status: FeatureStatus,
 }
 
+#[derive(Debug, Default, Deserialize, ToSchema)]
+pub struct ArchiveRequest {
+    #[serde(default)]
+    pub include_parent: bool,
+    #[serde(default)]
+    pub include_descendants: bool,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, ToSchema)]
+pub struct ArchivePreview {
+    pub parent_ids: Vec<i64>,
+    pub descendant_ids: Vec<i64>,
+    pub has_relations: bool,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, ToSchema)]
+pub struct ArchiveResponse {
+    pub archived_ids: Vec<i64>,
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateLabelRequest {
     pub label: Option<String>,

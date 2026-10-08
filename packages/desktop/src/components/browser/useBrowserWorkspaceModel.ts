@@ -8,6 +8,13 @@ import { PROFILE_ID, type CookieMode } from "@/lib/browser-settings";
 import { useBrowserStore } from "@/stores/browser-store";
 import { useBrowserViewportBounds } from "../useBrowserViewportBounds";
 import { reportBrowserError, showBrowserError } from "./browser-errors";
+import { useBrowserFind, type BrowserFindModel } from "./useBrowserFind";
+import { useBrowserPageActions, type BrowserPageActions } from "./useBrowserPageActions";
+import { useBrowserResponsive, type BrowserResponsiveModel } from "./useBrowserResponsive";
+import {
+  useBrowserTabOrganization,
+  type BrowserTabOrganization,
+} from "./useBrowserTabOrganization";
 
 const EMPTY_STATE: BrowserStateSnapshot = {
   tabs: [],
@@ -18,33 +25,28 @@ const EMPTY_STATE: BrowserStateSnapshot = {
   error: null,
 };
 
-export interface BrowserWorkspaceModel {
+export interface BrowserWorkspaceModel extends BrowserPageActions, BrowserTabOrganization {
   state: BrowserStateSnapshot;
   urlInput: string;
-  mode: CookieMode;
+  defaultMode: CookieMode;
+  creatingMode: CookieMode | null;
   loading: boolean;
   pending: boolean;
   activeTab: BrowserTabMetadata | null;
   knownOrigins: string[];
   urlInputRef: React.RefObject<HTMLInputElement | null>;
   viewportRef: (node: HTMLDivElement | null) => void;
+  find: BrowserFindModel;
+  responsive: BrowserResponsiveModel;
   setUrlInput: (value: string) => void;
   setUrlEditing: (editing: boolean) => void;
-  setMode: (mode: CookieMode) => void;
   clearError: () => void;
   focusUrlBar: () => void;
   navigate: (url: string) => Promise<void>;
-  newTab: () => Promise<void>;
+  newTab: (mode?: CookieMode) => Promise<void>;
   activateTab: (tabId: string) => void;
   closeTab: (tabId: string) => void;
   closeActiveTab: () => void;
-  back: () => void;
-  forward: () => void;
-  reload: () => void;
-  stop: () => void;
-  zoomIn: () => void;
-  zoomOut: () => void;
-  devTools: () => void;
   runForActive: (action: (tab: BrowserTabMetadata) => Promise<void>) => Promise<void>;
 }
 
@@ -60,39 +62,55 @@ type BrowserTabActions = Pick<
 
 function useBrowserTabActions(
   activeTab: BrowserTabMetadata | null,
-  mode: CookieMode,
+  defaultMode: CookieMode,
   scopeId: number,
   runForActive: BrowserWorkspaceModel["runForActive"],
   setUrlInput: (url: string) => void,
   focusUrlBar: () => void,
   setDismissedError: (error: string | null) => void,
+  setCreatingMode: (mode: CookieMode | null) => void,
 ): BrowserTabActions {
+  const creatingRef = useRef(false);
+  const createTab = useCallback(
+    async (url: string | undefined, mode: CookieMode): Promise<boolean> => {
+      if (creatingRef.current) return false;
+      creatingRef.current = true;
+      setCreatingMode(mode);
+      try {
+        await desktopBridge.createBrowserTab(url, PROFILE_ID[mode], scopeId);
+        return true;
+      } catch (error) {
+        showBrowserError(error, "Could not open a new tab");
+        return false;
+      } finally {
+        creatingRef.current = false;
+        setCreatingMode(null);
+      }
+    },
+    [scopeId, setCreatingMode],
+  );
   const navigate = useCallback(
     async (url: string): Promise<void> => {
       setDismissedError(null);
       if (!activeTab) {
-        try {
-          await desktopBridge.createBrowserTab(url, PROFILE_ID[mode], scopeId);
-        } catch (error) {
-          showBrowserError(error, "Could not open a new tab");
-        }
+        await createTab(url, defaultMode);
         return;
       }
       await runForActive((tab) =>
         desktopBridge.navigateBrowserTab(tab.id, url).then(() => undefined),
       );
     },
-    [activeTab, mode, runForActive, scopeId, setDismissedError],
+    [activeTab, createTab, defaultMode, runForActive, setDismissedError],
   );
-  const newTab = useCallback(async (): Promise<void> => {
-    try {
-      await desktopBridge.createBrowserTab(undefined, PROFILE_ID[mode], scopeId);
-      setUrlInput("");
-      requestAnimationFrame(focusUrlBar);
-    } catch (error) {
-      showBrowserError(error, "Could not open a new tab");
-    }
-  }, [focusUrlBar, mode, scopeId, setUrlInput]);
+  const newTab = useCallback(
+    async (mode: CookieMode = defaultMode): Promise<void> => {
+      if (await createTab(undefined, mode)) {
+        setUrlInput("");
+        requestAnimationFrame(focusUrlBar);
+      }
+    },
+    [createTab, defaultMode, focusUrlBar, setUrlInput],
+  );
   const activateTab = useCallback(
     (tabId: string): void => void desktopBridge.activateBrowserTab(tabId).catch(reportBrowserError),
     [],
@@ -110,60 +128,13 @@ function useBrowserTabActions(
   );
 }
 
-type BrowserPageActions = Pick<
-  BrowserWorkspaceModel,
-  "back" | "forward" | "reload" | "stop" | "zoomIn" | "zoomOut" | "devTools"
->;
-
-function useBrowserPageActions(
-  runForActive: BrowserWorkspaceModel["runForActive"],
-): BrowserPageActions {
-  const bridgeAction = useCallback(
-    (action: (tabId: string) => Promise<void>): void => void runForActive((tab) => action(tab.id)),
-    [runForActive],
-  );
-  const back = useCallback(
-    () => bridgeAction((tabId) => desktopBridge.browserBack(tabId)),
-    [bridgeAction],
-  );
-  const forward = useCallback(
-    () => bridgeAction((tabId) => desktopBridge.browserForward(tabId)),
-    [bridgeAction],
-  );
-  const reload = useCallback(
-    () => bridgeAction((tabId) => desktopBridge.browserReload(tabId)),
-    [bridgeAction],
-  );
-  const stop = useCallback(
-    () => bridgeAction((tabId) => desktopBridge.browserStop(tabId)),
-    [bridgeAction],
-  );
-  const zoomIn = useCallback(
-    () => bridgeAction((tabId) => desktopBridge.browserZoomIn(tabId)),
-    [bridgeAction],
-  );
-  const zoomOut = useCallback(
-    () => bridgeAction((tabId) => desktopBridge.browserZoomOut(tabId)),
-    [bridgeAction],
-  );
-  const devTools = useCallback(
-    (): void =>
-      void runForActive((tab) => desktopBridge.toggleBrowserDevTools(tab.id).then(() => undefined)),
-    [runForActive],
-  );
-  return useMemo(
-    () => ({ back, forward, reload, stop, zoomIn, zoomOut, devTools }),
-    [back, devTools, forward, reload, stop, zoomIn, zoomOut],
-  );
-}
-
 export function useBrowserWorkspaceModel(
   defaultMode: CookieMode,
   scopeId: number,
 ): BrowserWorkspaceModel {
   const [state, setState] = useState<BrowserStateSnapshot>(EMPTY_STATE);
   const [urlInput, setUrlInput] = useState("localhost:1420");
-  const [mode, setMode] = useState<CookieMode>(defaultMode);
+  const [creatingMode, setCreatingMode] = useState<CookieMode | null>(null);
   const [dismissedError, setDismissedError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState(false);
@@ -188,6 +159,8 @@ export function useBrowserWorkspaceModel(
     scopeId,
   });
   const runForActive = useRunForActive(activeTab, setPending);
+  const find = useBrowserFind(activeTab);
+  const organization = useBrowserTabOrganization(scopeId);
 
   const visibleState = useMemo<BrowserStateSnapshot>(
     () => ({ ...state, error: state.error === dismissedError ? null : state.error }),
@@ -203,14 +176,16 @@ export function useBrowserWorkspaceModel(
 
   const tabActions = useBrowserTabActions(
     activeTab,
-    mode,
+    defaultMode,
     scopeId,
     runForActive,
     setUrlInput,
     focusUrlBar,
     setDismissedError,
+    setCreatingMode,
   );
   const pageActions = useBrowserPageActions(runForActive);
+  const responsive = useBrowserResponsive(activeTab, runForActive);
   const clearError = useCallback((): void => {
     if (state.error) setDismissedError(state.error);
   }, [state.error]);
@@ -223,22 +198,32 @@ export function useBrowserWorkspaceModel(
     closeActiveTab: tabActions.closeActiveTab,
     closeTab: tabActions.closeTab,
     devTools: pageActions.devTools,
+    defaultMode,
+    creatingMode,
+    closeOtherTabs: organization.closeOtherTabs,
+    duplicateTab: organization.duplicateTab,
     focusUrlBar,
+    find,
     forward: pageActions.forward,
     loading,
-    mode,
     navigate: tabActions.navigate,
     newTab: tabActions.newTab,
+    openExternal: pageActions.openExternal,
     pending,
+    pendingAction: organization.pendingAction,
     reload: pageActions.reload,
+    responsive,
+    reopenLastClosedTab: organization.reopenLastClosedTab,
+    reorderTab: organization.reorderTab,
     runForActive,
-    setMode,
     setUrlEditing,
+    setTabPinned: organization.setTabPinned,
     setUrlInput,
     state: visibleState,
     stop: pageActions.stop,
     zoomIn: pageActions.zoomIn,
     zoomOut: pageActions.zoomOut,
+    zoomReset: pageActions.zoomReset,
     urlInput,
     urlInputRef,
     viewportRef,
@@ -257,20 +242,31 @@ function useBrowserModelValue(model: BrowserWorkspaceModel): BrowserWorkspaceMod
       model.closeActiveTab,
       model.closeTab,
       model.devTools,
+      model.defaultMode,
+      model.creatingMode,
+      model.closeOtherTabs,
+      model.duplicateTab,
       model.focusUrlBar,
+      model.find,
       model.forward,
       model.knownOrigins,
       model.loading,
-      model.mode,
       model.navigate,
       model.newTab,
+      model.openExternal,
       model.pending,
+      model.pendingAction,
       model.reload,
+      model.responsive,
+      model.reopenLastClosedTab,
+      model.reorderTab,
       model.runForActive,
       model.setUrlEditing,
+      model.setTabPinned,
       model.stop,
       model.zoomIn,
       model.zoomOut,
+      model.zoomReset,
       model.state,
       model.urlInput,
       model.viewportRef,

@@ -16,10 +16,17 @@ pub(super) async fn insert_spawned_session(
     codex_permission_mode: Option<&str>,
 ) -> Result<i64, AppError> {
     let now = chrono::Utc::now().to_rfc3339();
+    let overrides = crate::domain::agents::adapter::RuntimeConfigOverrides {
+        model: trimmed_optional(body.model.as_deref()),
+        thinking_effort: trimmed_optional(body.thinking_level.as_deref()),
+        fast_mode: None,
+    };
+    let overrides = serde_json::to_string(&overrides)
+        .map_err(|error| AppError::Internal(format!("serialize runtime overrides: {error}")))?;
     Ok(sqlx::query_scalar(
         "INSERT INTO agent_sessions
-         (feature_id, agent_type, status, runtime_provider, model, profile, thinking_effort, permission_mode, codex_permission_mode, started_at)
-         VALUES (?, 'session', 'paused', ?, ?, ?, ?, ?, COALESCE(?, 'default'), ?)
+         (feature_id, agent_type, status, runtime_provider, model, profile, thinking_effort, permission_mode, codex_permission_mode, runtime_overrides, started_at)
+         VALUES (?, 'session', 'paused', ?, ?, ?, ?, ?, COALESCE(?, 'default'), ?, ?)
          RETURNING id",
     )
     .bind(feature_id)
@@ -32,6 +39,7 @@ pub(super) async fn insert_spawned_session(
     .bind(runtime.thinking_level.as_deref())
     .bind(trimmed_optional(body.permission_mode.as_deref()))
     .bind(codex_permission_mode)
+    .bind(overrides)
     .bind(now)
     .fetch_one(&state.write_pool)
     .await?)
@@ -138,6 +146,7 @@ mod tests {
             provider: None,
             model: None,
             thinking_level: None,
+            profile: None,
             permission_mode: None,
             codex_permission_mode: None,
             source_note: None,
@@ -189,6 +198,7 @@ mod tests {
             provider: None,
             model: Some("gpt-5.6-sol".into()),
             thinking_level: None,
+            profile: None,
             permission_mode: None,
             codex_permission_mode: None,
             source_note: None,
@@ -208,13 +218,19 @@ mod tests {
         let session_id = insert_spawned_session(&state, 43, &body, &runtime, None)
             .await
             .unwrap();
-        let stored: (String, Option<String>) =
-            sqlx::query_as("SELECT runtime_provider, profile FROM agent_sessions WHERE id = ?")
-                .bind(session_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(stored, ("claude_code".into(), Some("bedrock".into())));
+        let stored: (String, Option<String>, String) = sqlx::query_as(
+            "SELECT runtime_provider, profile, runtime_overrides FROM agent_sessions WHERE id = ?",
+        )
+        .bind(session_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(stored.0, "claude_code");
+        assert_eq!(stored.1.as_deref(), Some("bedrock"));
+        let overrides: crate::domain::agents::adapter::RuntimeConfigOverrides =
+            serde_json::from_str(&stored.2).unwrap();
+        assert_eq!(overrides.model.as_deref(), Some("gpt-5.6-sol"));
+        assert_eq!(overrides.fast_mode, None);
     }
 
     async fn seed_sessions(pool: &sqlx::SqlitePool) {

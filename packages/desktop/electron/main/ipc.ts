@@ -246,12 +246,14 @@ export async function openExternal(rawUrl: unknown): Promise<void> {
  * `openExternal` (which also backs auto navigation-interception): permits
  * `http:` and loopback so a dev-server URL can be opened in the system
  * browser on demand, and `file:` so agent-emitted links to local documents
- * open in their default app. Still rejects credentials and any other scheme
- * (`javascript:`, `data:`, ...).
+ * open in their default app. Agents often emit a bare absolute path instead
+ * of a `file:` URL; it is resolved against `file:///` because Markdown hrefs
+ * arrive percent-encoded (`crm%20prototype.html`). Still rejects credentials
+ * and any other scheme (`javascript:`, `data:`, ...).
  */
 export async function openExternalLink(rawUrl: unknown): Promise<void> {
   if (typeof rawUrl !== "string") throw new Error("Expected a URL.");
-  const parsed = new URL(rawUrl);
+  const parsed = rawUrl.startsWith("/") ? new URL(rawUrl, "file:///") : new URL(rawUrl);
   if (parsed.protocol === "file:") {
     // A file URL host becomes a UNC host on Windows (`\\server\share`), and
     // merely stat-ing that path dials out over SMB — local files only.

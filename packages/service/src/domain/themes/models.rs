@@ -149,6 +149,12 @@ pub struct CreateThemeRequest {
     pub copy_assets_from: Option<String>,
 }
 
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CreateThemeResponse {
+    pub theme: UserTheme,
+    pub workspace: super::workspace::ThemeWorkspace,
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct WriteThemeRequest {
     pub content: String,

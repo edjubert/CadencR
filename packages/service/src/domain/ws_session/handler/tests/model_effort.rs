@@ -337,7 +337,9 @@ async fn test_opencode_init_clears_stored_effort_when_model_does_not_support_it(
 }
 
 #[tokio::test]
-async fn init_preserves_spawned_effort_over_workspace_default_payload() {
+async fn init_preserves_spawned_claude_effort_over_workspace_default_payload() {
+    // Provider-neutral persisted-effort precedence does not need a Codex process.
+    // Codex's explicit provenance is checked separately below and in live QA.
     let app_state = make_test_app_state().await;
     let sdk_sessions: SdkSessions = Arc::new(Mutex::new(HashMap::new()));
     let (tx, mut rx) = mpsc::unbounded_channel();
@@ -345,10 +347,11 @@ async fn init_preserves_spawned_effort_over_workspace_default_payload() {
 
     let db_id = sqlx::query(
         "INSERT INTO agent_sessions \
-         (feature_id, agent_type, status, model, runtime_provider, thinking_effort) \
-         VALUES (?, 'session', 'paused', 'gpt-5.6-sol', 'codex_cli', 'xhigh')",
+         (feature_id, agent_type, status, model, runtime_provider, thinking_effort, runtime_overrides) \
+         VALUES (?, 'session', 'paused', 'opus', 'claude_code', 'high', ?)",
     )
     .bind(feature_id)
+    .bind(serde_json::json!({"model": "opus", "thinking_effort": "high", "fast_mode": null}).to_string())
     .execute(&app_state.write_pool)
     .await
     .unwrap()
@@ -360,8 +363,8 @@ async fn init_preserves_spawned_effort_over_workspace_default_payload() {
         &sdk_sessions,
         &app_state,
         SessionInitPayload {
-            provider: Some("codex_cli".to_string()),
-            model: Some("gpt-5.6-sol".to_string()),
+            provider: Some("claude_code".to_string()),
+            model: Some("opus".to_string()),
             thinking_effort: Some("medium".to_string()),
             permission_mode: None,
             system_prompt: None,
@@ -371,14 +374,32 @@ async fn init_preserves_spawned_effort_over_workspace_default_payload() {
     )
     .await;
     assert_eq!(payload.session_id, db_id.to_string());
-    assert_eq!(payload.thinking_effort.as_deref(), Some("xhigh"));
+    assert_eq!(payload.thinking_effort.as_deref(), Some("high"));
 
     let sessions = sdk_sessions.lock().await;
     let handle = sessions.get(&db_id).unwrap();
-    assert_eq!(handle.desired_thinking_effort.as_deref(), Some("xhigh"));
-    assert_eq!(handle.config.thinking_effort.as_deref(), Some("xhigh"));
+    assert_eq!(handle.desired_thinking_effort.as_deref(), Some("high"));
+    assert_eq!(handle.config.thinking_effort.as_deref(), Some("high"));
     let QueryState::Pending(options) = &handle.state else {
         panic!("expected pending session before first prompt");
     };
-    assert_eq!(options.thinking_effort.as_deref(), Some("xhigh"));
+    assert_eq!(options.thinking_effort.as_deref(), Some("high"));
+}
+
+#[test]
+fn codex_spawned_provenance_beats_workspace_model_and_effort() {
+    use crate::domain::agents::runtime_overrides::{restore, RestoreOptions};
+    let restored = restore(
+        RestoreOptions::builder()
+            .provider("codex_cli")
+            .stored_json(r#"{"model":"gpt-5.6-sol","thinking_effort":"xhigh","fast_mode":null}"#)
+            .model("workspace-model")
+            .thinking_effort("medium")
+            .fast_mode(false)
+            .build(),
+    )
+    .unwrap();
+    assert_eq!(restored.model.as_deref(), Some("gpt-5.6-sol"));
+    assert_eq!(restored.thinking_effort.as_deref(), Some("xhigh"));
+    assert_eq!(restored.fast_mode, None);
 }

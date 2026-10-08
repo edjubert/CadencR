@@ -1,8 +1,11 @@
-import type { Input, WebContentsView } from "electron";
+import type { Input, Result, WebContents, WebContentsView } from "electron";
 import { normalizeBrowserOpenUrl } from "./browser-policy";
-import { consoleEntry, pushBounded } from "./browser-manager-utils";
+import { installBrowserFaviconEvents } from "./browser-tab-favicon-events";
+import { consoleEntry, pushBounded, updateTabMetadata } from "./browser-manager-utils";
 import { COMMENT_BADGE_CLICK_SENTINEL } from "./browser-comment-overlay-script";
+import type { BrowserProfile } from "./browser-profiles";
 import type {
+  BrowserAgentAccess,
   BrowserBounds,
   BrowserConsoleEntry,
   BrowserNetworkEntry,
@@ -15,10 +18,30 @@ const DEFAULT_URL = "about:blank";
 
 export interface ManagedTab {
   metadata: BrowserTabMetadata;
+  automationAccess: BrowserAgentAccess;
+  /** Resolved profile identity; unlike metadata, this includes a fresh session's actual UUID. */
+  profile: BrowserProfile;
   view: WebContentsView;
+  /** Retained because Electron clears `view.webContents` during `destroyed`. */
+  webContents: WebContents;
   devtoolsView: WebContentsView | null;
+  devtoolsWebContents: WebContents | null;
   consoleEntries: BrowserConsoleEntry[];
   networkEntries: BrowserNetworkEntry[];
+  /** Guest-session work that must settle before a private partition is cleared. */
+  pendingSessionTasks: Set<Promise<void>>;
+  /** Auth/POST popup requests are not safe to persist, reopen, or add to history. */
+  temporary: boolean;
+  /** Recent trusted native gesture, kept on the tab so automation can revoke it. */
+  popupGestureAt: number | null;
+  /** Synthetic input events to exclude from popup gesture accounting. */
+  syntheticPopupMouseEvents: number;
+  syntheticPopupKeyEvents: number;
+  syntheticPopupInputExpiresAt: number;
+  /** Source tab for a temporary auth child; used only for focus return on close. */
+  openerTabId: string | null;
+  /** Releases parent/focus listeners if a temporary child is promoted or destroyed. */
+  detachOpenerRelations: (() => void) | null;
   // Origin approved via the permission-gated browser_open_external_url tool. While
   // the tab stays on this origin it is exempt from the localhost-only automation
   // (mutation) gate; navigating elsewhere re-locks it. null = not unlocked.
@@ -30,19 +53,35 @@ export interface ManagedTab {
 export interface TabEventHost {
   emitState(): void;
   setLastError(message: string | null): void;
-  openChildTab(url: string, profileId: string): void;
+  isTabAlive(): boolean;
+  tabDestroyed(): void;
   recordOrigin(url: string): void;
+  recordHistoryNavigation(url: string, title: string): void;
+  updateHistoryTitle(url: string, title: string): void;
+  forgetHistory(): void;
   emitShortcut(shortcut: BrowserShortcut): void;
+  matchGuestShortcut(input: Input): BrowserShortcut | null;
+  emitFindResult(result: Result): void;
+  invalidateFind(): void;
+  syncZoom(): void;
+  /** Persist only URL/title changes; loading/console events remain hot-path state only. */
+  persistTab(): void;
   emitCommentBadgeClick(tabId: string, anchorId: string, box: BrowserBounds | null): void;
 }
 
 export function installTabEvents(tab: ManagedTab, host: TabEventHost): void {
-  const wc = tab.view.webContents;
+  const wc = tab.webContents;
+  installBrowserFaviconEvents(tab, host);
+  wc.once("destroyed", () => {
+    host.invalidateFind();
+    host.forgetHistory();
+    host.tabDestroyed();
+  });
   // A focused guest page swallows keydown before the renderer's window
   // listener can see it, so the browser-chrome chords (⌘T new tab, ⌘W close
   // tab) are intercepted here and relayed to the renderer.
   wc.on("before-input-event", (event, input) => {
-    const shortcut = guestChrome(input);
+    const shortcut = guestChrome(input, host.matchGuestShortcut(input));
     if (!shortcut) return;
     event.preventDefault();
     host.emitShortcut(shortcut);
@@ -64,35 +103,46 @@ export function installTabEvents(tab: ManagedTab, host: TabEventHost): void {
     );
     host.emitState();
   });
-  wc.setWindowOpenHandler(({ url }) => {
-    host.openChildTab(url, tab.metadata.sessionProfileId);
-    return { action: "deny" };
-  });
   wc.on("will-navigate", (event, url) => {
     try {
       normalizeBrowserOpenUrl(url);
+      host.invalidateFind();
     } catch (error) {
       event.preventDefault();
       host.setLastError(error instanceof Error ? error.message : String(error));
       host.emitState();
     }
   });
-  wc.on("did-start-loading", () => {
-    host.setLastError(null);
-    // Drop the previous page's favicon up front; page-favicon-updated supplies
-    // the new one once the next page declares it (many pages never do).
-    updateTabMetadata(tab, { loading: true, faviconUrl: undefined }, host);
-  });
-  wc.on("did-stop-loading", () => updateTabMetadata(tab, { loading: false }, host));
-  wc.on("page-favicon-updated", (_event, favicons) => {
-    updateTabMetadata(tab, { faviconUrl: favicons[0] }, host);
-  });
+  installPageLifecycleEvents(tab, host);
+}
+
+function installPageLifecycleEvents(tab: ManagedTab, host: TabEventHost): void {
+  const wc = tab.webContents;
   wc.on("did-navigate", () => {
     host.setLastError(null);
     host.recordOrigin(wc.getURL());
     refreshTabMetadata(tab, host);
+    host.persistTab();
+    host.recordHistoryNavigation(wc.getURL(), pageTitle(wc));
+    host.syncZoom();
   });
-  wc.on("page-title-updated", () => refreshTabMetadata(tab, host));
+  wc.on("did-navigate-in-page", (_event, _url, isMainFrame) => {
+    if (!isMainFrame) return;
+    host.invalidateFind();
+    host.setLastError(null);
+    host.recordOrigin(wc.getURL());
+    refreshTabMetadata(tab, host);
+    host.persistTab();
+    host.recordHistoryNavigation(wc.getURL(), pageTitle(wc));
+    host.syncZoom();
+  });
+  wc.on("found-in-page", (_event, result) => host.emitFindResult(result));
+  wc.on("zoom-changed", () => queueMicrotask(host.syncZoom));
+  wc.on("page-title-updated", () => {
+    refreshTabMetadata(tab, host);
+    host.persistTab();
+    host.updateHistoryTitle(wc.getURL(), pageTitle(wc));
+  });
   wc.on("did-fail-load", (_event, _code, description, url) => {
     host.setLastError(`${url}: ${description}`);
     host.emitState();
@@ -125,12 +175,17 @@ function parseBox(box: unknown): BrowserBounds | null {
 // renderer registry so the chords still fire while the guest page holds
 // keyboard focus (the renderer's window listener never sees those events).
 // Exported for unit testing.
-export function guestChrome(input: Input): BrowserShortcut | null {
+export function guestChrome(
+  input: Input,
+  configuredShortcut?: BrowserShortcut | null,
+): BrowserShortcut | null {
   if (input.type !== "keyDown") return null;
+  if (configuredShortcut) return configuredShortcut;
   const mod = process.platform === "darwin" ? input.meta : input.control;
   if (!mod) return null;
-  // ⌘⌥I → toggle DevTools (the only combo that uses Alt).
-  if (input.alt) return input.key.toLowerCase() === "i" ? "devtools" : null;
+  // Alt-modified Browser actions are registry-owned and arrive through
+  // `configuredShortcut`; never retain a second hard-coded binding here.
+  if (input.alt) return null;
   // ⌘+ / ⌘- → zoom the guest page. ⌘+ is really ⌘⇧=, so check before the
   // Shift branch. Matches the produced character, like the renderer registry.
   const zoom = zoomChord(input.key);
@@ -176,13 +231,15 @@ function guestShiftChrome(input: Input): BrowserShortcut | null {
       return "pane-editor";
     case "b":
       return "pane-browser";
+    case "u":
+      return "reopen-tab";
     default:
       return null;
   }
 }
 
 function refreshTabMetadata(tab: ManagedTab, host: TabEventHost): void {
-  const wc = tab.view.webContents;
+  const wc = tab.webContents;
   updateTabMetadata(
     tab,
     { title: wc.getTitle() || wc.getURL(), url: wc.getURL() || DEFAULT_URL },
@@ -190,17 +247,6 @@ function refreshTabMetadata(tab: ManagedTab, host: TabEventHost): void {
   );
 }
 
-function updateTabMetadata(
-  tab: ManagedTab,
-  patch: Partial<BrowserTabMetadata>,
-  host: TabEventHost,
-): void {
-  const wc = tab.view.webContents;
-  tab.metadata = {
-    ...tab.metadata,
-    ...patch,
-    canGoBack: wc.canGoBack(),
-    canGoForward: wc.canGoForward(),
-  };
-  host.emitState();
+function pageTitle(wc: WebContents): string {
+  return wc.getTitle() || wc.getURL();
 }
