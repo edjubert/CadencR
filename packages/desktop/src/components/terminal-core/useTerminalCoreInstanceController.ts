@@ -359,6 +359,7 @@ export function useTerminalCoreInstanceController(
   const { focusTerminal, cancelPendingFocus } = useDeferredEngineFocus(terminal);
 
   const handleRef = useRef<TerminalCoreInstanceHandle | null>(null);
+  /** Rebuilds the imperative handle whenever the engine instance changes. */
   const setHandle = useCallback(
     (t: typeof terminal) => {
       handleRef.current = {
