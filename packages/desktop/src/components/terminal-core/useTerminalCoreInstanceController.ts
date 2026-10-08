@@ -254,6 +254,30 @@ function useInitialNoticeAndCommand(
   }, [terminal, ptyReady, connection, refs]);
 }
 
+/**
+ * A focus requested while the engine is still loading (fresh pane, WASM /
+ * WebGPU init) would otherwise be silently dropped — `terminal` stays
+ * `undefined` for the first few hundred milliseconds — and callers like the
+ * Cmd+Shift+T terminal-tab activation only try once. Remember the intent and
+ * flush it as soon as the engine instance exists.
+ */
+function useDeferredEngineFocus(terminal: Terminal | undefined) {
+  const pendingFocusRef = useRef(false);
+  const focusTerminal = useCallback((t: Terminal | undefined): void => {
+    if (t) t.focus();
+    else pendingFocusRef.current = true;
+  }, []);
+  useEffect(() => {
+    if (!terminal || !pendingFocusRef.current) return;
+    pendingFocusRef.current = false;
+    // Focus while the tab is hidden (mount div `display:none`) is a silent
+    // no-op in the DOM, so a stale pending focus can never steal focus back
+    // from the tab the user moved on to.
+    terminal.focus();
+  }, [terminal]);
+  return focusTerminal;
+}
+
 export function useTerminalCoreInstanceController(
   props: TerminalCoreInstanceProps,
   ref: ForwardedRef<TerminalCoreInstanceHandle>,
@@ -326,11 +350,13 @@ export function useTerminalCoreInstanceController(
 
   useInitialNoticeAndCommand(terminal, ptyReady, connection, refs);
 
+  const focusTerminal = useDeferredEngineFocus(terminal);
+
   const handleRef = useRef<TerminalCoreInstanceHandle | null>(null);
   const setHandle = useCallback(
     (t: typeof terminal) => {
       handleRef.current = {
-        focus: () => t?.focus(),
+        focus: () => focusTerminal(t),
         clearScreen: () => t?.clearScreen(),
         clearInput: () => connection.write("\x15"),
         blur: () => t?.blur(),
@@ -340,7 +366,7 @@ export function useTerminalCoreInstanceController(
         paste: (text: string) => pasteTerminalText(hostRef.current, text),
       };
     },
-    [connection, refs, hostRef],
+    [connection, focusTerminal, refs, hostRef],
   );
 
   useEffect(() => {
