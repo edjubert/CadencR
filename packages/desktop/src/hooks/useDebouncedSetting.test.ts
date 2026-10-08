@@ -79,6 +79,19 @@ describe("useDebouncedSetting", () => {
     );
   });
 
+  it("flushes the pending write on unmount instead of dropping it", () => {
+    const { result, unmount } = renderHook(() => useDebouncedSetting("my-key", 500));
+    act(() => {
+      result.current.setValue("new-value");
+    });
+    expect(mockMutate).not.toHaveBeenCalled();
+    unmount();
+    expect(mockMutate).toHaveBeenCalledWith(
+      { key: "my-key", data: { value: "new-value" } },
+      expect.any(Object),
+    );
+  });
+
   it("persists immediately when debounce is zero", () => {
     const { result } = renderHook(() => useDebouncedSetting("my-key", 0));
     act(() => {

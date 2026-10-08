@@ -234,8 +234,15 @@ async fn run_auto_name(
     };
 
     let prompt = build_prompt(&user_input, &system_prompt);
-    let config = match build_spawn_config(adapter.as_adapter(), &model_id, &cwd, &system_prompt)
-        .await
+    let config = match build_spawn_config(
+        AutoNameSpawnArgs::builder()
+            .adapter(adapter.as_adapter())
+            .model_id(&model_id)
+            .cwd(&cwd)
+            .system_prompt(&system_prompt)
+            .build(),
+    )
+    .await
     {
         Ok(config) => config,
         Err(error) => {
@@ -331,12 +338,26 @@ fn build_prompt(user_input: &str, system_prompt: &str) -> String {
     )
 }
 
+/// Named arguments for `build_spawn_config`: three consecutive `&str` params
+/// would be swappable without a type error, so the call goes through a bon
+/// builder.
+#[derive(bon::Builder)]
+struct AutoNameSpawnArgs<'a> {
+    adapter: &'a dyn crate::domain::agents::adapter::AgentRuntimeAdapter,
+    model_id: &'a str,
+    cwd: &'a str,
+    system_prompt: &'a str,
+}
+
 async fn build_spawn_config(
-    adapter: &dyn crate::domain::agents::adapter::AgentRuntimeAdapter,
-    model_id: &str,
-    cwd: &str,
-    system_prompt: &str,
+    args: AutoNameSpawnArgs<'_>,
 ) -> Result<RuntimeSpawnConfig, crate::domain::agents::adapter::RuntimeError> {
+    let AutoNameSpawnArgs {
+        adapter,
+        model_id,
+        cwd,
+        system_prompt,
+    } = args;
     let resolved_profile = adapter
         .resolve_profile(None, std::path::Path::new(cwd))
         .await?;

@@ -30,10 +30,15 @@ export function useDebouncedSetting(
   const { mutate, isPending: isSaving } = useSetWorkspaceSetting();
   const queryClient = useQueryClient();
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushRef = useRef<(() => void) | null>(null);
 
   useEffect((): (() => void) => {
     return (): void => {
       if (timerRef.current) clearTimeout(timerRef.current);
+      // A pending debounced write must not be dropped on unmount: leaving the
+      // settings page within the debounce window still persists the edit.
+      flushRef.current?.();
+      flushRef.current = null;
     };
   }, []);
 
@@ -51,6 +56,7 @@ export function useDebouncedSetting(
       if (timerRef.current) clearTimeout(timerRef.current);
 
       const persistValue = (): void => {
+        flushRef.current = null;
         mutate(
           { key, data: { value } },
           {
@@ -77,6 +83,7 @@ export function useDebouncedSetting(
         return;
       }
 
+      flushRef.current = persistValue;
       timerRef.current = setTimeout(persistValue, debounceMs);
     },
     [key, debounceMs, immediateCache, mutate, queryClient],
