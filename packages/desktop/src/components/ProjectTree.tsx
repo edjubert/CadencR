@@ -123,7 +123,13 @@ function useProjectTreeController(props: ProjectTreeProps) {
   const [deleteProject, setDeleteProject] = useState<ProjectDialogTarget | null>(null);
   useEffect(() => {
     const activeId = props.activeProjectId;
-    if (activeId == null) return;
+    // Leaving the project list (e.g. opening Settings) must not leave a stale
+    // pinned-navigation marker behind: returning to the project later is an
+    // ordinary navigation and should expand it.
+    if (activeId == null) {
+      clearProjectAutoExpandSkip();
+      return;
+    }
     // A pinned-row navigation marks its project so the tree stays folded.
     if (shouldSkipProjectAutoExpand(activeId)) return;
     clearProjectAutoExpandSkip();

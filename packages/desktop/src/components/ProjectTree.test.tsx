@@ -230,6 +230,27 @@ describe("ProjectTree", () => {
     expect(screen.getByText("Feature One")).toBeInTheDocument();
   });
 
+  it("clears the skip marker when the active project becomes null, so returning expands it", () => {
+    skipProjectAutoExpand(1);
+    const { rerender } = render(
+      <ProjectTree activeProjectId={1} activeFeatureId={null} onSelectFeature={vi.fn()} />,
+    );
+    expect(screen.queryByText("Feature One")).not.toBeInTheDocument();
+    // Leaving the project list (e.g. opening Settings) clears the marker.
+    rerender(
+      <ShortcutHintsProvider enabled>
+        <ProjectTree activeProjectId={null} activeFeatureId={null} onSelectFeature={vi.fn()} />
+      </ShortcutHintsProvider>,
+    );
+    // Returning to the project is an ordinary navigation: it expands again.
+    rerender(
+      <ShortcutHintsProvider enabled>
+        <ProjectTree activeProjectId={1} activeFeatureId={null} onSelectFeature={vi.fn()} />
+      </ShortcutHintsProvider>,
+    );
+    expect(screen.getByText("Feature One")).toBeInTheDocument();
+  });
+
   it("toggles project expansion on click", async () => {
     const user = userEvent.setup();
     render(<ProjectTree activeProjectId={null} activeFeatureId={null} onSelectFeature={vi.fn()} />);
