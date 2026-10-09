@@ -10,6 +10,7 @@ import {
   useCreateFeature,
   useSetProjectSetting,
 } from "../api/generated";
+import { useArchiveProjectSessionsAction } from "@/hooks/useArchiveProjectSessionsAction";
 import { useOrderedProjects } from "@/hooks/useOrderedProjects";
 import { useProjectExpansion } from "@/hooks/useProjectExpansion";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -55,6 +56,8 @@ type ProjectDialogTarget = {
 function useProjectTreeMutations(
   projects: ProjectSummary[],
   maybeOnboard: (project: ProjectDialogTarget) => void,
+  activeProjectId: number | null,
+  activeFeatureId: number | null,
 ) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -88,6 +91,10 @@ function useProjectTreeMutations(
       },
     },
   });
+  const archiveProjectSessions = useArchiveProjectSessionsAction({
+    activeFeatureId,
+    projectId: activeProjectId ?? -1,
+  });
   const createSession = useCreateFeature({
     mutation: {
       onSuccess: (session) => {
@@ -103,8 +110,14 @@ function useProjectTreeMutations(
     },
   });
   return useMemo(
-    () => ({ createProject, createSession, deleteProject, pendingProjectIdRef }),
-    [createProject, createSession, deleteProject],
+    () => ({
+      archiveProjectSessions,
+      createProject,
+      createSession,
+      deleteProject,
+      pendingProjectIdRef,
+    }),
+    [archiveProjectSessions, createProject, createSession, deleteProject],
   );
 }
 
@@ -112,13 +125,21 @@ function useProjectTreeController(props: ProjectTreeProps) {
   const ordered = useOrderedProjects();
   const [isSelectingFolder, setIsSelectingFolder] = useState(false);
   const onboarding = useNewProjectOnboarding();
-  const mutations = useProjectTreeMutations(ordered.projects, onboarding.maybeOnboard);
+  const mutations = useProjectTreeMutations(
+    ordered.projects,
+    onboarding.maybeOnboard,
+    props.activeProjectId,
+    props.activeFeatureId,
+  );
   const revealActive = useSidebarOption("revealActive");
   const expansion = useProjectExpansion(revealActive === "off" ? null : props.activeProjectId);
   const { setExpanded: setProjectExpanded } = expansion;
   const [settingsProject, setSettingsProject] = useState<ProjectDialogTarget | null>(null);
   const [importProject, setImportProject] = useState<ProjectDialogTarget | null>(null);
   const [deleteProject, setDeleteProject] = useState<ProjectDialogTarget | null>(null);
+  const [archiveSessionsProject, setArchiveSessionsProject] = useState<ProjectDialogTarget | null>(
+    null,
+  );
   const startSession = useCallback(
     (projectId: number) => {
       setProjectExpanded(projectId, true);
@@ -142,6 +163,7 @@ function useProjectTreeController(props: ProjectTreeProps) {
   return useMemo(
     () => ({
       addProject,
+      archiveSessionsProject,
       deleteProject,
       expansion,
       importProject,
@@ -149,6 +171,7 @@ function useProjectTreeController(props: ProjectTreeProps) {
       mutations,
       onboarding,
       ordered,
+      setArchiveSessionsProject,
       setDeleteProject,
       setImportProject,
       setSettingsProject,
@@ -157,6 +180,7 @@ function useProjectTreeController(props: ProjectTreeProps) {
     }),
     [
       addProject,
+      archiveSessionsProject,
       deleteProject,
       expansion,
       importProject,
