@@ -21,6 +21,7 @@ const mockNavigate = vi.fn();
 const mockCreateProject = vi.fn();
 const mockDeleteProject = vi.fn();
 const mockCreateFeature = vi.fn();
+const mockArchiveProjectSessions = vi.fn();
 const _mockCreateSession = vi.fn();
 
 vi.mock("@tanstack/react-router", () => ({
@@ -46,6 +47,10 @@ vi.mock("@/lib/project-onboarding", () => ({
 vi.mock("../api/generated", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/generated")>()),
   useArchiveFeature: vi.fn(() => ({ mutateAsync: vi.fn() })),
+  useArchiveProjectSessions: vi.fn(() => ({
+    mutateAsync: mockArchiveProjectSessions,
+    isPending: false,
+  })),
   useGetFeatureArchivePreview: vi.fn(() => ({
     data: { parent_ids: [], descendant_ids: [], has_relations: false },
     isLoading: false,
@@ -167,6 +172,12 @@ describe("ProjectTree", () => {
     resetMockIds();
     mockNavigate.mockClear();
     mockCreateFeature.mockClear();
+    mockArchiveProjectSessions.mockReset();
+    mockArchiveProjectSessions.mockResolvedValue({
+      archived_ids: [10],
+      skipped_pinned: 0,
+      skipped_running: 0,
+    });
     clearProjectAutoExpandSkip();
   });
 
@@ -394,5 +405,31 @@ describe("ProjectTree", () => {
     act(() => vi.runOnlyPendingTimers());
 
     expect(badges()).toEqual([]);
+  });
+
+  it("archives all project sessions after confirmation", async () => {
+    const user = userEvent.setup();
+    render(<ProjectTree activeProjectId={null} activeFeatureId={null} onSelectFeature={vi.fn()} />);
+
+    await user.click(screen.getAllByLabelText("Project actions")[0]);
+    await user.click(await screen.findByText("Archive all sessions"));
+
+    expect(await screen.findByText('Archive all sessions in "Alpha Project"?')).toBeInTheDocument();
+    expect(screen.getByText(/cannot be undone/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Archive" }));
+    await vi.waitFor(() => expect(mockArchiveProjectSessions).toHaveBeenCalledWith({ id: 1 }));
+  });
+
+  it("does not archive sessions when the confirmation is cancelled", async () => {
+    const user = userEvent.setup();
+    render(<ProjectTree activeProjectId={null} activeFeatureId={null} onSelectFeature={vi.fn()} />);
+
+    await user.click(screen.getAllByLabelText("Project actions")[0]);
+    await user.click(await screen.findByText("Archive all sessions"));
+    await screen.findByText('Archive all sessions in "Alpha Project"?');
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(mockArchiveProjectSessions).not.toHaveBeenCalled();
   });
 });
