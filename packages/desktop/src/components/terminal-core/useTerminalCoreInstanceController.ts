@@ -281,7 +281,10 @@ function useDeferredEngineFocus(terminal: Terminal | undefined) {
     // from the tab the user moved on to.
     terminal.focus();
   }, [terminal]);
-  return { focusTerminal, cancelPendingFocus };
+  return useMemo(
+    () => ({ focusTerminal, cancelPendingFocus }),
+    [focusTerminal, cancelPendingFocus],
+  );
 }
 
 export function useTerminalCoreInstanceController(
