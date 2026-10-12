@@ -80,8 +80,9 @@ impl WatchState {
     /// A wanted directory that doesn't exist yet can't be subscribed, and
     /// nothing below it can produce events either — unless one of its
     /// ancestors is watched. The deepest existing ancestor of every missing
-    /// directory is therefore watched too, so creating the tree is observed
-    /// and each recompute can subscribe one level deeper.
+    /// directory is therefore watched too (never the filesystem root), so
+    /// creating the tree is observed and each recompute can subscribe one
+    /// level deeper.
     fn from_touched(config_path: &Path, touched: Vec<PathBuf>) -> Self {
         let mut files = HashSet::from([config_path.to_path_buf(), normalize(config_path)]);
         let mut dirs = HashSet::from([config_path.parent().map(normalize).unwrap_or_default()]);
@@ -106,11 +107,16 @@ impl WatchState {
 
 /// The deepest ancestor of `path` that exists as a directory, so a missing
 /// directory tree can be observed from its nearest watched ancestor. `None`
-/// only when no ancestor exists at all.
+/// when no ancestor exists at all — or when the only existing ancestor is
+/// the filesystem root: watching `/` would recompute the chain for every
+/// top-level creation, which is not a subscription worth keeping.
 fn deepest_existing_ancestor(path: &Path) -> Option<PathBuf> {
     let mut ancestor = path.parent()?;
     while !ancestor.is_dir() {
         ancestor = ancestor.parent()?;
+    }
+    if ancestor.parent().is_none() {
+        return None;
     }
     Some(ancestor.to_path_buf())
 }
@@ -148,15 +154,18 @@ fn is_watched_config_file(path: &Path, files: &HashSet<PathBuf>) -> bool {
 }
 
 /// Whether the event batch touches one of the chain's directories itself or
-/// creates something directly inside one — typically a missing import's
+/// creates a subdirectory directly inside one — typically a missing import's
 /// directory tree being created level by level under a watched ancestor.
 /// Neither is a config change for clients, but the watch set must be
-/// recomputed so the new directories get subscribed.
+/// recomputed so the new directories get subscribed. Only subdirectory
+/// creations count: a plain file created in a watched directory (the common
+/// case in a broad ancestor like the home directory) changes no
+/// subscription, so it must not trigger a recompute.
 fn touches_watched_dir(events: &[DebouncedEvent], dirs: &HashSet<PathBuf>) -> bool {
     let watched = |path: &Path| dirs.contains(path) || dirs.contains(&normalize(path));
     events
         .iter()
-        .any(|e| watched(&e.path) || e.path.parent().is_some_and(watched))
+        .any(|e| watched(&e.path) || (e.path.is_dir() && e.path.parent().is_some_and(watched)))
 }
 
 /// Result of aligning the OS subscriptions with a wanted set of directories.
@@ -509,22 +518,50 @@ mod tests {
 
     #[test]
     fn creating_a_subdirectory_of_a_watched_directory_asks_for_a_recompute() {
-        let dirs = files_of(&["/nonexistent/user/.config/alacritty"]);
-        let event = |path: &str| DebouncedEvent {
-            path: PathBuf::from(path),
+        let dir = tempfile::tempdir().unwrap();
+        let dirs = HashSet::from([normalize(dir.path())]);
+        let event = |path: PathBuf| DebouncedEvent {
+            path,
             kind: notify_debouncer_mini::DebouncedEventKind::Any,
         };
         // A new subdirectory inside a watched directory: its parent is
         // watched, so the event must trigger a recompute — the new directory
         // may be the next level of a missing import's path.
-        assert!(touches_watched_dir(
-            &[event("/nonexistent/user/.config/alacritty/external")],
-            &dirs
-        ));
-        assert!(!touches_watched_dir(
-            &[event("/nonexistent/user/.config/other/external")],
-            &dirs
-        ));
+        let subdir = dir.path().join("external");
+        std::fs::create_dir(&subdir).unwrap();
+        assert!(touches_watched_dir(&[event(subdir)], &dirs));
+        // A plain file created in a watched directory changes no
+        // subscription: no recompute. This keeps a broad ancestor (e.g. the
+        // home directory) from recomputing the chain on every file event.
+        let file = dir.path().join("notes.txt");
+        std::fs::write(&file, "hi").unwrap();
+        assert!(!touches_watched_dir(&[event(file)], &dirs));
+        // Something created outside the watched directory matches neither.
+        let other = tempfile::tempdir().unwrap();
+        let outside = other.path().join("external");
+        std::fs::create_dir(&outside).unwrap();
+        assert!(!touches_watched_dir(&[event(outside)], &dirs));
+    }
+
+    #[test]
+    fn deepest_existing_ancestor_stops_at_the_nearest_existing_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("a").join("b").join("c");
+        assert_eq!(
+            deepest_existing_ancestor(&missing),
+            Some(dir.path().to_path_buf())
+        );
+    }
+
+    #[test]
+    fn deepest_existing_ancestor_never_returns_the_filesystem_root() {
+        // A missing tree whose only existing ancestor is the filesystem
+        // root yields no ancestor at all: watching `/` would recompute the
+        // chain for every top-level creation.
+        assert_eq!(
+            deepest_existing_ancestor(Path::new("/nonexistent/deep/tree")),
+            None
+        );
     }
 
     fn test_debouncer() -> Debouncer<RecommendedWatcher> {
