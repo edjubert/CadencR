@@ -2,7 +2,6 @@ import type { SettingsNavGroup } from "@/components/settings/SettingsNavSidebar"
 import {
   BarChart3,
   Bell,
-  BrainCircuit,
   Code2,
   GitMerge,
   Globe,
@@ -12,6 +11,7 @@ import {
   Network,
   Palette,
   Plug,
+  Tag,
 } from "lucide-react";
 
 /**
@@ -68,9 +68,9 @@ export const NAV_GROUPS: SettingsNavGroup[] = [
     label: "Agents",
     items: [
       {
-        id: "runtime",
-        label: "Runtime & Models",
-        icon: <BrainCircuit className="size-4" />,
+        id: "auto-naming",
+        label: "Auto-naming",
+        icon: <Tag className="size-4" />,
       },
     ],
   },

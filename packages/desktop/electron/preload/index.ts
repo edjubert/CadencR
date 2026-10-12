@@ -19,7 +19,9 @@ import type {
   BrowserShortcut,
   BrowserStateSnapshot,
   BrowserTabMetadata,
+  BrowserAgentActivity,
 } from "../main/browser-types";
+import { notchHostBridge } from "./notch-host-bridge";
 
 type RouteType = "workflow" | "session";
 type DesktopTheme = "light" | "dark";
@@ -369,6 +371,8 @@ contextBridge.exposeInMainWorld("cadencr", {
     onIpc("browser:state", cb),
   onBrowserTabCounts: (cb: (counts: Record<number, number>) => void): (() => void) =>
     onIpc("browser:tab-counts", cb),
+  onBrowserAgentActivity: (cb: (activity: BrowserAgentActivity) => void): (() => void) =>
+    onIpc("browser:agent-activity", cb),
   onBrowserShortcut: (cb: (shortcut: BrowserShortcut) => void): (() => void) =>
     onIpc("browser:shortcut", cb),
   onBrowserFindResult: (cb: (result: BrowserFindResult) => void): (() => void) =>
@@ -392,4 +396,5 @@ contextBridge.exposeInMainWorld("cadencr", {
   fetchChangelog: (version: string): Promise<string | null> =>
     ipcRenderer.invoke("app:fetch-changelog", version),
   onUpdateEvent,
+  ...notchHostBridge(onIpc),
 });

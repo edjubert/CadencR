@@ -126,10 +126,8 @@ pub async fn get_agent_profiles(
 
 #[derive(Debug, Deserialize)]
 pub struct AgentSelectionQuery {
-    /// Scope is implied by which ids are present: neither = global,
-    /// `project_id` only = project, both = feature. An explicit `level`
-    /// parameter would make `level=feature` without `feature_id` representable.
-    project_id: Option<i64>,
+    /// Without it the workspace selection (what a new conversation starts on)
+    /// is resolved; with it, that feature's.
     feature_id: Option<i64>,
     cwd: Option<PathBuf>,
     profile: Option<String>,
@@ -141,9 +139,9 @@ pub struct AgentSelectionResponse {
     pub selections: std::collections::HashMap<String, ResolvedSelection>,
 }
 
-/// `auto_name` only exists at workspace level, so narrower scopes never report it.
-fn agent_types_for_scope(project_id: Option<i64>, feature_id: Option<i64>) -> Vec<String> {
-    if project_id.is_none() && feature_id.is_none() {
+/// `auto_name` only exists at workspace level, so a feature scope never reports it.
+fn agent_types_for_scope(feature_id: Option<i64>) -> Vec<String> {
+    if feature_id.is_none() {
         return vec!["session".to_string(), "auto_name".to_string()];
     }
     vec!["session".to_string()]
@@ -153,8 +151,7 @@ fn agent_types_for_scope(project_id: Option<i64>, feature_id: Option<i64>) -> Ve
     get,
     path = "/api/agent-runtime/selection",
     params(
-        ("project_id" = Option<i64>, Query, description = "Resolve at project scope"),
-        ("feature_id" = Option<i64>, Query, description = "Resolve at feature scope; requires project_id"),
+        ("feature_id" = Option<i64>, Query, description = "Resolve at feature scope instead of the workspace"),
         ("cwd" = Option<String>, Query, description = "Workspace path used to scope the model catalog lookup"),
         ("profile" = Option<String>, Query, description = "Claude Code profile to scope the model lookup to")
     ),
@@ -168,13 +165,12 @@ pub async fn get_agent_selection(
     Query(query): Query<AgentSelectionQuery>,
 ) -> Result<Json<AgentSelectionResponse>, AppError> {
     let mut selections = std::collections::HashMap::new();
-    for agent_type in agent_types_for_scope(query.project_id, query.feature_id) {
+    for agent_type in agent_types_for_scope(query.feature_id) {
         let selection = crate::domain::agents::resolve_selection(
             &state.read_pool,
             query.cwd.as_deref(),
             &agent_type,
             query.feature_id,
-            query.project_id,
             query.profile.as_deref(),
         )
         .await
@@ -279,6 +275,8 @@ pub fn build_router(state: AppState) -> Router {
     build_api_routes()
         .route("/api/browser-bridge", put(register_browser_bridge))
         .merge(provider_development_router())
+        .merge(crate::domain::projects::publication_package::router())
+        .merge(crate::domain::projects::publication_release::router())
         .merge(installed_provider_lifecycle_router())
         .merge(managed_provider_inventory_router())
         .merge(managed_provider_lifecycle_router())
@@ -350,7 +348,7 @@ async fn api_not_found() -> Result<(), AppError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_browser_bridge, AgentSelectionQuery, BrowserBridgeRegistrationRequest};
+    use super::{validate_browser_bridge, BrowserBridgeRegistrationRequest};
 
     #[test]
     fn browser_bridge_registration_accepts_loopback_http_url() {
@@ -376,27 +374,17 @@ mod tests {
     }
 
     #[test]
-    fn global_scope_includes_workspace_only_agent_types() {
-        let query = AgentSelectionQuery {
-            project_id: None,
-            feature_id: None,
-            cwd: None,
-            profile: None,
-        };
+    fn workspace_scope_includes_workspace_only_agent_types() {
         assert_eq!(
-            super::agent_types_for_scope(query.project_id, query.feature_id),
+            super::agent_types_for_scope(None),
             vec!["session".to_string(), "auto_name".to_string()]
         );
     }
 
     #[test]
-    fn project_and_feature_scopes_exclude_workspace_only_agent_types() {
+    fn feature_scope_excludes_workspace_only_agent_types() {
         assert_eq!(
-            super::agent_types_for_scope(Some(1), None),
-            vec!["session".to_string()]
-        );
-        assert_eq!(
-            super::agent_types_for_scope(Some(1), Some(7)),
+            super::agent_types_for_scope(Some(7)),
             vec!["session".to_string()]
         );
     }

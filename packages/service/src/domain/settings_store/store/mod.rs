@@ -62,12 +62,20 @@ pub(super) fn load_document_for_write(
 /// Set a single scalar key, preserving every other key (unknown scalars and
 /// nested sections like `profiles` alike).
 pub(super) async fn set_value(path: &Path, key: &str, value: &str) -> Result<(), AppError> {
+    set_values(path, &[(key, value)]).await
+}
+
+/// Set several scalar keys in one read-modify-write, so they land together (and
+/// the file watcher sees one change, not one per key).
+pub(super) async fn set_values(path: &Path, entries: &[(&str, &str)]) -> Result<(), AppError> {
     let _guard = lock::write_lock().lock().await;
     let mut doc = load_document_for_write(path)?;
-    doc.insert(
-        key.to_string(),
-        serde_json::Value::String(value.to_string()),
-    );
+    for (key, value) in entries {
+        doc.insert(
+            (*key).to_string(),
+            serde_json::Value::String((*value).to_string()),
+        );
+    }
     file::write_atomic(path, &file::serialize_document(&doc))
 }
 

@@ -11,6 +11,10 @@
 //! every refusal code are covered by the inline unit tests in
 //! `providers/installed/loader.rs`, which exercise the same pure `load_from_dir`
 //! without a subprocess.
+//!
+//! Own test binary: it calls `settings_store::init` (a first-call-wins
+//! `OnceLock`) and then `provider_registry()`, which scans the providers dir
+//! exactly once per process.
 
 mod common;
 
@@ -693,7 +697,8 @@ async fn a_local_acp_executable_is_selectable_and_drives_a_full_turn() {
             provider: Some(PROVIDER_ID.to_string()),
             model: Some("fake-small".to_string()),
             thinking_effort: None,
-            permission_mode: None,
+            // New frontend sessions can seed Claude's mode onto an installed provider.
+            permission_mode: Some("auto".to_string()),
             system_prompt: None,
             cwd: Some(server.repo_path().to_string_lossy().into_owned()),
             feature_id: Some(1),
@@ -709,6 +714,7 @@ async fn a_local_acp_executable_is_selectable_and_drives_a_full_turn() {
         serde_json::from_value(initialized_envelope.payload)
             .expect("session.initialized payload should match its DTO");
     assert_eq!(initialized.provider.as_deref(), Some(PROVIDER_ID));
+    assert!(initialized.permission_mode.is_none());
     let session_id = initialized.session_id;
 
     send_session_payload(

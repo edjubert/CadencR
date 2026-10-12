@@ -195,6 +195,10 @@ pub fn runtime_setting_key(agent_type: &str) -> String {
     format!("agent_runtime_{agent_type}")
 }
 
+pub fn model_setting_key(agent_type: &str) -> String {
+    format!("model_{agent_type}")
+}
+
 pub fn default_provider_settings() -> ProviderSettings {
     let default = crate::domain::agents::providers::default_provider_id().to_string();
     ProviderSettings {

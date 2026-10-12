@@ -224,6 +224,12 @@ export interface AgentSessionProps {
    */
   onLoadOlder?: (displayMode?: DisplayRowMode) => Promise<number | void>;
   /**
+   * Loads one prompt that sits in unloaded history, with the start of its
+   * turn, so the message navigator can jump to it without paging through
+   * everything in between. Resolves with whether the prompt is now loaded.
+   */
+  onLoadPromptTurn?: (messageDbId: number, displayMode?: DisplayRowMode) => Promise<boolean>;
+  /**
    * Pre-first-prompt branch/worktree picker — a two-chip group: a Branch chip
    * (chevron + virtualized branch list, default = the project's current
    * branch) and an explicit behavior menu (`WorktreeMode`). The chip renders

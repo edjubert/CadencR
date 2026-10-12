@@ -8,6 +8,10 @@ pub const FEATURE_ALLOWED_KEYS: &[&str] = &[
     "agent_runtime_session",
     "skip_worktree",
     "layout_state",
+    // Per-feature auto layout override: "on" / "off". Unset follows the
+    // workspace `layout_auto_mode_default`. See
+    // packages/desktop/src/lib/auto-layout/auto-layout-mode.ts.
+    "layout_auto_mode",
     "draft_prompt",
     // Git workflow (per-feature). `worktree_mode` selects how the worktree is
     // provisioned at feature creation: "new" (default), "reuse" (attach to an
@@ -27,8 +31,6 @@ pub const FEATURE_ALLOWED_KEYS: &[&str] = &[
 
 /// Keys writable via `PUT /api/projects/{id}/settings`.
 pub const PROJECT_ALLOWED_KEYS: &[&str] = &[
-    "model_session",
-    "agent_runtime_session",
     "branch_prefix",
     "default_worktree_mode",
     "color",
@@ -127,14 +129,25 @@ pub const WORKSPACE_ALLOWED_KEYS: &[&str] = &[
     // never live here; they are stored separately in an owner-only file.
     crate::domain::git::forge::FORGE_HOSTS_SETTING,
     // Where agent-finished notifications appear: "native" (system banner),
-    // "in_app" (Sonner toast inside Cadencr), or "off". Mirrors
+    // "in_app" (Sonner toast inside Cadencr), "notch" (the macOS notch
+    // island), or "off". Mirrors
     // NOTIFICATION_MODE_KEY in packages/desktop/src/lib/notification-mode.ts.
     "notification_mode",
-    // Workspace-scope agent defaults. `auto_name` is global-only.
+    // Notch island behavior (notification_mode = "notch"): `always_on` keeps
+    // the compact island visible while agents are tracked, `always_animate`
+    // lets the logo keep moving in the compact state. `notch_default_applied`
+    // records the one-time switch of existing macOS installs to the notch.
+    "notch_always_on",
+    "notch_always_animate",
+    "notch_default_applied",
+    // Workspace-scope agent selection. `*_session` holds the pair the user
+    // last prompted with (written by the backend, not a configured default);
+    // `auto_name` is global-only, with an optional custom system prompt.
     "model_session",
     "model_auto_name",
     "agent_runtime_session",
     "agent_runtime_auto_name",
+    "auto_name_system_prompt",
     // First-run onboarding overlay state.
     // `onboarding_step` is one of the values defined in
     // packages/desktop/src/lib/onboarding-step.ts; missing/unset is treated as
@@ -151,6 +164,10 @@ pub const WORKSPACE_ALLOWED_KEYS: &[&str] = &[
     // Master switch for fluid UI animations. When unset the frontend falls back
     // to the OS `prefers-reduced-motion` media query. Stored as "true" / "false".
     "animations_enabled",
+    // Workspace default for the feature page's auto layout mode (panes follow
+    // the agent and opened links). "true" / "false"; unset means on. Each
+    // feature can override it via `layout_auto_mode`.
+    "layout_auto_mode_default",
     // Monospace font family for the terminal, editor, and code snippets.
     // A missing value means "Default" (see DEFAULT_MONO_STACK in
     // packages/desktop/src/lib/fonts/constants.ts). Stored as the raw family
@@ -168,6 +185,10 @@ pub const WORKSPACE_ALLOWED_KEYS: &[&str] = &[
     // allowlist only gates the write endpoint. See
     // packages/desktop/src/lib/agent-verbosity.ts.
     "agent_stream_summary_mode",
+    // Agent tab "Message navigator" rail (ticks marking each user prompt on
+    // the stream's right edge). Stored as "true" / "false"; unset means
+    // enabled. See packages/desktop/src/lib/agent-message-navigator.ts.
+    "agent_message_navigator_enabled",
     // Plays the welcome-step intro animation exactly once, on the very first
     // open of the onboarding overlay. Set to "true" by `WelcomeIntro` after
     // the animation completes (or the user clicks to skip).
@@ -224,9 +245,7 @@ mod tests {
     #[test]
     fn editor_vim_mode_level_is_in_workspace_allowlist() {
         assert!(
-            WORKSPACE_ALLOWED_KEYS
-                .iter()
-                .any(|&k| k == "editor_vim_mode_level"),
+            WORKSPACE_ALLOWED_KEYS.contains(&"editor_vim_mode_level"),
             "editor_vim_mode_level must be in WORKSPACE_ALLOWED_KEYS"
         );
     }

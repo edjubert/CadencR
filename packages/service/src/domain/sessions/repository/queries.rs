@@ -123,16 +123,16 @@ pub async fn latest_assistant_preview(
     .bind(feature_id)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(content,)| preview_snippet(&content)))
+    Ok(row.map(|(content,)| preview_snippet(&content, PREVIEW_MAX_CHARS)))
 }
 
-/// Collapse whitespace and truncate to [`PREVIEW_MAX_CHARS`] on a char boundary.
-fn preview_snippet(content: &str) -> String {
+/// Collapse whitespace and truncate to `max_chars` on a char boundary.
+pub(crate) fn preview_snippet(content: &str, max_chars: usize) -> String {
     let collapsed = content.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.chars().count() <= PREVIEW_MAX_CHARS {
+    if collapsed.chars().count() <= max_chars {
         return collapsed;
     }
-    let truncated: String = collapsed.chars().take(PREVIEW_MAX_CHARS).collect();
+    let truncated: String = collapsed.chars().take(max_chars).collect();
     format!("{}…", truncated.trim_end())
 }
 
@@ -143,8 +143,11 @@ mod tests {
 
     #[test]
     fn preview_snippet_collapses_whitespace_and_truncates() {
-        assert_eq!(preview_snippet("  hello\n\n  world  "), "hello world");
-        let snippet = preview_snippet(&"a".repeat(200));
+        assert_eq!(
+            preview_snippet("  hello\n\n  world  ", PREVIEW_MAX_CHARS),
+            "hello world"
+        );
+        let snippet = preview_snippet(&"a".repeat(200), PREVIEW_MAX_CHARS);
         assert!(snippet.ends_with('…'));
         // 120 kept chars + the ellipsis.
         assert_eq!(snippet.chars().count(), PREVIEW_MAX_CHARS + 1);

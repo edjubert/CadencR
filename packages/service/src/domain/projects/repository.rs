@@ -1,7 +1,4 @@
-use super::models::{
-    Project, ProjectAuthoringTarget, ProjectModelSettings, ProjectProviderSettings, ProjectSetting,
-};
-use crate::domain::agents::runtime::{runtime_setting_key, validate_agent_type};
+use super::models::{Project, ProjectAuthoringTarget, ProjectSetting};
 use crate::error::AppError;
 use sqlx::{AssertSqlSafe, SqlitePool};
 
@@ -28,10 +25,9 @@ pub async fn list_projects(pool: &SqlitePool) -> Result<Vec<Project>, AppError> 
     .fetch_all(pool)
     .await?;
 
-    Ok(rows
-        .into_iter()
+    rows.into_iter()
         .map(project_from_row)
-        .collect::<Result<Vec<_>, _>>()?)
+        .collect::<Result<Vec<_>, _>>()
 }
 
 pub async fn create_project(
@@ -247,64 +243,6 @@ pub async fn set_project_setting(
     crate::domain::settings_store::project_set(pool, project_id, key, value).await
 }
 
-pub async fn get_project_model_settings(
-    pool: &SqlitePool,
-    project_id: i64,
-) -> Result<ProjectModelSettings, AppError> {
-    let session = crate::domain::settings_store::project_get(pool, project_id, "model_session")
-        .await?
-        .unwrap_or_default();
-    Ok(ProjectModelSettings { session })
-}
-
-pub async fn set_project_model_setting(
-    pool: &SqlitePool,
-    project_id: i64,
-    model_type: &str,
-    model: &str,
-) -> Result<(), AppError> {
-    if !validate_agent_type(model_type) {
-        return Err(AppError::BadRequest(format!(
-            "Invalid model type: {}",
-            model_type
-        )));
-    }
-    crate::domain::agents::runtime::reject_workspace_only(model_type, "project")?;
-    let key = format!("model_{}", model_type);
-    crate::domain::settings_store::project_set(pool, project_id, &key, model).await
-}
-
-pub async fn get_project_provider_settings(
-    pool: &SqlitePool,
-    project_id: i64,
-) -> Result<ProjectProviderSettings, AppError> {
-    let session =
-        crate::domain::settings_store::project_get(pool, project_id, "agent_runtime_session")
-            .await?
-            .unwrap_or_default();
-    Ok(ProjectProviderSettings {
-        session,
-        auto_name: String::new(),
-    })
-}
-
-pub async fn set_project_provider_setting(
-    pool: &SqlitePool,
-    project_id: i64,
-    provider_type: &str,
-    provider: &str,
-) -> Result<(), AppError> {
-    if !validate_agent_type(provider_type) {
-        return Err(AppError::BadRequest(format!(
-            "Invalid provider type: {}",
-            provider_type
-        )));
-    }
-    crate::domain::agents::runtime::reject_workspace_only(provider_type, "project")?;
-    let key = runtime_setting_key(provider_type);
-    crate::domain::settings_store::project_set(pool, project_id, &key, provider).await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,17 +414,5 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(count.0, 0);
-    }
-
-    #[tokio::test]
-    async fn test_set_project_setting_rejects_workspace_only_agent() {
-        let pool = setup_test_db().await;
-        let project = create_project(&pool, "WsOnly", "/tmp/wsonly")
-            .await
-            .unwrap();
-        let err = set_project_model_setting(&pool, project.id, "auto_name", "haiku")
-            .await
-            .unwrap_err();
-        assert!(matches!(err, AppError::BadRequest(_)));
     }
 }

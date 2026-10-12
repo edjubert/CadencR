@@ -303,6 +303,14 @@ export function useAgentSessionScroll(
   const anchors = useHistoryAnchors(state);
   const history = useHistoryLoader(state, anchors);
   const callbacks = useScrollCallbacks(state, pinning, anchors, history);
+  const { setAutoScrollEnabled } = pinning;
+  const { resetIntent } = history;
+  // A programmatic jump owns the viewport: bottom-stick lets go, and a pending
+  // history-anchor restore (or an armed history load) must not yank it back.
+  const prepareJump = useCallback((): void => {
+    resetIntent();
+    setAutoScrollEnabled(false);
+  }, [resetIntent, setAutoScrollEnabled]);
   useScrollLifecycle(state, pinning, history, options.conversationKey, options.blocks.length);
   const scrollContainerRef = useAgentSessionScrollInput({
     scrollerElRef: state.scrollerElRef,
@@ -326,9 +334,11 @@ export function useAgentSessionScroll(
       autoScrollEnabled: state.autoScrollEnabled,
       isLoadingOlder: state.isLoadingOlder,
       scrollToBottom: callbacks.scrollToBottom,
+      prepareJump,
     }),
     [
       callbacks,
+      prepareJump,
       scrollContainerRef,
       state.autoScrollEnabled,
       state.isLoadingOlder,
