@@ -226,7 +226,7 @@ pub(crate) async fn make_test_app_state() -> AppState {
                 pending_permission TEXT,
                 input_tokens INTEGER NOT NULL DEFAULT 0,
                 output_tokens INTEGER NOT NULL DEFAULT 0,
-                context_window INTEGER NOT NULL DEFAULT 200000,
+                context_window INTEGER,
                 thinking_effort TEXT,
                 fast_mode INTEGER NOT NULL DEFAULT 0,
                 runtime_overrides TEXT
@@ -277,6 +277,25 @@ pub(crate) async fn make_test_app_state() -> AppState {
     sqlx::query(
         "CREATE UNIQUE INDEX idx_agent_messages_session_message_uuid
          ON agent_messages(session_id, message_uuid) WHERE message_uuid IS NOT NULL",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Persisting a prompt also counts it in the usage stats, in the same
+    // transaction.
+    sqlx::query(
+        r#"CREATE TABLE provider_usage_stats (
+                day TEXT NOT NULL,
+                provider_id TEXT NOT NULL,
+                model_id TEXT NOT NULL DEFAULT '',
+                thinking_effort TEXT NOT NULL DEFAULT '',
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                user_messages INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (day, provider_id, model_id, thinking_effort)
+            )"#,
     )
     .execute(&pool)
     .await
@@ -481,4 +500,43 @@ pub(crate) fn make_in_place_effort_handle(feature_id: i64) -> SdkHandle {
         manual_compact_cancel: Arc::new(AtomicBool::new(false)),
         manual_compact_spawn_pending: Arc::new(AtomicBool::new(false)),
     }
+}
+
+/// Register a Claude custom model with known effort metadata. Catalog lookups
+/// merge custom models on top of whatever the installed CLI reports, so tests
+/// that depend on a model's thinking levels stay independent of the machine.
+pub(crate) async fn add_claude_custom_model(
+    app_state: &AppState,
+    model_id: &str,
+    levels: &[&str],
+    default_level: Option<&str>,
+) {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS claude_code_custom_models (\
+            id INTEGER PRIMARY KEY, \
+            model_id TEXT NOT NULL UNIQUE, \
+            label TEXT NOT NULL, \
+            description TEXT, \
+            supports_effort BOOLEAN, \
+            supported_effort_levels_json TEXT, \
+            default_effort_level TEXT, \
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP\
+        )",
+    )
+    .execute(&app_state.write_pool)
+    .await
+    .unwrap();
+    crate::domain::agents::claude_code::custom_models::upsert_custom_model(
+        &app_state.write_pool,
+        model_id,
+        model_id,
+        None,
+        crate::domain::agents::claude_code::custom_models::CustomModelEffort {
+            supports_effort: Some(true),
+            supported_effort_levels: Some(levels.iter().map(|level| level.to_string()).collect()),
+            default_effort_level: default_level.map(ToOwned::to_owned),
+        },
+    )
+    .await
+    .unwrap();
 }

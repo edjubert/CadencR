@@ -36,4 +36,5 @@ pub(crate) use conversation_references::{
 pub use drafts::{get_draft, get_message_content, save_draft};
 pub use feature_state::get_feature_agent_state;
 pub(crate) use origins::{get_message_origin, origin_matches_session_generated};
+pub(crate) use queries::preview_snippet;
 pub use queries::{get_session_status_snapshot, get_sessions, latest_assistant_preview};

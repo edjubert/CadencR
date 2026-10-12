@@ -20,7 +20,8 @@ import type { AgentBlockData } from "./AgentBlock";
 import { AgentStreamItem } from "./agent-session/AgentStreamItem";
 import { STREAM_AT_BOTTOM_THRESHOLD_PX, STREAM_BOTTOM_GAP_PX } from "./agent-session/stream-fade";
 import { CompactFlowRow } from "./agent-session/CompactFlowRow";
-import { ConversationSearch } from "./agent-session/ConversationSearch";
+import { AgentStreamTools } from "./agent-session/AgentStreamTools";
+import type { MessageNavigatorControls } from "./agent-session/useMessageNavigator";
 import type { DisplayItem } from "./agentStreamDisplay";
 import { useAgentDisplayItems, useRootBlocks, useToolResultMap } from "./useAgentStreamData";
 import type { TurnLifecycle } from "@/stores/ws-turn-lifecycle";
@@ -110,6 +111,8 @@ interface AgentStreamProps {
    * focus gate so search only binds/opens for the visible feature workspace.
    */
   searchEnabled?: boolean;
+  /** Scroll hooks for the prompt rail; null/absent hides it (Settings → Interface). */
+  messageNavigator?: MessageNavigatorControls | null;
 }
 
 const StreamingCursor = memo(function StreamingCursor({ label }: { label: string }) {
@@ -288,6 +291,7 @@ export const AgentStream = memo(function AgentStream({
   verbosityMode = "maximal",
   summaryMode = false,
   searchEnabled = false,
+  messageNavigator = null,
 }: AgentStreamProps) {
   const rootBlocks = useRootBlocks(blocks, rootBlocksProp);
   const toolResultMap = useToolResultMap(blocks, toolResultMapProp);
@@ -339,17 +343,22 @@ export const AgentStream = memo(function AgentStream({
   }
 
   return (
-    <div className="relative h-full" data-rich-copy="true">
+    // With the navigator on, the stream gives up 8px so its rail gets a lane
+    // of its own: the wrapper's right padding alone is partly taken by the
+    // split-pane resize handle's hit area.
+    <div
+      className={messageNavigator ? "relative mr-2 h-full" : "relative h-full"}
+      data-rich-copy="true"
+    >
       {isLoadingOlder && <LoadingOlderOverlay />}
-      {searchEnabled && (
-        <ConversationSearch
-          enabled={searchEnabled}
-          items={displayItems}
-          toolResultMap={toolResultMap}
-          virtuosoRef={streamRefs.localVirtuosoRef}
-          scrollerRef={streamRefs.scrollerElRef}
-        />
-      )}
+      <AgentStreamTools
+        items={displayItems}
+        toolResultMap={toolResultMap}
+        virtuosoRef={streamRefs.localVirtuosoRef}
+        scrollerRef={streamRefs.scrollerElRef}
+        shortcutsEnabled={searchEnabled}
+        messageNavigator={messageNavigator}
+      />
       <AgentVirtuoso
         items={displayItems}
         firstItemIndex={firstItemIndex}

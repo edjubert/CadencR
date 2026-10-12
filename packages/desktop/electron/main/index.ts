@@ -21,11 +21,14 @@ import { sendToWindow } from "./safe-send";
 import { registerBrowserIpc } from "./browser-ipc";
 import { startBrowserBridgeServer, type BrowserBridgeHandle } from "./browser-bridge-server";
 import { dispatchBrowserMcpTool } from "./browser-mcp-dispatch";
+import { agentActivityFor } from "./browser-agent-activity";
 import type { BrowserManager } from "./browser-manager";
 import { handleStartupRecoveryAction } from "./startup-recovery-actions";
 import { buildStartupRecovery, type StartupRecoveryState } from "./startup-recovery";
 import { installDefaultRendererCrashRecovery } from "./renderer-crash-recovery";
 import { installCsp, rendererLoadTarget, secureWebContents } from "./renderer-window-security";
+import { registerNotchIpc } from "./notch-ipc";
+import type { NotchController } from "./notch-window";
 let mainWindow: BrowserWindow | null = null;
 let splash: SplashHandle | null = null;
 let sidecar: SidecarHandle | null = null;
@@ -40,6 +43,7 @@ let browserIpcRegistered = false;
 let browserManager: BrowserManager | null = null;
 let browserBridge: BrowserBridgeHandle | null = null;
 let browserFlushPromise: Promise<void> | null = null;
+let notch: NotchController | null = null;
 let shutdownReady = false;
 /** Dev-env load result from module scope; the failure is re-raised by `bootstrap()`. */
 let devProfile: DevProfile | null = null;
@@ -140,6 +144,8 @@ function createWindow(): BrowserWindow {
   });
   win.on("closed", () => {
     if (mainWindow === win) mainWindow = null;
+    // The island mirrors this window's state; without it there is nothing to show.
+    void notch?.setEnabled(false);
   });
   win.webContents.on("did-start-navigation", () => clearRegisteredFilePaths());
 
@@ -166,6 +172,7 @@ function wireMainProcess(): void {
     registerIpc({ getMainWindow: () => mainWindow, confirmClose, requestQuit });
     ipcRegistered = true;
   }
+  notch ??= registerNotchIpc(() => mainWindow);
   if (!browserIpcRegistered) {
     browserManager = registerBrowserIpc({ getMainWindow: () => mainWindow });
     browserIpcRegistered = true;
@@ -199,14 +206,18 @@ async function bootstrap(): Promise<void> {
   }
   installCsp();
   browserBridge = await startBrowserBridgeServer({
-    dispatch: (toolName, args, featureId) => {
+    dispatch: async (toolName, args, featureId) => {
       if (!browserManager) throw new Error("Browser manager is not ready.");
       // Shield the renderer's focus (most visibly the agent prompt) from being
       // stolen by the guest page while the agent drives the browser.
       const manager = browserManager;
-      return manager.focusGuard.run(() =>
+      const result = await manager.focusGuard.run(() =>
         dispatchBrowserMcpTool(manager, toolName, args, featureId),
       );
+      // Let the renderer follow the agent (auto layout, activity indicator).
+      const activity = agentActivityFor(toolName, featureId);
+      if (activity) sendToWindow(mainWindow, "browser:agent-activity", activity);
+      return result;
     },
   });
   installApplicationMenu(requestQuit);
@@ -378,7 +389,9 @@ app.on("window-all-closed", () => {
 });
 
 app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
+  // The notch island is a window too, but never a reason not to reopen the app.
+  const appWindows = BrowserWindow.getAllWindows().filter((win) => win !== notch?.window);
+  if (appWindows.length === 0) {
     mainWindow = createWindow();
     wireMainProcess();
   }

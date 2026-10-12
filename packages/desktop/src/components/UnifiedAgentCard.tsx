@@ -90,7 +90,7 @@ export const UnifiedAgentCard = memo(function UnifiedAgentCard({
       onFocus={prefetchFeature}
       className={baseClass}
     >
-      <ResolvedModelProvider featureId={entry.feature.id} projectId={entry.project.id}>
+      <ResolvedModelProvider featureId={entry.feature.id}>
         <WebSocketSessionFeatureBlock
           sessionId={wsSessionIdFromFeature(entry.feature.id)}
           cwd={entry.project.path}

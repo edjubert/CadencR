@@ -30,6 +30,7 @@ import {
   applyPlanChangesRequest,
   loadOlderSessionMessages,
 } from "./ws-session-actions";
+import { loadSessionPromptTurn } from "./ws-session-prompt-turn";
 import { discardStreamDeltas } from "./ws-delta-coalescer";
 import type { StoreAccessors } from "./ws-envelope-handler";
 import { parseErrorPayload, parseFastModePayload } from "./ws-envelope-payload";
@@ -68,6 +69,7 @@ type SimpleSessionActions = Pick<
   | "markPersistedLoaded"
   | "setPersistedState"
   | "loadOlderMessages"
+  | "loadPromptTurn"
   | "refreshSessionMessages"
 >;
 
@@ -322,6 +324,14 @@ function createWorkflowActions(deps: SimpleSessionActionDeps) {
 
     async loadOlderMessages(sessionId: string, displayMode?: DisplayRowMode): Promise<number> {
       return loadOlderSessionMessages(ctx, sessionId, displayMode);
+    },
+
+    loadPromptTurn(
+      sessionId: string,
+      messageDbId: number,
+      displayMode?: DisplayRowMode,
+    ): Promise<boolean> {
+      return loadSessionPromptTurn(ctx, sessionId, messageDbId, displayMode);
     },
 
     refreshSessionMessages(sessionId: string, target?: ResyncTarget): Promise<void> {

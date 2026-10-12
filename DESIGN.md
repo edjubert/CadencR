@@ -480,6 +480,17 @@ Five chips above the prompt: Auto-scroll · Autonomy · Model · Thinking effort
 
 A single-line indicator above the tab strip in Session/workspace view: branch icon + worktree path + clipboard chip + ready dot. Sits between TopBar and the pane tabs. Uses `success` for the ready state — never warm-orange or accent.
 
+### Notch island (`src/notch/`, macOS only)
+
+The "Notch" notification destination: a transparent, click-through window hugging the display's notch (`electron/main/notch-window.ts`). It continues a piece of hardware, so it is **always dark** whatever the app theme — it binds the CadencR Dark handoff values in `src/notch/notch.css` (`--n-*`), never the theme tokens.
+
+- **Body.** Pure `#000` so it is indistinguishable from the cutout, with concave top shoulders where it meets the screen edge. It is drawn at full size and revealed by a `clip-path` driven by registered properties (`--iw`, `--ih`, `--ir`), so content never reflows while the shape springs; content only comes into focus (blur → sharp) once the shape lands. Growing uses `--n-spring` (one small overshoot); shrinking uses the plain ease-out.
+- **Ears.** The band level with the cutout can only carry content left and right of it. Compact mode: the Index Dots orb (aggregate status; the plain logo while still) + one dot per agent that is working, waiting on you, or finished with an unread reply. Read, finished agents stay in the hover list but never hold the compact island out; once none of the others remain it tucks back into the notch. Peek: orb + status word. Panel: orb + `CADENCR` wordmark + at most two counts.
+- **Index Dots orb.** The logo (≤32px cut) as status glyph: a comet chases the ring while an agent works, the ring pulses when one waits on you, and floods green while drawing a check when one is done.
+- **Ambient calm.** The closed (compact) island is still by default: the status orb gives way to the plain Cadencr logo (ink dots, emerald core) on the left, and the per-agent status dots on the right hold still. Nothing in it moves — status lives in the dots' colors. The orb and its loops only come back once the island opens (peek or panel), unless the user turns on _Always animate_. With _Always on_ off, the compact state is skipped entirely: the island stays tucked into the notch between peeks and hovers.
+- **Status colors** mirror the sidebar's leading indicator: working = blue, permission = amber, question = primary, done/unread = leaf green, error = red. The peek's light spill under the body takes the status color.
+- **Rows.** Provider silhouette tile with a status badge, title + project, then one line: the last tool action in mono (with a sweeping mask shimmer while working) or a two-line plain-text preview of the last reply when done.
+
 ### Status dot
 
 A 7–9px circle with a 2–3px halo (`box-shadow` 0 0 0 spread). Three legal slots:

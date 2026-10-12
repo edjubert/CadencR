@@ -1,8 +1,6 @@
 use std::path::PathBuf;
 
-use super::models::{
-    Project, ProjectAuthoringTarget, ProjectModelSettings, ProjectProviderSettings, ProjectSetting,
-};
+use super::models::{Project, ProjectAuthoringTarget, ProjectSetting};
 use super::repository;
 use crate::error::AppError;
 use crate::shared::slug::slugify;
@@ -166,38 +164,6 @@ pub async fn set_project_setting(
     value: &str,
 ) -> Result<(), AppError> {
     repository::set_project_setting(pool, project_id, key, value).await
-}
-
-pub async fn get_project_model_settings(
-    pool: &SqlitePool,
-    project_id: i64,
-) -> Result<ProjectModelSettings, AppError> {
-    repository::get_project_model_settings(pool, project_id).await
-}
-
-pub async fn set_project_model_setting(
-    pool: &SqlitePool,
-    project_id: i64,
-    model_type: &str,
-    model: &str,
-) -> Result<(), AppError> {
-    repository::set_project_model_setting(pool, project_id, model_type, model).await
-}
-
-pub async fn get_project_provider_settings(
-    pool: &SqlitePool,
-    project_id: i64,
-) -> Result<ProjectProviderSettings, AppError> {
-    repository::get_project_provider_settings(pool, project_id).await
-}
-
-pub async fn set_project_provider_setting(
-    pool: &SqlitePool,
-    project_id: i64,
-    provider_type: &str,
-    provider: &str,
-) -> Result<(), AppError> {
-    repository::set_project_provider_setting(pool, project_id, provider_type, provider).await
 }
 
 #[cfg(test)]

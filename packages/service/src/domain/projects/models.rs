@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-pub use crate::domain::agents::runtime::ProviderSettings as ProjectProviderSettings;
-
 /// Legacy `projects.kind` used by theme projects created before durable
 /// authoring metadata. New theme projects remain `kind = 'user'` and use
 /// [`ProjectAuthoringTarget::Theme`] plus `plugin_id`; this constant exists only
@@ -51,6 +49,40 @@ pub struct Project {
     pub plugin_id: Option<String>,
 }
 
+/// Result of read-only, local preparation checks for an authored provider.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PublicationReadinessResponse {
+    pub project_id: i64,
+    pub plugin_id: String,
+    pub local_preparation: PublicationPreparationStatus,
+    pub summary: String,
+    pub checks: Vec<PublicationReadinessCheck>,
+    pub supported_package_targets: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PublicationPreparationStatus {
+    Prepared,
+    Blocked,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PublicationReadinessCheck {
+    pub id: String,
+    pub label: String,
+    pub status: PublicationCheckStatus,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PublicationCheckStatus {
+    Pass,
+    Warning,
+    Fail,
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateProjectRequest {
     pub name: String,
@@ -67,23 +99,6 @@ pub struct ProjectSetting {
 pub struct SetProjectSettingRequest {
     pub key: String,
     pub value: String,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-pub struct ProjectModelSettings {
-    pub session: String,
-}
-
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct SetProjectModelSettingRequest {
-    pub model_type: String,
-    pub model: String,
-}
-
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct SetProjectProviderSettingRequest {
-    pub provider_type: String,
-    pub provider: String,
 }
 
 #[cfg(test)]
@@ -120,13 +135,5 @@ mod tests {
         let req: SetProjectSettingRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.key, "branch_prefix");
         assert_eq!(req.value, "feature/");
-    }
-
-    #[test]
-    fn test_set_project_model_setting_request_deserialize() {
-        let json = r#"{"model_type": "session", "model": "claude-3-5-sonnet"}"#;
-        let req: SetProjectModelSettingRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(req.model_type, "session");
-        assert_eq!(req.model, "claude-3-5-sonnet");
     }
 }

@@ -286,7 +286,6 @@ function FeatureHeaderChrome({
         {!isSession && (
           <FeatureSettingsPopover
             featureId={featureId}
-            projectId={projectId}
             open={settingsOpen}
             onOpenChange={onSettingsOpenChange}
           />

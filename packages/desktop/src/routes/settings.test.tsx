@@ -87,9 +87,10 @@ describe("SettingsPage route", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders runtime & models section with the model selector", () => {
+  it("renders the auto-naming section with the model selector and prompt", () => {
     render(<SettingsPage />);
-    expect(screen.getByRole("heading", { name: /Runtime & Models/ })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Auto-naming" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Naming prompt" })).toBeInTheDocument();
     expect(screen.getByTestId("model-selector")).toBeInTheDocument();
   });
 

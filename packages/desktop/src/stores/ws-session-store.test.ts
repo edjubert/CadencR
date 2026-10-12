@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useWsSessionStore, applyMutations, createStreamingState } from "./ws-session-store";
 import { BLOCK_CONTENT_MAX_CHARS, TRUNCATION_NOTICE } from "@/lib/block-content-budget";
@@ -848,6 +849,52 @@ describe("ws-session-store", () => {
     });
   });
 
+  // A new entry is seeded with Claude's `auto`; replaying it to a session that
+  // initialized on Codex made the backend answer MODE_NOT_SUPPORTED (a toast
+  // on every new non-Claude conversation).
+  it("replays the backend's mode when the seeded one doesn't fit the provider", async () => {
+    const store = useWsSessionStore.getState();
+    store.connect("s1");
+    await tick();
+    const ws = getWs();
+    expect(useWsSessionStore.getState().sessions.s1.permissionMode).toBe("auto");
+
+    ws.simulateMessage({
+      domain: "session",
+      action: "initialized",
+      payload: { session_id: "srv-1", provider: "codex_cli", permission_mode: "default" },
+    });
+
+    expect(useWsSessionStore.getState().sessions.s1.permissionMode).toBe("default");
+    const sent = ws.sent.map((raw) => JSON.parse(raw));
+    expect(sent).toEqual([
+      expect.objectContaining({
+        action: "mode.set",
+        payload: expect.objectContaining({ mode: "default" }),
+      }),
+    ]);
+  });
+
+  it("keeps a valid mode picked while session.init was in flight", async () => {
+    const store = useWsSessionStore.getState();
+    store.connect("s1");
+    await tick();
+    const ws = getWs();
+
+    store.setPermissionMode("s1", "plan");
+    ws.simulateMessage({
+      domain: "session",
+      action: "initialized",
+      payload: { session_id: "srv-1", provider: "codex_cli", permission_mode: "default" },
+    });
+
+    expect(useWsSessionStore.getState().sessions.s1.permissionMode).toBe("plan");
+    expect(JSON.parse(ws.sent[0])).toMatchObject({
+      action: "mode.set",
+      payload: { mode: "plan" },
+    });
+  });
+
   it("setPersistedState sets blocks and lifecycle", () => {
     // Ensure session exists first
     useWsSessionStore.getState().connect("s1");
@@ -885,9 +932,9 @@ describe("ws-session-store", () => {
     // Regression: a re-seed (app relaunch, dev HMR reload, reconnect rebuild)
     // must rehydrate the persisted mode rather than keep the createSessionEntry
     // default. Without this, sticky bypassPermissions silently reverts to
-    // acceptEdits.
+    // the provider default.
     useWsSessionStore.getState().connect("s1");
-    expect(useWsSessionStore.getState().sessions["s1"].permissionMode).toBe("acceptEdits");
+    expect(useWsSessionStore.getState().sessions["s1"].permissionMode).toBe("auto");
     useWsSessionStore.getState().setPersistedState("s1", {
       blocks: [{ id: "b1", type: "text" as const, content: "restored" }],
       lifecycle: { phase: "terminal", reason: "completed" },
@@ -904,7 +951,7 @@ describe("ws-session-store", () => {
       lifecycle: { phase: "terminal", reason: "completed" },
       currentSelection: { providerId: "claude_code", modelId: "haiku" },
     });
-    expect(useWsSessionStore.getState().sessions["s1"].permissionMode).toBe("acceptEdits");
+    expect(useWsSessionStore.getState().sessions["s1"].permissionMode).toBe("auto");
   });
 
   it("runtime_session_id action sets runtimeSessionId on the session", async () => {

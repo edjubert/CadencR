@@ -26,6 +26,7 @@ interface AgentSessionStreamContentProps {
   verbosityMode: AgentStreamProps["verbosityMode"];
   summaryMode: AgentStreamProps["summaryMode"];
   searchEnabled: boolean;
+  messageNavigator: AgentStreamProps["messageNavigator"];
 }
 
 export const AgentSessionStreamContent = memo(function AgentSessionStreamContent({
@@ -48,6 +49,7 @@ export const AgentSessionStreamContent = memo(function AgentSessionStreamContent
   verbosityMode,
   summaryMode,
   searchEnabled,
+  messageNavigator,
 }: AgentSessionStreamContentProps): ReactElement | null {
   if (blocks.length === 0 && !isAgentWorking) return null;
 
@@ -72,6 +74,7 @@ export const AgentSessionStreamContent = memo(function AgentSessionStreamContent
       verbosityMode={verbosityMode}
       summaryMode={summaryMode}
       searchEnabled={searchEnabled}
+      messageNavigator={messageNavigator}
     />
   );
 });

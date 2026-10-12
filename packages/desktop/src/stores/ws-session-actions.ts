@@ -2,17 +2,12 @@ import { createPermissionRespond, createPromptSend, type WsEnvelope } from "@/li
 import { getFeatureAgentState } from "@/api/generated";
 import { AGENT_STATE_OLDER_MESSAGE_LIMIT } from "@/lib/agent-state-limits";
 import { serverBlocksToAgentBlocks } from "@/hooks/useFeatureAgentState";
-import {
-  countRenderableDisplayRows,
-  leadingCompactFlowBlock,
-  type DisplayRowMode,
-} from "@/components/agentStreamDisplay";
-import type { AgentBlockData } from "@/components/AgentBlock";
+import type { DisplayRowMode } from "@/components/agentStreamDisplay";
 import { blocksPatchWithDerived } from "./ws-message-processing";
 import type { StoreAccessors } from "./ws-envelope-handler";
 import { markLastPlanBlock, type PersistedStatePayload, updateSession } from "./ws-session-types";
 import { transitionTurn } from "./ws-turn-lifecycle";
-import { mergeCanonicalBlocks, sameMessageIdentity } from "./ws-user-message-reconciliation";
+import { prependHistoryBlocks } from "./ws-session-prepend";
 
 export type { PersistedStatePayload };
 
@@ -131,24 +126,6 @@ export { applyPersistedState } from "./ws-session-persisted-actions";
  */
 const MAX_OLDER_PAGES_PER_LOAD = 10;
 
-function preserveCompactFlowPrependSeam(
-  merged: AgentBlockData[],
-  boundary: AgentBlockData | undefined,
-): AgentBlockData[] {
-  if (!boundary) return merged;
-  const exactIndex = merged.indexOf(boundary);
-  const index =
-    exactIndex >= 0
-      ? exactIndex
-      : merged.findIndex((block) => sameMessageIdentity(block, boundary));
-  if (index < 0) return merged;
-  const mergedBoundary = merged[index];
-  if (mergedBoundary.compactFlowBreakBefore) return merged;
-  const next = [...merged];
-  next[index] = { ...mergedBoundary, compactFlowBreakBefore: true };
-  return next;
-}
-
 interface OlderPageResult {
   addedBlocks: number;
   addedDisplayRows: number;
@@ -183,31 +160,13 @@ async function loadOlderSessionPage(
   }
 
   const olderBlocks = serverBlocksToAgentBlocks(serverSession.blocks as never[]);
-  const currentSession = ctx.get().sessions[sessionId];
-  if (!currentSession) return null;
-  const compactBoundary = displayMode?.compactMode
-    ? leadingCompactFlowBlock(currentSession.blocks)
-    : undefined;
-  const merged = mergeCanonicalBlocks(currentSession.blocks, olderBlocks);
-  const addedBlocks = merged.length - currentSession.blocks.length;
-  const mergedBlocks =
-    addedBlocks > 0 ? preserveCompactFlowPrependSeam(merged, compactBoundary) : merged;
-  // Use the actual growth in rendered rows, not the older chunk's rows in
-  // isolation — under summary/compact mode a segment can span the chunk
-  // boundary, so the net delta is what keeps `firstItemIndex` aligned.
-  const addedDisplayRows =
-    countRenderableDisplayRows(mergedBlocks, displayMode) -
-    countRenderableDisplayRows(currentSession.blocks, displayMode);
   const hasMore = serverSession.hasMore ?? false;
-  ctx.set(
-    updateSession(ctx.get(), sessionId, {
-      ...blocksPatchWithDerived(currentSession.streamingState, mergedBlocks),
-      historyPrependDisplayOffset: currentSession.historyPrependDisplayOffset + addedDisplayRows,
-      hasMore,
-      oldestMessageId: serverSession.oldestMessageId ?? null,
-    }),
-  );
-  return { addedBlocks, addedDisplayRows, hasMore };
+  const added = prependHistoryBlocks(ctx, sessionId, olderBlocks, displayMode, {
+    hasMore,
+    oldestMessageId: serverSession.oldestMessageId ?? null,
+  });
+  if (!added) return null;
+  return { ...added, hasMore };
 }
 
 /**

@@ -127,6 +127,16 @@ export interface WsSessionStore {
    */
   loadOlderMessages: (sessionId: string, displayMode?: DisplayRowMode) => Promise<number>;
   /**
+   * Loads one prompt sitting in unloaded history together with the start of
+   * its turn (message navigator). Resolves with whether the prompt is now in
+   * the transcript.
+   */
+  loadPromptTurn: (
+    sessionId: string,
+    messageDbId: number,
+    displayMode?: DisplayRowMode,
+  ) => Promise<boolean>;
+  /**
    * Pull any messages persisted after the newest block we hold and merge them
    * in — the same catch-up path used on WS reconnect. Used after a manual
    * "Sync from CLI" appends events to the session on the backend.

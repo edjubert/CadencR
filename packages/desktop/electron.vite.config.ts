@@ -137,7 +137,11 @@ export default defineConfig(({ mode }) => {
       ],
       build: {
         rollupOptions: {
-          input: path.resolve(__dirname, "electron/preload/index.ts"),
+          input: {
+            index: path.resolve(__dirname, "electron/preload/index.ts"),
+            // The notch island's own, minimal preload (see electron/preload/notch.ts).
+            notch: path.resolve(__dirname, "electron/preload/notch.ts"),
+          },
         },
       },
     },
@@ -172,7 +176,10 @@ export default defineConfig(({ mode }) => {
       ],
       build: {
         rollupOptions: {
-          input: path.resolve(__dirname, "index.html"),
+          input: {
+            index: path.resolve(__dirname, "index.html"),
+            notch: path.resolve(__dirname, "notch.html"),
+          },
         },
       },
     },

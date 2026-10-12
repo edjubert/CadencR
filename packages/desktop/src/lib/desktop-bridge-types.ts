@@ -1,3 +1,10 @@
+import type {
+  NotchCapabilities,
+  NotchConfig,
+  NotchFeatureRef,
+  NotchNotification,
+  NotchSnapshot,
+} from "@/shared/notch";
 import type { LinkHoverContext, LinkMenuOpenPayload } from "@/lib/link-routing";
 import type {
   BrowserBounds,
@@ -21,6 +28,7 @@ import type {
   BrowserSitePermissionRequest,
   BrowserStateSnapshot,
   BrowserTabMetadata,
+  BrowserAgentActivity,
 } from "@/shared/browser-types";
 import type { BrowserResponsiveRequest } from "@/shared/browser-responsive";
 
@@ -136,6 +144,12 @@ export interface CadencrDesktopBridge {
 
 export interface CadencrBrowserBridge extends CadencrDesktopBridge {
   reportRendererError: (payload: RendererErrorReportPayload) => Promise<void>;
+  // The macOS notch island; the browser fallback resolves them as unsupported.
+  notchCapabilities: () => Promise<NotchCapabilities>;
+  notchConfigure: (config: NotchConfig) => Promise<void>;
+  notchPushSnapshot: (snapshot: NotchSnapshot) => Promise<void>;
+  notchNotify: (notification: NotchNotification) => Promise<void>;
+  onNotchDismissed: (cb: (ref: NotchFeatureRef) => void) => () => void;
   createBrowserTab: (
     url?: string,
     profileId?: string,
@@ -219,6 +233,7 @@ export interface CadencrBrowserBridge extends CadencrDesktopBridge {
   clearBrowserCommentBadges: (tabId: string) => Promise<void>;
   onBrowserState: (cb: (state: BrowserStateSnapshot) => void) => () => void;
   onBrowserTabCounts: (cb: (counts: Record<number, number>) => void) => () => void;
+  onBrowserAgentActivity: (cb: (activity: BrowserAgentActivity) => void) => () => void;
   onBrowserShortcut: (cb: (shortcut: BrowserShortcut) => void) => () => void;
   onBrowserFindResult: (cb: (result: BrowserFindResult) => void) => () => void;
   onBrowserLibraryChanged: (cb: (change: BrowserLibraryChange) => void) => () => void;

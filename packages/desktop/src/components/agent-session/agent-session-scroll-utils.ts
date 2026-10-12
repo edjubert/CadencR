@@ -72,4 +72,6 @@ export interface UseAgentSessionScrollResult {
   autoScrollEnabled: boolean;
   isLoadingOlder: boolean;
   scrollToBottom: () => void;
+  /** Hand the viewport to a programmatic jump (releases bottom-stick and history anchoring). */
+  prepareJump: () => void;
 }
