@@ -28,6 +28,10 @@ use tracing::{debug, warn};
 use super::default_config_path;
 use super::resolve::resolve_chain_paths;
 
+mod state;
+
+use state::{normalize, WatchState};
+
 /// Why live reload is currently degraded, or `None` while it works. Written
 /// by the watcher, read by `GET /api/terminal/alacritty-config`.
 static WATCH_ERROR: Mutex<Option<String>> = Mutex::new(None);
@@ -58,82 +62,6 @@ fn set_watch_error(error: Option<String>) -> bool {
 /// uses for the settings directory.
 #[derive(Clone, Debug, Serialize)]
 pub struct AlacrittyConfigChangedEvent {}
-
-/// Which files trigger a refetch (exact paths, not bare file names) and
-/// which directories are subscribed to get events for them.
-#[derive(Debug, Default, Clone, PartialEq)]
-struct WatchState {
-    files: HashSet<PathBuf>,
-    dirs: HashSet<PathBuf>,
-}
-
-impl WatchState {
-    /// The exact chain files plus each file's parent directory. `config_path`
-    /// is always included so an unresolvable chain degrades to watching the
-    /// root alone and can recover on the next root edit. Each file is kept
-    /// under BOTH its raw and its canonical form: backends like macOS
-    /// FSEvents report events with the canonical path (e.g. `/private/var`
-    /// instead of `/var`, or through a symlinked `~/.config`), while a
-    /// symlinked import's own deletion event arrives under the raw symlink
-    /// path — exact matching must accept both sides.
-    ///
-    /// A wanted directory that doesn't exist yet can't be subscribed, and
-    /// nothing below it can produce events either — unless one of its
-    /// ancestors is watched. The deepest existing ancestor of every missing
-    /// directory is therefore watched too (never the filesystem root), so
-    /// creating the tree is observed and each recompute can subscribe one
-    /// level deeper.
-    fn from_touched(config_path: &Path, touched: Vec<PathBuf>) -> Self {
-        let mut files = HashSet::from([config_path.to_path_buf(), normalize(config_path)]);
-        let mut dirs = HashSet::from([config_path.parent().map(normalize).unwrap_or_default()]);
-        for path in touched {
-            if let Some(dir) = path.parent() {
-                dirs.insert(normalize(dir));
-            }
-            files.insert(path.clone());
-            files.insert(normalize(&path));
-        }
-        let wanted: Vec<PathBuf> = dirs.iter().cloned().collect();
-        for dir in wanted {
-            if !dir.is_dir() {
-                if let Some(ancestor) = deepest_existing_ancestor(&dir) {
-                    dirs.insert(ancestor);
-                }
-            }
-        }
-        WatchState { files, dirs }
-    }
-}
-
-/// The deepest ancestor of `path` that exists as a directory, so a missing
-/// directory tree can be observed from its nearest watched ancestor. `None`
-/// when no ancestor exists at all — or when the only existing ancestor is
-/// the filesystem root: watching `/` would recompute the chain for every
-/// top-level creation, which is not a subscription worth keeping.
-fn deepest_existing_ancestor(path: &Path) -> Option<PathBuf> {
-    let mut ancestor = path.parent()?;
-    while !ancestor.is_dir() {
-        ancestor = ancestor.parent()?;
-    }
-    if ancestor.parent().is_none() {
-        return None;
-    }
-    Some(ancestor.to_path_buf())
-}
-
-/// Canonical form of `path`. A path that doesn't exist (yet) gets its
-/// deepest existing ancestor canonicalized and the rest re-appended, so a
-/// missing import still compares equal to the canonical path event backends
-/// report once it is created.
-fn normalize(path: &Path) -> PathBuf {
-    if let Ok(canonical) = path.canonicalize() {
-        return canonical;
-    }
-    match (path.parent(), path.file_name()) {
-        (Some(parent), Some(name)) => normalize(parent).join(name),
-        _ => path.to_path_buf(),
-    }
-}
 
 /// Re-resolve the chain and derive the new watch set. A resolution failure
 /// still watches every file the chain got to, including the import that
@@ -259,7 +187,11 @@ fn spawn_watcher(config_path: PathBuf, tx: broadcast::Sender<AlacrittyConfigChan
     // under watch — an edit racing service startup is still caught.
     let watched = shared.lock().expect("watch state poisoned").clone();
     let alignment = apply_subscriptions(&mut debouncer, &HashSet::new(), &watched.dirs);
-    set_watch_error(alignment.error());
+    set_watch_error(
+        alignment
+            .error()
+            .or_else(|| watched.degraded_reload_error()),
+    );
     debug!(dirs = ?alignment.subscribed, "alacritty config watcher started");
 
     let resubscriber = Resubscriber {
@@ -350,7 +282,8 @@ impl Resubscriber {
     fn recompute(&mut self) {
         let next = recompute_state(&self.config_path);
         let alignment = apply_subscriptions(&mut self.debouncer, &self.subscribed, &next.dirs);
-        let status_changed = set_watch_error(alignment.error());
+        let status_changed =
+            set_watch_error(alignment.error().or_else(|| next.degraded_reload_error()));
         let changed =
             status_changed || next != self.watched || alignment.subscribed != self.subscribed;
         *self.shared.lock().expect("watch state poisoned") = next.clone();
@@ -404,60 +337,6 @@ mod tests {
             Path::new("/nonexistent/user/.config/alacritty/themes/other.toml"),
             &files
         ));
-    }
-
-    #[test]
-    fn watch_state_covers_each_files_directory_and_always_the_root() {
-        let dir = tempfile::tempdir().unwrap();
-        let config_dir = dir.path().join("alacritty");
-        let themes = config_dir.join("themes");
-        std::fs::create_dir_all(&themes).unwrap();
-        let root = config_dir.join("alacritty.toml");
-        let font = themes.join("font.toml");
-        let state = WatchState::from_touched(&root, vec![font.clone(), root.clone()]);
-        let mut expected_files = HashSet::new();
-        for path in [&root, &font] {
-            expected_files.insert(path.clone());
-            expected_files.insert(normalize(path));
-        }
-        assert_eq!(state.files, expected_files);
-        assert_eq!(
-            state.dirs,
-            HashSet::from([normalize(&config_dir), normalize(&themes)])
-        );
-    }
-
-    #[test]
-    fn empty_touched_still_watches_the_root_directory() {
-        let dir = tempfile::tempdir().unwrap();
-        let config_dir = dir.path().join("alacritty");
-        std::fs::create_dir_all(&config_dir).unwrap();
-        let root = config_dir.join("alacritty.toml");
-        let state = WatchState::from_touched(&root, Vec::new());
-        assert_eq!(state.files, HashSet::from([root.clone(), normalize(&root)]));
-        assert_eq!(state.dirs, HashSet::from([normalize(&config_dir)]));
-    }
-
-    #[test]
-    fn watch_state_watches_the_existing_ancestor_of_a_missing_directory() {
-        let dir = tempfile::tempdir().unwrap();
-        let config_dir = dir.path().join("alacritty");
-        std::fs::create_dir_all(&config_dir).unwrap();
-        let root = config_dir.join("alacritty.toml");
-        // An import under an external, entirely missing directory tree:
-        // nothing between the config directory and the import exists.
-        let missing_dir = normalize(dir.path())
-            .join("external")
-            .join("new")
-            .join("dir");
-        let state = WatchState::from_touched(&root, vec![missing_dir.join("font.toml")]);
-        // The missing directory itself stays wanted — it gets subscribed
-        // once it exists...
-        assert!(state.dirs.contains(&missing_dir));
-        // ...and its deepest existing ancestor is watched too, so creating
-        // the tree is observed even though no chain file lives there yet.
-        assert!(state.dirs.contains(&normalize(dir.path())));
-        assert!(!state.dirs.contains(&normalize(dir.path()).join("external")));
     }
 
     #[test]
@@ -541,27 +420,6 @@ mod tests {
         let outside = other.path().join("external");
         std::fs::create_dir(&outside).unwrap();
         assert!(!touches_watched_dir(&[event(outside)], &dirs));
-    }
-
-    #[test]
-    fn deepest_existing_ancestor_stops_at_the_nearest_existing_directory() {
-        let dir = tempfile::tempdir().unwrap();
-        let missing = dir.path().join("a").join("b").join("c");
-        assert_eq!(
-            deepest_existing_ancestor(&missing),
-            Some(dir.path().to_path_buf())
-        );
-    }
-
-    #[test]
-    fn deepest_existing_ancestor_never_returns_the_filesystem_root() {
-        // A missing tree whose only existing ancestor is the filesystem
-        // root yields no ancestor at all: watching `/` would recompute the
-        // chain for every top-level creation.
-        assert_eq!(
-            deepest_existing_ancestor(Path::new("/nonexistent/deep/tree")),
-            None
-        );
     }
 
     fn test_debouncer() -> Debouncer<RecommendedWatcher> {

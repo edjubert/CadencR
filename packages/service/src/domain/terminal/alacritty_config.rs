@@ -184,10 +184,11 @@ pub struct AlacrittyConfigResponse {
     /// chosen.
     pub parse_error: Option<String>,
     /// Set while live reload is unavailable (the file watcher failed to
-    /// start or to watch part of the import chain): `config` is still
-    /// accurate, but external edits won't show up until a restart. Unlike
-    /// `parse_error` this is not fatal — the frontend warns and keeps
-    /// rendering.
+    /// start, failed to watch part of the import chain, or part of the
+    /// chain sits under a missing directory that no existing ancestor can
+    /// observe): `config` is still accurate, but external edits won't show
+    /// up until a restart. Unlike `parse_error` this is not fatal — the
+    /// frontend warns and keeps rendering.
     pub watch_error: Option<String>,
 }
 
