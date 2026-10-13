@@ -1,8 +1,10 @@
-import { type ReactNode, type RefObject } from "react";
+import { useCallback, type ReactNode, type RefObject } from "react";
 import type { PanelImperativeHandle } from "react-resizable-panels";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { Sidebar } from "@/components/Sidebar";
 import { MobileDrawer } from "@/components/MobileDrawer";
+import { SidebarAttentionProvider } from "@/components/SidebarAttentionProvider";
+import { SidebarRail } from "@/components/SidebarRail";
 import { useIsResizing } from "@/hooks/useIsResizing";
 import { cn } from "@/lib/utils";
 
@@ -57,6 +59,7 @@ function MobileAppShell({
 
 function DesktopAppShell({
   collapsed,
+  setCollapsed,
   onSearch,
   sidebarPanelRef,
   leftSidebarRef,
@@ -64,58 +67,70 @@ function DesktopAppShell({
   onLayoutChanged,
   children,
   isDragging,
-}: Omit<AppShellProps, "isMobile" | "setCollapsed"> & { isDragging: boolean }): ReactNode {
+}: Omit<AppShellProps, "isMobile"> & { isDragging: boolean }): ReactNode {
+  const expand = useCallback(() => setCollapsed(false), [setCollapsed]);
   return (
-    <ResizablePanelGroup
-      data-app-shell-resize={isDragging ? undefined : "fluid"}
-      orientation="horizontal"
-      onLayoutChanged={onLayoutChanged}
-    >
-      <ResizablePanel
-        id="sidebar"
-        panelRef={sidebarPanelRef}
-        collapsible={collapsed}
-        collapsedSize={0}
-        defaultSize={defaultLeftSize}
-        minSize={`${SIDEBAR_MIN_WIDTH}px`}
-        maxSize={`${SIDEBAR_MAX_WIDTH}px`}
-      >
-        <div
-          ref={leftSidebarRef}
-          data-focus-zone="left-sidebar"
-          tabIndex={0}
-          className="h-full outline-none"
-          onFocus={(event) => {
-            if (event.target === event.currentTarget && !event.currentTarget.matches(":active")) {
-              event.currentTarget.querySelector<HTMLElement>("[data-nav-item]")?.focus();
-            }
-          }}
+    <div className="flex h-full w-full">
+      {collapsed && <SidebarRail onExpand={expand} />}
+      <div className="h-full min-w-0 flex-1">
+        <ResizablePanelGroup
+          data-app-shell-resize={isDragging ? undefined : "fluid"}
+          orientation="horizontal"
+          onLayoutChanged={onLayoutChanged}
         >
-          <Sidebar onSearch={onSearch} />
-        </div>
-      </ResizablePanel>
-      <ResizableHandle
-        data-app-shell-handle=""
-        className={cn("cursor-col-resize", collapsed && "pointer-events-none opacity-0")}
-      />
-      <ResizablePanel id="main">
-        <main
-          data-focus-zone="main-content"
-          tabIndex={0}
-          className="h-full overflow-hidden outline-none"
-          onFocus={(event) => {
-            if (event.target !== event.currentTarget || event.currentTarget.matches(":active")) {
-              return;
-            }
-            const firstItem = event.currentTarget.querySelector<HTMLElement>("[data-nav-item]");
-            const textarea = event.currentTarget.querySelector<HTMLElement>("textarea");
-            (firstItem ?? textarea)?.focus();
-          }}
-        >
-          {children}
-        </main>
-      </ResizablePanel>
-    </ResizablePanelGroup>
+          <ResizablePanel
+            id="sidebar"
+            panelRef={sidebarPanelRef}
+            collapsible={collapsed}
+            collapsedSize={0}
+            defaultSize={defaultLeftSize}
+            minSize={`${SIDEBAR_MIN_WIDTH}px`}
+            maxSize={`${SIDEBAR_MAX_WIDTH}px`}
+          >
+            <div
+              ref={leftSidebarRef}
+              data-focus-zone="left-sidebar"
+              tabIndex={0}
+              className="h-full outline-none"
+              onFocus={(event) => {
+                if (
+                  event.target === event.currentTarget &&
+                  !event.currentTarget.matches(":active")
+                ) {
+                  event.currentTarget.querySelector<HTMLElement>("[data-nav-item]")?.focus();
+                }
+              }}
+            >
+              <Sidebar onSearch={onSearch} />
+            </div>
+          </ResizablePanel>
+          <ResizableHandle
+            data-app-shell-handle=""
+            className={cn("cursor-col-resize", collapsed && "pointer-events-none opacity-0")}
+          />
+          <ResizablePanel id="main">
+            <main
+              data-focus-zone="main-content"
+              tabIndex={0}
+              className="h-full overflow-hidden outline-none"
+              onFocus={(event) => {
+                if (
+                  event.target !== event.currentTarget ||
+                  event.currentTarget.matches(":active")
+                ) {
+                  return;
+                }
+                const firstItem = event.currentTarget.querySelector<HTMLElement>("[data-nav-item]");
+                const textarea = event.currentTarget.querySelector<HTMLElement>("textarea");
+                (firstItem ?? textarea)?.focus();
+              }}
+            >
+              {children}
+            </main>
+          </ResizablePanel>
+        </ResizablePanelGroup>
+      </div>
+    </div>
   );
 }
 
@@ -149,27 +164,30 @@ export function AppShell({
   // initiating pointerdown makes react-resizable-panels unregister the only
   // mounted Group before that Group can start its own drag.
   const isDragging = useIsResizing();
-  if (isMobile) {
-    return (
-      <MobileAppShell
-        collapsed={collapsed}
-        setCollapsed={setCollapsed}
-        onSearch={onSearch}
-        children={children}
-      />
-    );
-  }
-
+  // One attention resolve shared by the sidebar and the collapsed rail: the
+  // sidebar stays mounted (at zero width) while the rail shows.
   return (
-    <DesktopAppShell
-      collapsed={collapsed}
-      onSearch={onSearch}
-      sidebarPanelRef={sidebarPanelRef}
-      leftSidebarRef={leftSidebarRef}
-      defaultLeftSize={defaultLeftSize}
-      onLayoutChanged={onLayoutChanged}
-      children={children}
-      isDragging={isDragging}
-    />
+    <SidebarAttentionProvider>
+      {isMobile ? (
+        <MobileAppShell
+          collapsed={collapsed}
+          setCollapsed={setCollapsed}
+          onSearch={onSearch}
+          children={children}
+        />
+      ) : (
+        <DesktopAppShell
+          collapsed={collapsed}
+          setCollapsed={setCollapsed}
+          onSearch={onSearch}
+          sidebarPanelRef={sidebarPanelRef}
+          leftSidebarRef={leftSidebarRef}
+          defaultLeftSize={defaultLeftSize}
+          onLayoutChanged={onLayoutChanged}
+          children={children}
+          isDragging={isDragging}
+        />
+      )}
+    </SidebarAttentionProvider>
   );
 }

@@ -54,7 +54,7 @@ fn inventory_snapshot(
             (Ok(warning), Ok(policy)) => {
                 match super::read::preview_snapshot(&id, trust, policy, selected) {
                     Ok(mut entry) => {
-                        entry.error = warning.clone();
+                        entry.warning = warning.clone();
                         entry
                     }
                     Err(error) => diagnostic(&id, error, selected),
@@ -107,6 +107,7 @@ fn diagnostic(id: &str, error: AppError, active: bool) -> ManagedThemeInventoryE
         sha256: pointer.map(|value| value.sha256).unwrap_or_default(),
         active,
         theme: None,
+        warning: None,
         error: Some(error.to_string()),
         error_code: Some(
             match error {
@@ -145,7 +146,7 @@ mod tests {
             inventory_after_refresh(&trust, Ok(Some("offline policy fallback".into()))).unwrap();
         assert!(degraded[0].theme.is_some());
         assert_eq!(
-            degraded[0].error.as_deref(),
+            degraded[0].warning.as_deref(),
             Some("offline policy fallback")
         );
     }

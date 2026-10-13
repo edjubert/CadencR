@@ -287,6 +287,11 @@ function InstalledThemeSummary({
           {entry.error}
         </p>
       )}
+      {entry.warning && (
+        <p role="status" className="text-xs text-muted-foreground">
+          {entry.warning}
+        </p>
+      )}
       <p className="text-xs text-muted-foreground">
         Signed revisions are immutable. Duplicate to create an editable plugin project.
       </p>

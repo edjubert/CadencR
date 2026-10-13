@@ -7,9 +7,11 @@ import {
   Globe,
   HardDrive,
   Info,
+  ListFilter,
   MonitorCog,
   Network,
   Palette,
+  PanelLeft,
   Plug,
   Tag,
 } from "lucide-react";
@@ -36,6 +38,16 @@ export const NAV_GROUPS: SettingsNavGroup[] = [
         id: "interface",
         label: "Interface & Zoom",
         icon: <MonitorCog className="size-4" />,
+      },
+      {
+        id: "sidebar-display",
+        label: "Sidebar",
+        icon: <PanelLeft className="size-4" />,
+      },
+      {
+        id: "sidebar-views",
+        label: "Saved views",
+        icon: <ListFilter className="size-4" />,
       },
       {
         id: "notifications",

@@ -25,6 +25,7 @@ use crate::domain::editor::image_routes::image_router;
 use crate::domain::editor::mutation_routes::editor_mutation_router;
 use crate::domain::editor::routes::editor_router;
 use crate::domain::feature_layouts::routes::feature_layouts_router;
+use crate::domain::features::recent_routes::recent_routes;
 use crate::domain::features::routes::features_router;
 use crate::domain::git::routes::git_router;
 use crate::domain::imports::routes::imports_router;
@@ -219,6 +220,7 @@ pub fn build_api_routes() -> Router<AppState> {
         .merge(workspace_router())
         .merge(projects_router())
         .merge(features_router())
+        .merge(recent_routes())
         .merge(ports_router())
         .merge(feature_layouts_router())
         .merge(diff_comments_router())

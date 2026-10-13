@@ -72,6 +72,7 @@ pub(super) async fn setup_test_db() -> SqlitePool {
         r#"CREATE TABLE IF NOT EXISTS agent_messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id INTEGER NOT NULL,
+            role TEXT NOT NULL DEFAULT 'assistant',
             message_uuid TEXT,
             delivery_state TEXT,
             content TEXT NOT NULL DEFAULT '',

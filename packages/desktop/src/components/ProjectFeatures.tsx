@@ -1,5 +1,6 @@
+import { useRef, useState } from "react";
 import { ArchiveFeatureDialog } from "@/components/ArchiveFeatureDialog";
-import { ArchivedFeatureList } from "@/components/ArchivedFeatureList";
+import { ArchivedFeatureList, ArchivedFeatureSection } from "@/components/ArchivedFeatureList";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
   useProjectFeaturesController,
@@ -10,13 +11,16 @@ import { WorktreeGroup } from "@/components/WorktreeGroup";
 import { VirtualizedProjectFeatureList } from "@/components/VirtualizedProjectFeatureList";
 import { VirtualizedArchivedFeatureList } from "@/components/VirtualizedArchivedFeatureList";
 import { deleteFeatureDialogTitle } from "@/lib/feature-archive-decision";
+import { useReorderAnimation } from "@/hooks/useReorderAnimation";
 
 export function ProjectFeatures(props: ProjectFeaturesProps) {
   const controller = useProjectFeaturesController(props);
   const virtualizeActive = controller.renderedActiveFeatureCount > 20;
   const virtualizeArchived = controller.archivedFeatures.length > 20;
+  const listRef = useRef<HTMLDivElement>(null);
+  useReorderAnimation(listRef, controller.orderedIds);
   return (
-    <div className="flex flex-col gap-0.5">
+    <div ref={listRef} className="flex flex-col gap-0.5">
       {virtualizeActive ? (
         <VirtualizedProjectFeatureList
           activeFeatureId={props.activeFeatureId}
@@ -38,12 +42,13 @@ export function ProjectFeatures(props: ProjectFeaturesProps) {
           {controller.flatActiveFeatures.map(controller.renderSubtree)}
         </>
       )}
+      <DormantFeatureList controller={controller} />
       <ProjectFeatureDialogs projectId={props.projectId} controller={controller} />
       {virtualizeArchived ? (
         <VirtualizedArchivedFeatureList
           features={controller.archivedFeatures}
           expanded={controller.showArchived}
-          onToggle={() => controller.setShowArchived((value) => !value)}
+          onToggle={controller.toggleArchived}
           renderFeature={controller.renderFeature}
           activeFeatureId={props.activeFeatureId}
         />
@@ -51,11 +56,26 @@ export function ProjectFeatures(props: ProjectFeaturesProps) {
         <ArchivedFeatureList
           features={controller.archivedFeatures}
           expanded={controller.showArchived}
-          onToggle={() => controller.setShowArchived((value) => !value)}
+          onToggle={controller.toggleArchived}
           renderFeature={controller.renderFeature}
         />
       )}
     </div>
+  );
+}
+
+/** Conversations idle for a while, folded until asked for (G9). */
+function DormantFeatureList({ controller }: { controller: ProjectFeaturesController }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <ArchivedFeatureSection
+      label="Dormant"
+      features={controller.dormantFeatures}
+      expanded={expanded}
+      onToggle={() => setExpanded((open) => !open)}
+    >
+      {controller.dormantFeatures.map(controller.renderSubtree)}
+    </ArchivedFeatureSection>
   );
 }
 

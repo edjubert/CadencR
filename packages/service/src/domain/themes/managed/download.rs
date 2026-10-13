@@ -55,6 +55,11 @@ fn client(kind: DownloadKind) -> Result<&'static reqwest::Client, AppError> {
         .map_err(invalid)
 }
 fn build_client(kind: DownloadKind) -> Result<reqwest::Client, String> {
+    client_builder(kind)
+        .build()
+        .map_err(|error| error.to_string())
+}
+fn client_builder(kind: DownloadKind) -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::custom(move |attempt| {
             if (kind == DownloadKind::Artifact && !allowed_redirect(attempt.url()))
@@ -67,8 +72,6 @@ fn build_client(kind: DownloadKind) -> Result<reqwest::Client, String> {
             }
         }))
         .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|error| error.to_string())
 }
 async fn download_inner(url: &str, limit: usize, kind: DownloadKind) -> Result<Vec<u8>, AppError> {
     let url = reqwest::Url::parse(url).map_err(invalid)?;
@@ -81,7 +84,14 @@ async fn download_inner(url: &str, limit: usize, kind: DownloadKind) -> Result<V
             "theme download requires absolute HTTPS without credentials",
         ));
     }
-    let client = client(kind)?;
+    response_bytes(url, limit, kind, client(kind)?).await
+}
+async fn response_bytes(
+    url: reqwest::Url,
+    limit: usize,
+    kind: DownloadKind,
+    client: &reqwest::Client,
+) -> Result<Vec<u8>, AppError> {
     let response = client
         .get(url)
         .send()
@@ -112,6 +122,130 @@ async fn download_inner(url: &str, limit: usize, kind: DownloadKind) -> Result<V
 #[cfg(test)]
 mod tests {
     use super::*;
+    async fn tls_fixture() -> (reqwest::Client, axum_server::Handle<std::net::SocketAddr>) {
+        use axum::{body::Body, http::Response, routing::get, Router};
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let certificate = rcgen::generate_simple_self_signed(vec![
+            "github.com".into(),
+            "release-assets.githubusercontent.com".into(),
+        ])
+        .unwrap();
+        let config = axum_server::tls_rustls::RustlsConfig::from_pem(
+            certificate.cert.pem().into_bytes(),
+            certificate.signing_key.serialize_pem().into_bytes(),
+        )
+        .await
+        .unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route(
+                "/cadencr/registry/releases/download/theme-midnight-v1/theme.tar.gz",
+                get(|| async {
+                    Response::builder()
+                        .status(302)
+                        .header(
+                            "location",
+                            "https://release-assets.githubusercontent.com/exact",
+                        )
+                        .body(Body::empty())
+                        .unwrap()
+                }),
+            )
+            .route("/exact", get(|| async { "fresh TLS fixture archive" }))
+            .route(
+                "/tampered",
+                get(|| async { "tampered TLS fixture archive" }),
+            )
+            .route(
+                "/unsafe",
+                get(|| async {
+                    Response::builder()
+                        .status(302)
+                        .header("location", "https://evil.example/stolen")
+                        .body(Body::empty())
+                        .unwrap()
+                }),
+            );
+        let handle = axum_server::Handle::new();
+        let server_handle = handle.clone();
+        tokio::spawn(async move {
+            axum_server::from_tcp_rustls(listener, config)
+                .unwrap()
+                .handle(server_handle)
+                .serve(app.into_make_service())
+                .await
+                .unwrap();
+        });
+        let client = client_builder(DownloadKind::Artifact)
+            .use_rustls_tls()
+            .no_proxy()
+            .add_root_certificate(
+                reqwest::Certificate::from_pem(certificate.cert.pem().as_bytes()).unwrap(),
+            )
+            .resolve("github.com", address)
+            .resolve("release-assets.githubusercontent.com", address)
+            .build()
+            .unwrap();
+        (client, handle)
+    }
+    #[tokio::test]
+    async fn fresh_tls_github_origin_redirect_bytes_digest_and_rejections() {
+        let (client, handle) = tls_fixture().await;
+        let origin =
+            "https://github.com/cadencr/registry/releases/download/theme-midnight-v1/theme.tar.gz";
+        let repository = parse_repository(Some("https://github.com/cadencr/registry")).unwrap();
+        validate_archive_url(origin, &repository).unwrap();
+        let bytes = response_bytes(
+            reqwest::Url::parse(origin).unwrap(),
+            1024,
+            DownloadKind::Artifact,
+            &client,
+        )
+        .await
+        .unwrap();
+        assert_eq!(bytes, b"fresh TLS fixture archive");
+        let digest = super::super::storage::digest(&bytes);
+        assert_eq!(
+            digest,
+            super::super::storage::digest(b"fresh TLS fixture archive")
+        );
+        let tampered = response_bytes(
+            reqwest::Url::parse("https://release-assets.githubusercontent.com/tampered").unwrap(),
+            1024,
+            DownloadKind::Artifact,
+            &client,
+        )
+        .await
+        .unwrap();
+        super::super::service::require_archive_digest(&bytes, &digest).unwrap();
+        let error = super::super::service::require_archive_digest(&tampered, &digest).unwrap_err();
+        assert!(matches!(
+            error,
+            AppError::Coded {
+                code: "MANAGED_THEME_HASH_MISMATCH",
+                ..
+            }
+        ));
+        assert!(response_bytes(
+            reqwest::Url::parse("https://github.com/unsafe").unwrap(),
+            1024,
+            DownloadKind::Artifact,
+            &client
+        )
+        .await
+        .is_err());
+        assert!(response_bytes(
+            reqwest::Url::parse(origin).unwrap(),
+            4,
+            DownloadKind::Artifact,
+            &client
+        )
+        .await
+        .is_err());
+        handle.shutdown();
+    }
     #[test]
     fn signed_distribution_origin_is_distinct_from_author_provenance() {
         let url =

@@ -55,7 +55,8 @@ pub async fn global_set(key: &str, value: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-pub async fn global_set_many(entries: &[(&str, &str)]) -> Result<(), AppError> {
+/// Set or remove (`None`) several global keys in one atomic write.
+pub async fn global_set_many(entries: &BTreeMap<String, Option<String>>) -> Result<(), AppError> {
     set_values(&global_path(), entries).await?;
     super::super::generation::bump_global();
     Ok(())

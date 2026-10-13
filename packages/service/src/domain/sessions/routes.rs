@@ -229,6 +229,21 @@ pub async fn list_session_prompts_handler(
     ))
 }
 
+/// What the sidebar row previews: the last agent reply and the todo progress.
+#[utoipa::path(get, path = "/api/features/{feature_id}/row-summary",
+    params(("feature_id" = i64, Path,)),
+    responses((status = 200, body = FeatureRowSummaryResponse)))]
+pub async fn get_feature_row_summary_handler(
+    State(state): State<AppState>,
+    Path(feature_id): Path<i64>,
+) -> Result<Json<FeatureRowSummaryResponse>, AppError> {
+    let (preview, todos) = tokio::try_join!(
+        repository::latest_assistant_preview(&state.read_pool, feature_id),
+        repository::latest_todo_progress(&state.read_pool, feature_id),
+    )?;
+    Ok(Json(FeatureRowSummaryResponse { preview, todos }))
+}
+
 pub fn sessions_router() -> Router<AppState> {
     Router::new()
         .route(
@@ -238,6 +253,10 @@ pub fn sessions_router() -> Router<AppState> {
         .route(
             "/api/features/{feature_id}/message-preview",
             get(get_message_preview_handler),
+        )
+        .route(
+            "/api/features/{feature_id}/row-summary",
+            get(get_feature_row_summary_handler),
         )
         .route(
             "/api/features/{feature_id}/agent-state",

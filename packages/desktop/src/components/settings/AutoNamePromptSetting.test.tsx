@@ -21,6 +21,7 @@ function mockSetting(value: string | null): void {
     value,
     setValue,
     isLoading: false,
+    isFetched: true,
     isSaving: false,
   });
 }

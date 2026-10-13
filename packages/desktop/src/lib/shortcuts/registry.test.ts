@@ -97,4 +97,24 @@ describe("shortcut registry", () => {
     expect(editorSearch?.keys).toEqual(["mod", "f"]);
     expect(editorSearch?.scope).not.toBe(conversationSearch?.scope);
   });
+
+  it("binds the attention jumps globally and the row actions to the sidebar", () => {
+    expect(shortcutKeys("attention-next-needs-you")).toEqual(["mod", "j"]);
+    expect(shortcutKeys("attention-next-unread")).toEqual(["mod", "alt", "j"]);
+    const rowActions = SHORTCUTS.filter((shortcut) => shortcut.id.startsWith("sidebar-row-"));
+    expect(rowActions.map((shortcut) => shortcut.id)).toEqual([
+      "sidebar-row-pin",
+      "sidebar-row-archive",
+      "sidebar-row-rename",
+      "sidebar-row-label",
+      "sidebar-row-toggle-unread",
+    ]);
+    expect(rowActions.every((shortcut) => shortcut.scope === "sidebar")).toBe(true);
+    // No global chord may collide with them: a global binding would fire too.
+    const globalChords = new Set(
+      SHORTCUTS.filter((shortcut) => shortcut.scope === "global").map((s) => s.keys.join("+")),
+    );
+    for (const shortcut of rowActions)
+      expect(globalChords.has(shortcut.keys.join("+"))).toBe(false);
+  });
 });

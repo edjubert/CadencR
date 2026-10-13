@@ -1,5 +1,67 @@
 # Marketplace V1 — GitHub-only distribution
 
+## Current milestone — hidden v0.13.0 preparation
+
+This section is authoritative over the historical public-v1 delivery plan below.
+v0.13.0 ships the marketplace implementation **hidden everywhere in the UI**.
+There is no public marketplace launch until reviewed plugins populate the registry
+and a separately authorized activation clears every gate.
+
+- [x] Code hardening and isolated live QA, including hidden-entry-point checks.
+- [x] Reproducible read-only CLI preparation CI ran successfully on
+      `6d0e2b6ed39ceb22d9fd1fa785d5cb5fa8a09f93`: locked CLI/core/publisher
+      tests, Linux build, smoke/version, checksum packaging and artifact upload.
+      [Preparation run 38214595106](https://github.com/merkr-software/CadencR/actions/runs/38214595106)
+      used `v0.12.1` solely to match the existing source version/name artifacts;
+      it did not select the next release, create a tag or publish a release.
+      Downloaded artifacts were independently checksum-verified.
+- [x] Operator/contributor preparation and local expiry diagnostics are documented
+      in the [operations runbook](../tooling/marketplace-registry/OPERATIONS.md).
+- [ ] Actual released Rust binary qualification and reviewed pins in both registry
+      workflows; preparation artifacts do not satisfy this gate.
+- [ ] Only after verified Rust cutover: remove replaced JavaScript implementations.
+- [ ] Populate reviewed provider/theme contributions, exercise fresh public HTTPS
+      install/publication against real deployed artifacts, and assign operational owners.
+- [ ] Separately authorize official roots/feed activation and public UI exposure.
+
+Internal QA can opt in with `VITE_INTERNAL_MARKETPLACE=true` in a DEV renderer
+only; production builds cannot expose the marketplace through that environment
+variable. This is not a public activation switch.
+
+### Milestone evidence — 2026-10-12
+
+- Disabled settings/deep links and author-project dialogs never mount marketplace
+  or publication trees. The disabled root mounts no managed-theme query observer,
+  effect or polling. Local provider import/creation and theme authoring remain.
+- Installed theme preview, activation and duplication refresh the shared coalesced
+  revocation policy before admission. Authenticated unexpired offline fallback
+  remains usable with explicit nonfatal warnings; expired/revoked policy denies
+  use. Blocking workers preserve exact-byte archive verification.
+- Frontend labels validate Rust-trimmed Unicode scalars without changing signed
+  fields, including Unicode whitespace and astral characters.
+- Three independent GPT-6.1-Sol reuse/quality/efficiency reviews found no blocking
+  issue. Verification passes 5,364 desktop tests, 42 managed-theme tests and 267
+  registry-tooling tests, plus types, frontend lint, unused-code, formatting and
+  provider-boundary checks. Results here do not claim a new full-workspace test run.
+- Real isolated `pnpm dev` UI/API QA confirms default-hidden entry points, retained
+  local theme creation/project flags, 11 direct API cases for warnings and signed
+  revocation, a real restart retaining the private inventory/author projects,
+  internal-only UI warnings and a successful 64-astral-character author copy.
+  Confirmed managed-theme removal selects a built-in fallback and preserves author
+  copies. No browser-console errors were recorded; every QA database is retained.
+- A local TLS fixture exercises canonical GitHub origin/asset-host redirection,
+  certificate validation, exact bytes, digest mismatch and download budget rejection.
+  It is transport coverage, **not** a fresh public GitHub installation. The live
+  inventory starts from a private authenticated archived revision; no production
+  database/key or public registry write is used.
+
+Stop this milestone **before** CLI release/tag/pins, JavaScript removal, official
+activation or remote plugin publication. No production keys, signing environment,
+feed deployment, alert delivery or successful live publication are inferred from
+tests or templates. Registry release discovery returned no releases at preparation
+time; public fresh-install QA remains pending, not waived. Historical check results
+below belong to their named delivery waves, not a certification of this milestone.
+
 ## Public-v1 corrective scope — 2026-10-11
 
 This section supersedes earlier providers-only public-marketplace scope and

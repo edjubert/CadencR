@@ -5,6 +5,14 @@ import { act, fireEvent, render as renderWithProviders, screen } from "@/test-ut
 import userEvent from "@testing-library/user-event";
 import { ProjectTree } from "./ProjectTree";
 import { resetMockIds } from "@/test-fixtures";
+import { resetPersistedIdSets } from "@/test/persisted-id-set-mock";
+import { DEFAULT_SIDEBAR_CONFIG } from "@/lib/sidebar-config";
+import { useSidebarConfigStore } from "@/stores/sidebar-config-store";
+
+vi.mock("@/hooks/usePersistedIdSet", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("@/test/persisted-id-set-mock")),
+}));
 
 // Numeric hints are now owned by Sidebar so pinned and project rows share one registry.
 function render(ui: ReactElement) {
@@ -164,6 +172,11 @@ function mockKeyboardLayout(
 
 describe("ProjectTree", () => {
   beforeEach(() => {
+    // Fixture dates are fixed in the past: keep every conversation out of "Dormant".
+    useSidebarConfigStore.setState({
+      config: { ...DEFAULT_SIDEBAR_CONFIG, dormantAfter: "never" },
+    });
+    resetPersistedIdSets();
     resetMockIds();
     mockNavigate.mockClear();
     mockCreateFeature.mockClear();

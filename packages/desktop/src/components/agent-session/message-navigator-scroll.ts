@@ -1,5 +1,6 @@
 import type { VirtuosoHandle } from "react-virtuoso";
 import { isIos } from "@/lib/is-ios";
+import { findStreamItemList, USER_SCROLL_EVENTS } from "./agent-session-scroll-utils";
 
 /** Breathing room left above a prompt the navigator scrolls to. */
 const JUMP_TOP_OFFSET_PX = 12;
@@ -14,7 +15,6 @@ const MAX_REISSUES = 2;
 /** Hard stop for the hold loop, so a jump never polls forever. */
 const MAX_JUMP_MS = 2500;
 const ARRIVAL_FLASH_CLASS = "user-message-arrival-flash";
-const USER_SCROLL_EVENTS = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
 
 function findRow(scroller: HTMLElement, blockId: string): HTMLElement | null {
   return scroller.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(blockId)}"]`);
@@ -208,7 +208,7 @@ export function rowAtOffset(
   rowByBlockId: ReadonlyMap<string, number>,
   offsetPx: number,
 ): number | null {
-  const list = scroller.querySelector<HTMLElement>('[data-testid="virtuoso-item-list"]');
+  const list = findStreamItemList(scroller);
   if (!list) return null;
   const lineY = scroller.getBoundingClientRect().top + offsetPx;
   let lastRow: number | null = null;

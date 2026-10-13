@@ -66,8 +66,10 @@ export function useThemeMarketplace() {
       retry: false,
       onMutate: () => setNotice(null),
       mutationFn: executeThemeAction,
-      onSuccess: async (_, action) => {
-        setNotice(`${action.id}: ${action.kind} confirmed by Cadencr.`);
+      onSuccess: async (warning, action) => {
+        setNotice(
+          `${action.id}: ${action.kind} confirmed by Cadencr.${warning ? ` Warning: ${warning}` : ""}`,
+        );
         await reconcileThemeAction(client, action);
       },
       onError: async (_, action) => {
@@ -122,7 +124,7 @@ function useStableMutation<T, V>({
   );
 }
 
-async function executeThemeAction(action: ThemeAction): Promise<void> {
+async function executeThemeAction(action: ThemeAction): Promise<string | null> {
   switch (action.kind) {
     case "install":
     case "update": {
@@ -131,22 +133,21 @@ async function executeThemeAction(action: ThemeAction): Promise<void> {
         action.kind === "install"
           ? await installManagedTheme(body)
           : await updateManagedTheme(action.id, body);
-      managedThemeEntrySchema.parse(response);
-      return;
+      return managedThemeEntrySchema.parse(response).warning ?? null;
     }
     case "apply":
-      managedThemeEntrySchema.parse(await applyManagedTheme(action.id));
-      return;
+      return managedThemeEntrySchema.parse(await applyManagedTheme(action.id)).warning ?? null;
     case "remove":
       z.object({ success: z.literal(true), fallback: z.string().nullable().optional() }).parse(
         await removeManagedTheme(action.id, { confirm_builtin_fallback: action.confirmFallback }),
       );
-      return;
+      return null;
     case "duplicate": {
-      duplicateThemeResponseSchema.parse(
-        await duplicateManagedTheme(action.id, { label: action.label }),
+      return (
+        duplicateThemeResponseSchema.parse(
+          await duplicateManagedTheme(action.id, { label: action.label }),
+        ).warning ?? null
       );
-      return;
     }
   }
 }

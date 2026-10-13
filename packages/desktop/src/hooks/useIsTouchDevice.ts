@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { mediaQueryStore } from "@/lib/media-query";
 
 /**
  * Primary pointer can't hover — phones and tablets. Distinct from
@@ -7,19 +8,9 @@ import { useSyncExternalStore } from "react";
  */
 const TOUCH_QUERY = "(hover: none)";
 
-// One shared MediaQueryList for every consumer (see `useIsMobile`).
-const mql = window.matchMedia(TOUCH_QUERY);
-
-function subscribe(onChange: () => void): () => void {
-  mql.addEventListener("change", onChange);
-  return () => mql.removeEventListener("change", onChange);
-}
-
-function getSnapshot(): boolean {
-  return mql.matches;
-}
+const touchQuery = mediaQueryStore(TOUCH_QUERY);
 
 /** `true` when the primary input is touch (no hover, no right-click). */
 export function useIsTouchDevice(): boolean {
-  return useSyncExternalStore(subscribe, getSnapshot, () => false);
+  return useSyncExternalStore(touchQuery.subscribe, touchQuery.getSnapshot, () => false);
 }

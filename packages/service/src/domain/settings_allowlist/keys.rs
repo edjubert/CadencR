@@ -77,6 +77,17 @@ pub const WORKSPACE_ALLOWED_KEYS: &[&str] = &[
     "sidebar_provider_logos",
     "sidebar_collapsed",
     "sidebar_right_collapsed",
+    // Sidebar expansion memory, each a JSON array of ids: expanded project ids,
+    // collapsed parent-conversation ids, project ids with archived shown.
+    "sidebar_expanded_projects",
+    "sidebar_collapsed_subtrees",
+    "sidebar_archived_open_projects",
+    // Saved sidebar views: a JSON array of `{id, name, query}` (queries use the
+    // Agents grid filter language), and the id of the one shown ("" for none).
+    "sidebar_views",
+    "sidebar_active_view",
+    // Sidebar display options (density, row template, filter) live in
+    // `SIDEBAR_DISPLAY_KEYS` below.
     "loader_style",
     // UI zoom is kept per device type: desktop scales via the Electron native
     // zoom factor, mobile (remote browser/PWA) via CSS zoom — independent levels.
@@ -237,6 +248,49 @@ pub const WORKSPACE_ALLOWED_KEYS: &[&str] = &[
 /// any non-empty suffix and reject only whitespace/control characters (which no
 /// real model id contains) rather than maintaining a brittle character set.
 pub(super) const WORKSPACE_MODEL_PREFIXES: &[&str] = &["thinking_effort_model_"];
+
+/// Sidebar display options, also writable via `PUT /api/workspace/settings/{key}`.
+/// Every key has a validator in `settings_store::registry::sidebar`, and the
+/// frontend mirrors the value sets in `packages/desktop/src/lib/sidebar-config.ts`.
+pub const SIDEBAR_DISPLAY_KEYS: &[&str] = &[
+    "sidebar_density",
+    "sidebar_font_size",
+    "sidebar_title_lines",
+    "sidebar_title_source",
+    "sidebar_row_status",
+    "sidebar_row_time",
+    "sidebar_row_branch",
+    "sidebar_row_worktree_icon",
+    "sidebar_row_diff",
+    "sidebar_row_pr",
+    "sidebar_row_ports",
+    "sidebar_row_activity",
+    "sidebar_row_label",
+    "sidebar_row_provider",
+    "sidebar_type_to_filter",
+    "sidebar_row_pending_request",
+    "sidebar_project_badges",
+    "sidebar_block_for_me",
+    "sidebar_dormant_after",
+    "sidebar_reveal_active",
+    "sidebar_rail",
+    "sidebar_block_working",
+    "sidebar_block_recent",
+    "sidebar_recent_count",
+    "sidebar_block_counts",
+    "sidebar_hide_empty_blocks",
+    "sidebar_gate_popover",
+    "sidebar_flash_on_change",
+    "sidebar_auto_collapse",
+    "sidebar_lens",
+    "sidebar_conversation_sort",
+    "sidebar_project_sort",
+    "sidebar_sticky_headers",
+    "sidebar_row_preview",
+    "sidebar_row_todos",
+    "sidebar_uniform_rows",
+    "sidebar_compact_rows",
+];
 
 #[cfg(test)]
 mod tests {

@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   themeId: "cadencr-dark",
   mutate: vi.fn(),
   damaged: false,
+  warning: "",
   catalogError: "",
   usableCatalog: false,
 }));
@@ -43,7 +44,14 @@ vi.mock("@/hooks/useThemeMarketplace", () => ({
               error: "immutable payload changed",
               error_code: "MANAGED_THEME_INVALID",
             }
-          : { id: "midnight", name: "Midnight", version: "1.0.0", active: true, theme: {} },
+          : {
+              id: "midnight",
+              name: "Midnight",
+              version: "1.0.0",
+              active: true,
+              theme: {},
+              warning: mocks.warning || null,
+            },
       ],
     },
     refresh: {},
@@ -57,6 +65,7 @@ describe("marketplace displayed theme versus saved references", () => {
     mocks.themeId = "cadencr-dark";
     mocks.mutate.mockReset();
     mocks.damaged = false;
+    mocks.warning = "";
     mocks.catalogError = "";
     mocks.usableCatalog = false;
   });
@@ -89,6 +98,33 @@ describe("marketplace displayed theme versus saved references", () => {
     ).toBeInTheDocument();
     expect(screen.queryByText(/Theme catalog unavailable/)).not.toBeInTheDocument();
   });
+  it("shows offline-policy warnings without blocking usable installed theme actions", () => {
+    mocks.warning = "Remote theme policy unavailable; verified cached policy used.";
+    render(<ThemeMarketplace />);
+    const diagnostic = screen.getByText(mocks.warning);
+    expect(diagnostic).toHaveAttribute("role", "status");
+    expect(diagnostic).not.toHaveClass("text-destructive");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    const activate = screen.getByRole("button", { name: "Activate theme" });
+    expect(activate).toBeEnabled();
+    fireEvent.click(activate);
+    expect(mocks.mutate).toHaveBeenCalledWith({ kind: "apply", id: "midnight" });
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "New author project name for Midnight" }),
+      {
+        target: { value: "Local copy" },
+      },
+    );
+    const duplicate = screen.getByRole("button", { name: "Duplicate to author project" });
+    expect(duplicate).toBeEnabled();
+    fireEvent.click(duplicate);
+    expect(mocks.mutate).toHaveBeenCalledWith(
+      { kind: "duplicate", id: "midnight", label: "Local copy" },
+      expect.any(Object),
+    );
+    expect(screen.getByRole("button", { name: "Remove theme…" })).toBeEnabled();
+  });
+
   it("shows corruption and permits confirmed removal, but never applies or duplicates it", () => {
     mocks.damaged = true;
     render(<ThemeMarketplace />);

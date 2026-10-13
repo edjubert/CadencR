@@ -1,5 +1,5 @@
 use super::{catalog, models::*, service};
-use crate::domain::themes::models::{CreateThemeResponse, UserTheme};
+use crate::domain::themes::models::UserTheme;
 use crate::{app_state::AppState, error::AppError};
 use axum::{
     extract::{Path, State},
@@ -77,7 +77,7 @@ pub async fn preview_managed_theme_package(
 pub async fn preview_managed_theme(
     Path(id): Path<String>,
 ) -> Result<Json<ManagedThemeInventoryEntry>, AppError> {
-    Ok(Json(service::preview(&id)?))
+    Ok(Json(service::preview(&id).await?))
 }
 #[utoipa::path(post, path="/api/themes/managed/{id}/apply", operation_id="applyManagedTheme", params(("id"=String,Path)), responses((status=200, body=ManagedThemeInventoryEntry)))]
 pub async fn apply_managed_theme(
@@ -111,12 +111,12 @@ pub async fn remove_managed_theme(
     notify(&state, &id);
     Ok(Json(response))
 }
-#[utoipa::path(post, path="/api/themes/managed/{id}/duplicate", operation_id="duplicateManagedTheme", params(("id"=String,Path)), request_body=DuplicateManagedThemeRequest, responses((status=200, body=CreateThemeResponse)))]
+#[utoipa::path(post, path="/api/themes/managed/{id}/duplicate", operation_id="duplicateManagedTheme", params(("id"=String,Path)), request_body=DuplicateManagedThemeRequest, responses((status=200, body=ManagedThemeDuplicateResponse)))]
 pub async fn duplicate_managed_theme(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<DuplicateManagedThemeRequest>,
-) -> Result<Json<CreateThemeResponse>, AppError> {
+) -> Result<Json<ManagedThemeDuplicateResponse>, AppError> {
     Ok(Json(
         service::duplicate(&state.write_pool, &id, &body.label).await?,
     ))

@@ -1,4 +1,4 @@
-import type { FollowOutputCallback, VirtuosoHandle } from "react-virtuoso";
+import type { FollowOutputCallback, SizeFunction, VirtuosoHandle } from "react-virtuoso";
 import { STREAM_BOTTOM_GAP_PX } from "./stream-fade";
 
 export type ScrollRef = (el: HTMLElement | null) => void;
@@ -12,6 +12,13 @@ export const SCROLLBAR_HIT_TARGET_PX = 20;
 // auto-prepend to produce a scrollbar before giving up (a pathological run of
 // tiny collapsed rows).
 export const MAX_VIEWPORT_FILL_PAGES = 6;
+/** Input that hands the viewport back to the reader after a programmatic jump. */
+export const USER_SCROLL_EVENTS = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+
+/** Virtuoso's item list: the direct parent of the stream's rendered rows. */
+export function findStreamItemList(scroller: HTMLElement): HTMLElement | null {
+  return scroller.querySelector<HTMLElement>('[data-testid="virtuoso-item-list"]');
+}
 
 export function canScroll(el: HTMLElement): boolean {
   return el.scrollHeight > el.clientHeight;
@@ -36,7 +43,7 @@ export function canScrollStream(el: HTMLElement): boolean {
  * WebKit reports a fractional `scrollTop` while `scrollHeight`/`clientHeight`
  * are rounded, so "is it at the bottom" needs slack rather than equality.
  */
-export const PIN_EPSILON_PX = 1;
+const PIN_EPSILON_PX = 1;
 
 /**
  * Scroll `el` to the bottom, skipping the write when it is already there.
@@ -57,14 +64,11 @@ export function isVerticalScrollbarPointer(el: HTMLElement, e: PointerEvent): bo
   return e.clientX >= rect.right - SCROLLBAR_HIT_TARGET_PX && e.clientX <= rect.right + 1;
 }
 
-export interface HistoryAnchor {
-  scrollTop: number;
-  scrollHeight: number;
-}
-
 export interface UseAgentSessionScrollResult {
   virtuosoRef: React.RefObject<VirtuosoHandle | null>;
   scrollContainerRef: ScrollRef;
+  /** Virtuoso `itemSize`: lets the scroll anchor guard settle with each measurement pass. */
+  itemSize: SizeFunction;
   onStartReached: () => void;
   followOutput: FollowOutputCallback;
   onAtBottomStateChange: (atBottom: boolean) => void;
@@ -72,6 +76,6 @@ export interface UseAgentSessionScrollResult {
   autoScrollEnabled: boolean;
   isLoadingOlder: boolean;
   scrollToBottom: () => void;
-  /** Hand the viewport to a programmatic jump (releases bottom-stick and history anchoring). */
+  /** Hand the viewport to a programmatic jump (releases bottom-stick and the anchor guard). */
   prepareJump: () => void;
 }

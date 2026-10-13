@@ -35,6 +35,8 @@ pub struct ManagedThemeInventoryEntry {
     /// The frontend owns OS appearance and resolves the effective displayed theme.
     pub active: bool,
     pub theme: Option<UserTheme>,
+    /// Offline policy fallback diagnostic; the authenticated theme remains usable.
+    pub warning: Option<String>,
     pub error: Option<String>,
     pub error_code: Option<String>,
 }
@@ -75,4 +77,12 @@ pub struct Receipt {
 pub struct Pointer {
     pub version: String,
     pub sha256: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ManagedThemeDuplicateResponse {
+    #[serde(flatten)]
+    pub created: crate::domain::themes::models::CreateThemeResponse,
+    /// Offline policy fallback diagnostic for a successfully created author copy.
+    pub warning: Option<String>,
 }

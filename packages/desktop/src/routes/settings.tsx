@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { MARKETPLACE_ENABLED } from "@/lib/marketplace-gate";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { ArrowLeft } from "lucide-react";
 import { useShortcut } from "@/hooks/useShortcut";
@@ -44,7 +45,7 @@ function SettingsPage() {
     <Tabs
       value={activeTab}
       onValueChange={(tab) => {
-        if (tab !== "general" && tab !== "marketplace") return;
+        if (tab !== "general" && (tab !== "marketplace" || !MARKETPLACE_ENABLED)) return;
         void navigate({ to: "/settings", search: { tab } });
       }}
       className="h-full min-h-0 bg-background text-foreground"
@@ -73,21 +74,23 @@ function SettingsPage() {
           </>
         )}
       </TabsContent>
-      <TabsContent
-        value="marketplace"
-        forceMount
-        hidden={activeTab !== "marketplace"}
-        aria-hidden={activeTab !== "marketplace"}
-        inert={activeTab !== "marketplace"}
-        style={activeTab !== "marketplace" ? { display: "none" } : undefined}
-        className="overflow-y-auto"
-      >
-        {visited.marketplace && (
-          <main className="mx-auto max-w-[1100px] p-4">
-            <MarketplaceSection />
-          </main>
-        )}
-      </TabsContent>
+      {MARKETPLACE_ENABLED && (
+        <TabsContent
+          value="marketplace"
+          forceMount
+          hidden={activeTab !== "marketplace"}
+          aria-hidden={activeTab !== "marketplace"}
+          inert={activeTab !== "marketplace"}
+          style={activeTab !== "marketplace" ? { display: "none" } : undefined}
+          className="overflow-y-auto"
+        >
+          {visited.marketplace && (
+            <main className="mx-auto max-w-[1100px] p-4">
+              <MarketplaceSection />
+            </main>
+          )}
+        </TabsContent>
+      )}
     </Tabs>
   );
 }
@@ -100,9 +103,11 @@ function SettingsPageHeader({ onBack }: { onBack: () => void }): React.JSX.Eleme
         <TabsTrigger value="general" className="px-2">
           General
         </TabsTrigger>
-        <TabsTrigger value="marketplace" className="px-2">
-          Marketplace
-        </TabsTrigger>
+        {MARKETPLACE_ENABLED && (
+          <TabsTrigger value="marketplace" className="px-2">
+            Marketplace
+          </TabsTrigger>
+        )}
       </TabsList>
       <Button
         variant="ghost"

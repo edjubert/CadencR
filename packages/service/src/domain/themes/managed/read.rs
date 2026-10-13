@@ -6,8 +6,35 @@ use crate::domain::settings_store;
 use crate::domain::themes::models::UserTheme;
 use crate::error::AppError;
 use base64::Engine as _;
-pub fn preview(id: &str) -> Result<ManagedThemeInventoryEntry, AppError> {
+pub(super) fn preview(id: &str) -> Result<ManagedThemeInventoryEntry, AppError> {
     preview_trusted(id, &pinned_index_trust_store())
+}
+pub(super) async fn preview_refreshed(
+    id: &str,
+    trust: &crate::domain::agents::providers::installed::managed::trust::ManagedTrustStore,
+) -> Result<ManagedThemeInventoryEntry, AppError> {
+    let warning = super::policy::refresh(false).await?;
+    let mut entry = preview_worker(id, trust).await?;
+    entry.warning = warning;
+    Ok(entry)
+}
+pub(super) async fn preview_worker(
+    id: &str,
+    trust: &crate::domain::agents::providers::installed::managed::trust::ManagedTrustStore,
+) -> Result<ManagedThemeInventoryEntry, AppError> {
+    let root = storage::root();
+    let id = id.to_owned();
+    let trust = trust.clone();
+    let active = ["theme_current", "theme_system_light", "theme_system_dark"]
+        .iter()
+        .any(|key| settings_store::global_get(key).as_deref() == Some(&format!("managed:{id}")));
+    tokio::task::spawn_blocking(move || {
+        storage::with_root(root, || {
+            preview_snapshot(&id, &trust, &super::policy::snapshot()?, active)
+        })
+    })
+    .await
+    .map_err(archive::invalid)?
 }
 pub(super) fn preview_trusted(
     id: &str,
@@ -115,6 +142,7 @@ fn preview_revision_snapshot(
         sha256: pointer.sha256,
         active,
         theme: Some(theme),
+        warning: None,
         error: None,
         error_code: None,
     })

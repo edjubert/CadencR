@@ -12,7 +12,9 @@ import { FeatureLabelChip } from "@/components/FeatureLabelChip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useFeatureTitle } from "@/hooks/useFeatureTitle";
 import type { WorktreeStatus } from "@/types/workflow";
-import { WorktreeSetupSection } from "./WorktreeSetupSection";
+import { WorktreeSetupDetailsPanel } from "./WorktreeSetupSection";
+import { useWorktreeSetup, type WorktreeSetupState } from "@/hooks/useWorktreeSetup";
+import { WorktreeSetupHeader } from "./WorktreeSetupHeader";
 import { ProjectBadge } from "@/components/ProjectBadge";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useSidebarCollapsed } from "@/components/SidebarContext";
@@ -138,6 +140,15 @@ function StandardFeatureTopBar({
   // Live WS-pushed title from auto-naming (falls back to null).
   const { title: wsTitle, isAutoNaming } = useFeatureTitle(featureId);
   useFeatureSettingsShortcuts(isSession, setSettingsOpen);
+  const worktreeSetup = useWorktreeSetup({
+    featureId,
+    projectId,
+    wsWorktreeStatus,
+    wsWorktreeBranch,
+    wsWorktreeSetupOutput,
+    wsWorktreeError,
+    onRetrySetup: onRetryWorktreeSetup,
+  });
 
   const title = wsTitle ?? feature?.title ?? titleOverride;
   const autoNameMutation = useAutoNameFeature({
@@ -177,11 +188,7 @@ function StandardFeatureTopBar({
       onExpandSidebar={() => setSidebarCollapsed(false)}
       settingsOpen={settingsOpen}
       onSettingsOpenChange={setSettingsOpen}
-      wsWorktreeStatus={wsWorktreeStatus}
-      wsWorktreeBranch={wsWorktreeBranch}
-      wsWorktreeSetupOutput={wsWorktreeSetupOutput}
-      wsWorktreeError={wsWorktreeError}
-      onRetryWorktreeSetup={onRetryWorktreeSetup}
+      worktreeSetup={worktreeSetup}
     />
   );
 }
@@ -204,11 +211,7 @@ interface FeatureHeaderChromeProps {
   onExpandSidebar: () => void;
   settingsOpen: boolean;
   onSettingsOpenChange: Dispatch<SetStateAction<boolean>>;
-  wsWorktreeStatus?: WorktreeStatus;
-  wsWorktreeBranch?: string | null;
-  wsWorktreeSetupOutput?: string[];
-  wsWorktreeError?: string | null;
-  onRetryWorktreeSetup?: () => void;
+  worktreeSetup: WorktreeSetupState | null;
 }
 
 function FeatureHeaderChrome({
@@ -229,11 +232,7 @@ function FeatureHeaderChrome({
   onExpandSidebar,
   settingsOpen,
   onSettingsOpenChange,
-  wsWorktreeStatus,
-  wsWorktreeBranch,
-  wsWorktreeSetupOutput,
-  wsWorktreeError,
-  onRetryWorktreeSetup,
+  worktreeSetup,
 }: FeatureHeaderChromeProps): ReactElement {
   const isMobile = useIsMobile();
   return (
@@ -254,20 +253,30 @@ function FeatureHeaderChrome({
         {showSidebarChrome && (
           <SidebarCollapsedChrome visible={sidebarCollapsed} onExpand={onExpandSidebar} />
         )}
-        <div className="flex min-w-0 flex-1 items-center gap-3">
-          <ProjectBadge projectId={projectId} size="md" />
-          {isAutoNaming ? (
-            <Skeleton className="h-5 w-40" />
-          ) : (
-            <FeatureTitleMenu
-              featureId={featureId}
-              title={featureTitle}
-              canAutoRename={canAutoRename}
-              isAutoRenamePending={isAutoRenamePending}
-              onAutoRename={onAutoRename}
+        {/* The worktree summary is a subtitle here, not a band below, so the
+            header height doesn't change (see DESIGN.md "Worktree row"). */}
+        <div className="grid min-w-0 flex-1 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3">
+          <ProjectBadge projectId={projectId} size="md" className="justify-self-center" />
+          <div className="flex min-w-0 items-center gap-3">
+            {isAutoNaming ? (
+              <Skeleton className="h-5 w-40" />
+            ) : (
+              <FeatureTitleMenu
+                featureId={featureId}
+                title={featureTitle}
+                canAutoRename={canAutoRename}
+                isAutoRenamePending={isAutoRenamePending}
+                onAutoRename={onAutoRename}
+              />
+            )}
+            <FeatureLabelChip label={featureLabel} />
+          </div>
+          {worktreeSetup && (
+            <WorktreeSetupHeader
+              {...worktreeSetup.header}
+              className="col-span-2 grid-cols-subgrid gap-x-3"
             />
           )}
-          <FeatureLabelChip label={featureLabel} />
         </div>
         {showCustomActions && <CustomActionsBar featureId={featureId} projectId={projectId} />}
 
@@ -291,15 +300,7 @@ function FeatureHeaderChrome({
           />
         )}
       </div>
-      <WorktreeSetupSection
-        featureId={featureId}
-        projectId={projectId}
-        wsWorktreeStatus={wsWorktreeStatus}
-        wsWorktreeBranch={wsWorktreeBranch}
-        wsWorktreeSetupOutput={wsWorktreeSetupOutput}
-        wsWorktreeError={wsWorktreeError}
-        onRetrySetup={onRetryWorktreeSetup}
-      />
+      {worktreeSetup?.header.isOpen && <WorktreeSetupDetailsPanel {...worktreeSetup.details} />}
     </>
   );
 }

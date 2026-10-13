@@ -1,4 +1,5 @@
-import { useEffect, useMemo } from "react";
+import { createElement, useEffect, useMemo } from "react";
+import { MARKETPLACE_ENABLED } from "@/lib/marketplace-gate";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { getManagedThemes } from "@/api/generated";
@@ -13,6 +14,7 @@ import { apiErrorMessage } from "@/lib/api-errors";
 export function useManagedThemes() {
   return useQuery({
     queryKey: managedThemesKey,
+    enabled: MARKETPLACE_ENABLED,
     staleTime: 60_000,
     refetchInterval: 15 * 60_000,
     refetchIntervalInBackground: true,
@@ -22,7 +24,7 @@ export function useManagedThemes() {
     },
   });
 }
-export function useManagedThemeRegistry(): void {
+function useManagedThemeRegistry(): void {
   const query = useManagedThemes();
   const definitions = useMemo(
     () => query.data?.filter((entry) => entry.theme?.theme).map(managedThemeDefinition),
@@ -35,4 +37,15 @@ export function useManagedThemeRegistry(): void {
     if (query.error)
       toast.error(apiErrorMessage(query.error, "Could not load installed marketplace themes"));
   }, [query.error]);
+}
+
+// A component boundary, not a conditional hook: disabled builds mount no
+// marketplace query observer, registry effect, or inventory network request.
+export function ManagedThemeRegistry() {
+  return MARKETPLACE_ENABLED ? createElement(EnabledManagedThemeRegistry) : null;
+}
+
+function EnabledManagedThemeRegistry() {
+  useManagedThemeRegistry();
+  return null;
 }

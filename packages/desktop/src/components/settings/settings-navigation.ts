@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
+import { MARKETPLACE_ENABLED } from "@/lib/marketplace-gate";
 
 const settingsSearchSchema = z.object({
   tab: z.enum(["general", "marketplace"]).optional().catch(undefined),
@@ -13,6 +14,7 @@ export function parseSettingsSearch(search: Record<string, unknown>): SettingsSe
 }
 
 export function resolveSettingsTab(search: SettingsSearch): "general" | "marketplace" {
+  if (!MARKETPLACE_ENABLED) return "general";
   return search.tab ?? (search.section === "marketplace" ? "marketplace" : "general");
 }
 

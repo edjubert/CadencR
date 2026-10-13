@@ -69,7 +69,16 @@ const knownTokens = new Set<string>([...THEME_TOKEN_KEYS, ...THEME_OPTIONAL_TOKE
 const documentSchema = z
   .object({
     $schema: z.string().nullable().optional(),
-    label: z.string().min(1).max(64),
+    // Rust str::trim uses Unicode White_Space (not JS trim: FEFF/0085 differ).
+    // Refine only: signed document fields must never be normalized on parse.
+    label: z.string().refine((value) => {
+      const trimmed = value.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
+      let count = 0;
+      for (const scalar of trimmed) {
+        if (++count > 64 || /^[\uD800-\uDFFF]$/.test(scalar)) return false;
+      }
+      return count > 0;
+    }),
     appearance: z.enum(["dark", "light"]),
     cssVars: z.record(
       z.string().refine((key) => knownTokens.has(key)),
@@ -124,6 +133,7 @@ export const managedThemeDataSchema = authorThemeDataSchema.extend({
   id: z.string().startsWith("managed:"),
 });
 export const duplicateThemeResponseSchema = z.object({
+  warning: z.string().nullable().optional(),
   theme: authorThemeDataSchema,
   workspace: z.object({
     project_id: z.number().int().positive(),
@@ -142,6 +152,7 @@ export const managedThemeEntrySchema = z
     theme: managedThemeDataSchema.nullable(),
     error: z.string().nullable().optional(),
     error_code: z.string().nullable().optional(),
+    warning: z.string().nullable().optional(),
   })
   .superRefine((entry, context) => {
     if (entry.theme && !entry.sha256)

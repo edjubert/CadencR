@@ -1,5 +1,26 @@
 # Marketplace desktop build configuration
 
+## v0.13.0: preparation only, no activation
+
+Keep marketplace entry points hidden and official marketplace build trust/feed
+variables unset for this milestone. The configuration below describes a **later**
+authorized deployment; it is not an instruction to enable it now.
+
+Read-only CLI preparation CI and downloaded checksum verification are complete
+([run 38214595106](https://github.com/merkr-software/CadencR/actions/runs/38214595106),
+source `6d0e2b6ed39ceb22d9fd1fa785d5cb5fa8a09f93`). Its `v0.12.1`
+artifact label matches current source, not a selected future release. Actual CLI
+release, distributed-binary qualification, registry pins, JavaScript removal,
+plugin publication and official trust activation remain pending.
+
+Internal QA can opt in with `VITE_INTERNAL_MARKETPLACE=true` in a DEV renderer
+only; production builds cannot expose the marketplace through that environment
+variable. This is not a public activation switch.
+
+Use the [operator runbook](../tooling/marketplace-registry/OPERATIONS.md)
+for renewal, failure alerts, revocation and rotation preparation. No real owner,
+alert destination or production trust root is provisioned by this repository.
+
 ## Activation gate
 
 The desktop release workflow forwards public repository variables into service

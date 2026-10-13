@@ -21,7 +21,6 @@ import {
 } from "@/lib/themes";
 import { getUserThemesVersion, subscribeUserThemes } from "@/lib/themes/user-registry";
 import { useUserThemeRegistry } from "@/hooks/useUserThemes";
-import { useManagedThemeRegistry } from "@/hooks/useManagedThemes";
 
 interface UseThemeResult {
   themeId: ThemeId;
@@ -154,7 +153,6 @@ export function useTheme(): UseThemeResult {
 export function useThemeSync(): void {
   const theme = useTheme();
   useUserThemeRegistry();
-  useManagedThemeRegistry();
   const didToastSystemThemeErrorRef = useRef(false);
 
   useEffect(() => {

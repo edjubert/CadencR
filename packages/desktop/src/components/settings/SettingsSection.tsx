@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 /**
@@ -53,7 +54,8 @@ export function SettingsSection({
       {description ? (
         <p className="-mt-1 text-xs text-muted-foreground leading-snug">{description}</p>
       ) : null}
-      {children}
+      {/* One provider per section: hints inside open without the delay once one shows. */}
+      <TooltipProvider delayDuration={300}>{children}</TooltipProvider>
     </section>
   );
 }
