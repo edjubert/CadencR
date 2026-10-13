@@ -271,6 +271,11 @@ function useInitialNoticeAndCommand(
  * is still initializing). `TabPane` updates `focusedPaneId` on pointer/focus
  * without calling this pane's `blur()`, so without this guard the flush
  * below would steal keyboard focus from the editor once the engine is ready.
+ * The same applies when a layout hydrates with a non-terminal pane focused
+ * after an early focus request: the transition from no layout state has no
+ * previous terminal leaf, so the cancel condition keys off the next focused
+ * leaf alone. While no layout state exists at all, the pending request is
+ * kept — there is nothing to lose focus to yet.
  */
 function useDeferredEngineFocus(terminal: Terminal | undefined, featureId: number) {
   const pendingFocusRef = useRef(false);
@@ -286,13 +291,15 @@ function useDeferredEngineFocus(terminal: Terminal | undefined, featureId: numbe
   const cancelPendingFocus = useCallback((): void => {
     pendingFocusRef.current = false;
   }, []);
-  // Cancel a pending focus when the layout's focused pane moves away from the
-  // pane hosting this terminal. Subscribing (rather than selecting) keeps this
+  // Cancel a pending focus when the layout's focused pane is not the pane
+  // hosting this terminal. Subscribing (rather than selecting) keeps this
   // hook free of re-renders — the subscription only flips a ref.
   useEffect(() => {
     const isTerminalPaneFocused = (): boolean => {
-      const state = selectFeatureLayout(featureId)(useFeatureLayoutStore.getState());
-      const focusedLeaf = getFocusedLeaf(state);
+      const store = useFeatureLayoutStore.getState();
+      // No hydrated layout for the feature: nothing can own focus yet.
+      if (store.features[featureId] === undefined) return true;
+      const focusedLeaf = getFocusedLeaf(selectFeatureLayout(featureId)(store));
       if (!focusedLeaf) return false;
       return focusedLeaf.activeTabId === "terminal";
     };
@@ -301,15 +308,17 @@ function useDeferredEngineFocus(terminal: Terminal | undefined, featureId: numbe
     if (pendingFocusRef.current && !isTerminalPaneFocused()) {
       pendingFocusRef.current = false;
     }
-    return useFeatureLayoutStore.subscribe((state, prev) => {
+    return useFeatureLayoutStore.subscribe((state) => {
       if (!pendingFocusRef.current) return;
-      const prevFocused = getFocusedLeaf(selectFeatureLayout(featureId)(prev));
+      // No hydrated layout for the feature: keep the pending request.
+      if (state.features[featureId] === undefined) return;
       const nextFocused = getFocusedLeaf(selectFeatureLayout(featureId)(state));
-      const wasTerminal = prevFocused?.activeTabId === "terminal";
-      const isTerminal = nextFocused?.activeTabId === "terminal";
-      // Only cancel when focus moved *away* from a terminal pane. A change
-      // between two terminal panes is handled by `blur()` via `setActivePane`.
-      if (wasTerminal && !isTerminal) pendingFocusRef.current = false;
+      // A real focused leaf that is not a terminal pane cancels the pending
+      // request — whether focus moved away from the terminal or a layout
+      // hydrated with a non-terminal pane focused after an early request.
+      if (nextFocused && nextFocused.activeTabId !== "terminal") {
+        pendingFocusRef.current = false;
+      }
     });
   }, [featureId]);
   useEffect(() => {

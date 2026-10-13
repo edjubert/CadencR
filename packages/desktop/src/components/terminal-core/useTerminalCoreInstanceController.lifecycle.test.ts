@@ -56,7 +56,8 @@ import {
   selectFeatureLayout,
   useFeatureLayoutStore,
 } from "@/stores/feature-layout-store";
-import { ROOT_LEAF_ID } from "@/stores/feature-layout-schema";
+import { flatLayoutState, ROOT_LEAF_ID } from "@/stores/feature-layout-schema";
+import { makeLeaf } from "@/stores/feature-layout-tree";
 
 const FEATURE = 1;
 
@@ -265,6 +266,47 @@ describe("focus deferral while the engine loads", () => {
     act(() => {
       useFeatureLayoutStore.getState().setFocusedPane(FEATURE, ROOT_LEAF_ID);
       useFeatureLayoutStore.getState().setPaneActiveTab(FEATURE, ROOT_LEAF_ID, "editor");
+    });
+    // Engine becomes ready — the pending focus must not fire.
+    mocks.engineReady = true;
+    rerender();
+    expect(mocks.terminal.focus).not.toHaveBeenCalled();
+  });
+
+  it("cancels a pending focus when a layout hydrates with the editor focused before the engine is ready", () => {
+    // The reviewer's hydration scenario: the controller starts with no layout
+    // state for the feature, a focus request is deferred, then the split
+    // layout hydrates atomically with the editor pane focused. The
+    // transition from no layout has no previous terminal leaf, so the
+    // cancel condition must key off the next focused leaf alone.
+    const ref = createRef<TerminalCoreInstanceHandle>();
+    const { rerender } = renderHook(() =>
+      useTerminalCoreInstanceController({ featureId: FEATURE, projectId: 2 }, ref),
+    );
+    // Engine still loading: the focus request is deferred.
+    act(() => ref.current?.focus());
+    expect(mocks.terminal.focus).not.toHaveBeenCalled();
+    // Hydrate the split layout atomically: terminal in one leaf, editor
+    // visible and focused in the other.
+    act(() => {
+      useFeatureLayoutStore.getState().setState(FEATURE, {
+        ...flatLayoutState(),
+        splitRoot: {
+          type: "split",
+          orientation: "horizontal",
+          children: [
+            {
+              type: "leaf",
+              id: ROOT_LEAF_ID,
+              tabIds: ["agent", "editor"],
+              activeTabId: "editor",
+            },
+            makeLeaf(["terminal"], "terminal"),
+          ],
+          sizes: [50, 50],
+        },
+        focusedPaneId: ROOT_LEAF_ID,
+      });
     });
     // Engine becomes ready — the pending focus must not fire.
     mocks.engineReady = true;
