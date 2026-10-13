@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, within } from "@/test-utils";
+import { afterEach } from "vitest";
 import { getGetFeatureQueryKey, type Feature } from "@/api/generated";
 import { createTestQueryClient } from "@/test-utils";
 import { DEFAULT_SIDEBAR_CONFIG } from "@/lib/sidebar-config";
@@ -54,6 +55,12 @@ beforeEach(() => {
       12: { featureId: 3, status: "agent", kind: null, seq: 3 },
     },
   });
+  // Fold tests need synchronous mount/unmount (CollapsibleSection).
+  document.documentElement.dataset.animations = "off";
+});
+
+afterEach(() => {
+  delete document.documentElement.dataset.animations;
 });
 
 describe("SidebarWorkingSection", () => {

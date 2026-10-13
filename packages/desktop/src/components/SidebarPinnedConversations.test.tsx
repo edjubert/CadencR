@@ -1,5 +1,5 @@
 import React from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -133,6 +133,12 @@ describe("SidebarPinnedConversations", () => {
     useSidebarSurfaceStore.setState({
       expanded: { "for-me": true, working: true, recent: true, pinned: true },
     });
+    // Fold tests need synchronous mount/unmount (CollapsibleSection).
+    document.documentElement.dataset.animations = "off";
+  });
+
+  afterEach(() => {
+    delete document.documentElement.dataset.animations;
   });
 
   it("keeps only the pinned rows the sidebar filter matches", () => {
