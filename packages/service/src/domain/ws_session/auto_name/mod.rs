@@ -19,6 +19,9 @@ use super::protocol::{
 
 mod drain;
 use drain::{drain_text, report_close_error, truncate_for_log};
+mod prompt;
+use prompt::{build_prompt, resolve_system_prompt, NAME_END, NAME_START};
+pub use prompt::{AUTO_NAME_USER_PROMPT_PREFIX, DEFAULT_AUTO_NAME_SYSTEM_PROMPT};
 mod title_state;
 pub use title_state::has_default_title;
 
@@ -61,21 +64,6 @@ fn send_to_all(senders: &[mpsc::UnboundedSender<Message>], json: String) {
     for sender in senders {
         let _ = sender.send(Message::Text(json.clone().into()));
     }
-}
-
-/// Workspace setting key overriding the default naming prompt. Empty or
-/// missing falls back to `DEFAULT_AUTO_NAME_SYSTEM_PROMPT`.
-const AUTO_NAME_SYSTEM_PROMPT_SETTING_KEY: &str = "auto_name_system_prompt";
-
-const DEFAULT_AUTO_NAME_SYSTEM_PROMPT: &str = "You are a feature naming assistant. Your ONLY job is to output a short name (3-7 words) for a coding session. ALWAYS output a name, even if the input is vague — just pick a reasonable generic name. Examples: 'hi' → 'General Coding Session', 'fix the login bug' → 'Fix Login Bug', 'I want to add dark mode' → 'Add Dark Mode Support'.";
-
-/// A stored prompt wins only when non-empty after trimming; otherwise the
-/// default applies. Keeping this pure makes the fallback trivially testable.
-fn resolve_system_prompt(stored: Option<&str>) -> String {
-    stored
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or(DEFAULT_AUTO_NAME_SYSTEM_PROMPT)
-        .to_string()
 }
 
 /// Fetch the most recent user message content for the given feature.
@@ -168,50 +156,25 @@ async fn run_auto_name(
     title_policy: GeneratedTitlePolicy,
 ) -> Option<String> {
     info!(feature_id, "auto-name: starting");
-    // Fetch provider, model, and naming-prompt override concurrently — all
-    // three are independent SQL reads.
-    let (provider_settings_result, stored_model_result, stored_prompt_result) = tokio::join!(
-        crate::domain::workspace::repository::get_provider_settings(pool),
-        crate::domain::workspace::repository::get_setting(pool, "model_auto_name"),
-        crate::domain::workspace::repository::get_setting(
-            pool,
-            AUTO_NAME_SYSTEM_PROMPT_SETTING_KEY,
-        ),
-    );
-    let provider_settings = match provider_settings_result {
-        Ok(s) => s,
-        Err(e) => {
-            error!(feature_id, error = %e, "auto-name: failed to load provider settings");
-            return None;
-        }
-    };
-    let stored_model = match stored_model_result {
-        Ok(v) => v,
-        Err(e) => {
-            error!(feature_id, error = %e, "auto-name: failed to load model setting");
-            return None;
-        }
-    };
-    let system_prompt = match stored_prompt_result {
-        Ok(stored) => resolve_system_prompt(stored.as_deref()),
+    // Same resolution the settings UI displays, so the auto-naming row never
+    // shows a provider/model the spawn would not actually use.
+    let selection = match crate::domain::agents::resolve_selection(
+        pool,
+        Some(std::path::Path::new(&cwd)),
+        "auto_name",
+        None,
+        None,
+    )
+    .await
+    {
+        Ok(selection) => selection,
         Err(error) => {
-            // A settings read failure must never block naming: fall back to the
-            // default prompt and continue.
-            warn!(
-                feature_id,
-                %error,
-                "auto-name: failed to load naming prompt setting, using default"
-            );
-            resolve_system_prompt(None)
+            error!(feature_id, %error, "auto-name: no usable provider/model");
+            return None;
         }
     };
-    let provider_id = provider_settings.auto_name;
-    let model_id = match stored_model {
-        Some(v) if !v.is_empty() => v,
-        _ => crate::domain::agents::providers::provider_default_model(pool, &provider_id)
-            .await
-            .unwrap_or_default(),
-    };
+    let provider_id = selection.provider_id;
+    let model_id = selection.model_id;
 
     debug!(
         feature_id,
@@ -233,16 +196,10 @@ async fn run_auto_name(
         }
     };
 
+    let system_prompt = resolve_system_prompt();
     let prompt = build_prompt(&user_input, &system_prompt);
-    let config = match build_spawn_config(
-        AutoNameSpawnArgs::builder()
-            .adapter(adapter.as_adapter())
-            .model_id(&model_id)
-            .cwd(&cwd)
-            .system_prompt(&system_prompt)
-            .build(),
-    )
-    .await
+    let config = match build_spawn_config(adapter.as_adapter(), &model_id, &cwd, system_prompt)
+        .await
     {
         Ok(config) => config,
         Err(error) => {
@@ -327,37 +284,12 @@ async fn run_auto_name(
     Some(name)
 }
 
-/// The naming instructions ride inside the user prompt: ACP-installed
-/// providers drop `RuntimeSpawnConfig::system_prompt` on the floor (the ACP
-/// `session/new` request has no field for it), so relying on the system slot
-/// would silently run the naming with no instructions on those providers.
-fn build_prompt(user_input: &str, system_prompt: &str) -> String {
-    let escaped_input = user_input.replace('"', "\\\"");
-    format!(
-        "{system_prompt}\n\nNow name this session. User's first message: \"{escaped_input}\". Reply with ONLY: __FEATURE_NAME_START__<name>__FEATURE_NAME_END__"
-    )
-}
-
-/// Named arguments for `build_spawn_config`: three consecutive `&str` params
-/// would be swappable without a type error, so the call goes through a bon
-/// builder.
-#[derive(bon::Builder)]
-struct AutoNameSpawnArgs<'a> {
-    adapter: &'a dyn crate::domain::agents::adapter::AgentRuntimeAdapter,
-    model_id: &'a str,
-    cwd: &'a str,
-    system_prompt: &'a str,
-}
-
 async fn build_spawn_config(
-    args: AutoNameSpawnArgs<'_>,
+    adapter: &dyn crate::domain::agents::adapter::AgentRuntimeAdapter,
+    model_id: &str,
+    cwd: &str,
+    system_prompt: String,
 ) -> Result<RuntimeSpawnConfig, crate::domain::agents::adapter::RuntimeError> {
-    let AutoNameSpawnArgs {
-        adapter,
-        model_id,
-        cwd,
-        system_prompt,
-    } = args;
     let resolved_profile = adapter
         .resolve_profile(None, std::path::Path::new(cwd))
         .await?;
@@ -380,7 +312,7 @@ async fn build_spawn_config(
         model: Some(model_id.to_string()),
         thinking_effort: None,
         fast_mode: false,
-        system_prompt: Some(system_prompt.to_string()),
+        system_prompt: Some(system_prompt),
         resume_session_id: None,
         allow_bypass_permissions: false,
         mcp_servers: None,
@@ -407,7 +339,12 @@ async fn build_spawn_config(
 }
 
 fn extract_name(accumulated_text: &str) -> String {
-    let re = Regex::new(r"__FEATURE_NAME_START__(.+?)__FEATURE_NAME_END__").unwrap();
+    let re = Regex::new(&format!(
+        "{}(.+?){}",
+        regex_lite::escape(NAME_START),
+        regex_lite::escape(NAME_END)
+    ))
+    .unwrap();
     let raw_name = match re.captures(accumulated_text) {
         Some(caps) => caps.get(1).unwrap().as_str().to_string(),
         None => accumulated_text.to_string(),
@@ -423,27 +360,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolve_system_prompt_falls_back_to_default_when_unset_or_blank() {
-        assert_eq!(resolve_system_prompt(None), DEFAULT_AUTO_NAME_SYSTEM_PROMPT);
-        assert_eq!(
-            resolve_system_prompt(Some("")),
-            DEFAULT_AUTO_NAME_SYSTEM_PROMPT
-        );
-        assert_eq!(
-            resolve_system_prompt(Some("   ")),
-            DEFAULT_AUTO_NAME_SYSTEM_PROMPT
-        );
-    }
-
-    #[test]
-    fn resolve_system_prompt_uses_stored_override() {
-        assert_eq!(
-            resolve_system_prompt(Some("Custom prompt")),
-            "Custom prompt"
-        );
-    }
-
-    #[test]
     fn extract_name_pulls_from_delimiters() {
         let text = "noise __FEATURE_NAME_START__Fix Login Bug__FEATURE_NAME_END__ trailing";
         assert_eq!(extract_name(text), "Fix Login Bug");
@@ -457,14 +373,6 @@ mod tests {
     #[test]
     fn extract_name_returns_empty_for_whitespace() {
         assert_eq!(extract_name("   "), "");
-    }
-
-    #[test]
-    fn build_prompt_inlines_naming_instructions_and_escapes_quotes() {
-        let prompt = build_prompt("say \"hi\"", "Name things well");
-        assert!(prompt.starts_with("Name things well"));
-        assert!(prompt.contains("\\\"hi\\\""));
-        assert!(prompt.contains("__FEATURE_NAME_START__"));
     }
 
     #[test]

@@ -1,65 +1,96 @@
-import type { ReactElement } from "react";
-import { RotateCcw } from "lucide-react";
+import { useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { useGetAutoNamePrompt } from "@/api/generated";
 import { useDebouncedSetting } from "@/hooks/useDebouncedSetting";
+import { useSyncedSettingInput } from "@/hooks/useSyncedSettingInput";
+import { ErrorRow, LoadingRow } from "./SettingsStateRows";
+import { SettingsSubsection } from "./SettingsSubsection";
 
-export const AUTO_NAME_PROMPT_SETTING_KEY = "auto_name_system_prompt";
+/** Workspace key read by the backend; empty means "use the built-in prompt". */
+const AUTO_NAME_SYSTEM_PROMPT_KEY = "auto_name_system_prompt";
 
-const MAX_PROMPT_LENGTH = 2000;
-const HINT_ID = "auto-name-prompt-hint";
+/** What to persist for `text`: the built-in prompt (or nothing) is stored as
+ *  empty, so a later improvement to the default still reaches the user. */
+export function storedAutoNamePrompt(text: string, defaultPrompt: string): string {
+  const trimmed = text.trim();
+  return trimmed === "" || trimmed === defaultPrompt.trim() ? "" : text;
+}
 
 /**
- * System prompt used by the session auto-namer. Empty (or unset) means the
- * built-in default, so Reset clears the stored setting instead of restoring
- * a duplicated copy of the default text.
+ * Editable auto-naming system prompt. The field starts on the built-in prompt
+ * so the user edits it rather than writing one from scratch; Reset returns to
+ * it. The naming format instruction lives in the per-request message, so no
+ * edit here can break title extraction.
  *
- * The Reset button stays outside the textarea's <label>: a label may not
- * contain a second interactive control, and the hint is associated with the
- * textarea through aria-describedby instead.
+ * Saves on blur (and on unmount), not per keystroke: every write rewrites the
+ * settings file, which refreshes settings-derived caches in every window.
  */
-export function AutoNamePromptSetting(): ReactElement {
-  const { value, setValue, isLoading, isSaving } = useDebouncedSetting(
-    AUTO_NAME_PROMPT_SETTING_KEY,
-    500,
+export function AutoNamePromptSetting(): React.JSX.Element {
+  const defaultQuery = useGetAutoNamePrompt({ query: { staleTime: Infinity } });
+  const setting = useDebouncedSetting(AUTO_NAME_SYSTEM_PROMPT_KEY, 0);
+  const defaultPrompt = defaultQuery.data?.default_prompt;
+  const stored = setting.value ?? "";
+  const isCustom = stored.trim() !== "";
+  const isReady = defaultPrompt !== undefined && !setting.isLoading;
+  const input = useSyncedSettingInput(
+    isReady ? (isCustom ? stored : defaultPrompt) : undefined,
+    AUTO_NAME_SYSTEM_PROMPT_KEY,
   );
-  const currentValue = value ?? "";
+
+  const save = (): void => {
+    if (defaultPrompt === undefined) return;
+    const next = storedAutoNamePrompt(input.value, defaultPrompt);
+    if (next !== stored) setting.setValue(next);
+  };
+  const saveRef = useRef(save);
+  saveRef.current = save;
+  useEffect(() => () => saveRef.current(), []);
+
+  const reset = (): void => {
+    if (defaultPrompt === undefined) return;
+    input.setValue(defaultPrompt);
+    setting.setValue("");
+  };
 
   return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between gap-2">
-        <label htmlFor="auto-name-prompt" className="text-xs font-medium">
-          Session naming prompt
-        </label>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-6 shrink-0 gap-1 px-1.5 text-[11px]"
-          disabled={isLoading || isSaving || currentValue.length === 0}
-          onClick={() => setValue("")}
-        >
-          <RotateCcw className="size-3" />
-          Reset
-        </Button>
-      </div>
-      <Textarea
-        id="auto-name-prompt"
-        aria-describedby={HINT_ID}
-        value={currentValue}
-        maxLength={MAX_PROMPT_LENGTH}
-        rows={3}
-        disabled={isLoading}
-        placeholder="Custom system prompt for the session auto-namer"
-        onChange={(event) => setValue(event.target.value)}
-      />
-      <p id={HINT_ID} className="text-[11px] leading-snug text-muted-foreground">
-        {isLoading
-          ? "Loading…"
-          : isSaving
-            ? "Saving…"
-            : "Empty uses the built-in default prompt for session auto-naming."}
-      </p>
-    </div>
+    <SettingsSubsection
+      title="Naming prompt"
+      description={
+        isCustom
+          ? "Custom system prompt used to title new conversations."
+          : "System prompt used to title new conversations (default)."
+      }
+      action={
+        isCustom ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-[11px]"
+            aria-label="Reset naming prompt"
+            onClick={reset}
+          >
+            Reset
+          </Button>
+        ) : null
+      }
+    >
+      {defaultQuery.error ? (
+        <ErrorRow label="Failed to load the default naming prompt." />
+      ) : !isReady ? (
+        <LoadingRow label="Loading naming prompt…" />
+      ) : (
+        <Textarea
+          aria-label="Auto-naming system prompt"
+          placeholder={defaultPrompt}
+          rows={5}
+          value={input.value}
+          onChange={(event) => input.setValue(event.target.value)}
+          onBlur={save}
+          className="min-h-28 resize-y leading-relaxed"
+        />
+      )}
+    </SettingsSubsection>
   );
 }

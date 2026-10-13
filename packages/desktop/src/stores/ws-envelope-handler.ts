@@ -27,8 +27,8 @@ import { isRecord } from "./ws-message-processing";
 import { parseAccessMode } from "@/types/access-mode";
 import { createSessionConfigState, updateSession } from "./ws-session-types";
 import { transitionTurn } from "./ws-turn-lifecycle";
-import { findProviderMode } from "@/lib/provider-modes";
-import { OPENCODE_AGENT_MODE_PREFIX, parsePermissionMode } from "@/types/permission-mode";
+import { providerAcceptsMode } from "@/lib/provider-modes";
+import { parsePermissionMode } from "@/types/permission-mode";
 import type { StoreAccessors } from "./ws-envelope-types";
 import {
   handleCleared,
@@ -282,9 +282,7 @@ function handleModeChanged(ctx: StoreAccessors, sessionId: string, payload: unkn
   if (!parsedMode || !session) return;
   const providerId = session.currentSelection?.providerId;
   if (providerId == null) return;
-  const acceptsMode =
-    !!findProviderMode(providerId, parsedMode) || parsedMode.startsWith(OPENCODE_AGENT_MODE_PREFIX);
-  if (acceptsMode) {
+  if (providerAcceptsMode(providerId, parsedMode)) {
     ctx.set(updateSession(ctx.get(), sessionId, { permissionMode: parsedMode }));
   }
 }
@@ -330,7 +328,7 @@ function handleModelSetOk(ctx: StoreAccessors, sessionId: string, payload: unkno
   const existing = session.contextUsage;
   // The window belongs to the model, so the outgoing one is never carried over.
   // The backend seeds the incoming model's window when its adapter can answer;
-  // otherwise the bar hides until the next `result`, which beats scaling by the
+  // otherwise the bar shows the window as unknown until the next `result`, which beats scaling by the
   // old model's window (1M → 200k reads 5x low, 200k → 1M reads 5x high).
   const nextContextWindow = normalizeContextWindow(p.context_window);
   const nextUsage = existing

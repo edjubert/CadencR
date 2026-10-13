@@ -1,5 +1,74 @@
 # Changelog
 
+## v0.13.0 - 2026-10-13
+
+Previous release: v0.12.1 - 2026-10-10
+
+### ✨ Added
+
+- [**Desktop**] Added a configurable sidebar with Classic, Focus, Supervise, and Detailed presets, live sample previews, and undo. Choose row details, last-reply previews, and todo progress; group and sort conversations across projects, save filtered views, and use For me, In progress, Recent, and a collapsed rail to reach agents that need attention. Display choices sync between devices, while sidebar width and expansion state are remembered — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Added automatic pane layouts, enabled by default, that keep the agent visible when browser pages or file-and-line links open beside the conversation. The mode remembers pane sizes, respects manual layout changes, preserves prompt focus, and offers undo plus workspace and conversation controls — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Added a message navigator along the conversation's right edge: preview your prompts on hover, jump to one with a click or Alt+Up/Down, and reach older prompts without loading every intervening turn; it can be disabled in Interface settings — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Added macOS notch notifications with live agent activity, brief previews for completed turns and requests, and an attention-first list that opens conversations on click. Presence and animation are configurable; macOS installs adopt this destination while preserving disabled notifications, and unsupported devices use system banners — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Added message counts by provider and model to Usage Stats, alongside token totals, with daily cell grids and detailed day cards. New conversations show the last 30 days before the first prompt, with a remembered Messages/Tokens switch; Settings includes message totals and daily averages — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Added an editable auto-naming prompt in Settings, prefilled with the built-in instructions and resettable, so you can customize how new conversations are titled — [@rle-mino](https://github.com/rle-mino).
+
+### 🔧 Changed
+
+- [**Desktop**] New conversations now start with the provider and model from your last accepted manual prompt across projects, replacing project-level and global session-model defaults while keeping conversation overrides — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Folded the worktree branch and setup status into the conversation title block, correcting header spacing and keeping setup details accessible from the keyboard — [@rle-mino](https://github.com/rle-mino).
+- [**Backend**] Improved contributor setup with matching frontend/backend credentials and environment diagnostics, shortened checks through scoped pre-commit hooks and parallel CI, and reduced worktree database disk usage with copy-on-write clones on APFS — [@rle-mino](https://github.com/rle-mino).
+
+### 🐛 Fixed
+
+- [**Desktop**] Fixed reading positions jumping or briefly showing blank content when scrolling up through long conversations or loading older history — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Fixed thinking levels being lost or carried over from the wrong model when starting conversations or switching models and providers; saved choices now resolve consistently, native profile defaults are respected, and persistence errors are visible — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Fixed unsupported-permission-mode errors when starting Codex, Cursor, or other non-Claude conversations, and kept the mode control aligned with the provider's effective mode — [@rle-mino](https://github.com/rle-mino).
+- [**provider:claude**] Fixed queued prompt and slash-command lifecycle updates in current Claude Code versions appearing as unrecognized-message errors in the transcript — [@rle-mino](https://github.com/rle-mino).
+- [**provider:codex**] Restored visible reasoning summaries for supported models using Codex's default OpenAI provider, including resumed conversations, while preserving explicit profile choices and other inference providers' defaults — [@rle-mino](https://github.com/rle-mino).
+- [**provider:opencode**] Fixed OpenCode conversations failing to start after an installation moved or was upgraded by rediscovering missing or stale executable paths without requiring a service restart — [@rle-mino](https://github.com/rle-mino).
+- [**Backend**] Fixed checkpoints missing local edits in files marked assume-unchanged or changed immediately after an index write, preventing rewinds from restoring stale content over those edits — [@rle-mino](https://github.com/rle-mino).
+
+### 🔒 Security
+
+- [**Backend**] Closed a local authentication bypass where an ordinary API request carrying a WebSocket Upgrade header could skip its token check; only the known, self-authenticating WebSocket routes are exempt — [@rle-mino](https://github.com/rle-mino).
+- [**Backend**] Hardened Git comparison-target validation against option injection and multi-record input, rejected object IDs absent from the local repository, and prevented read-only checks from triggering remote transport — [@rle-mino](https://github.com/rle-mino).
+
+## v0.12.1 - 2026-10-10
+
+Previous release: v0.12.0 - 2026-09-21
+
+### ✨ Added
+
+- [**Desktop**] Added an explicit pending state for context usage when the provider has not reported its window size, showing known token counts without a guessed percentage; Claude's reported windows are remembered across restarts — [@rle-mino](https://github.com/rle-mino).
+
+### 🔧 Changed
+
+- [**provider:claude**] New Claude Code conversations now default to Auto permission mode, falling back to Accept Edits when the selected model is known not to support Auto and keeping the displayed mode in sync — [@rle-mino](https://github.com/rle-mino).
+- [**provider:codex**] Reduced prompt startup delays by reusing the runtime when its configuration is unchanged and avoiding duplicated waits for MCP startup — [@rle-mino](https://github.com/rle-mino).
+- [**provider:opencode**] Reduced conversation startup delays and fixed incomplete MCP configuration discovery when OpenCode returns a large configuration — [@rle-mino](https://github.com/rle-mino).
+- [**Backend**] Made per-turn checkpoints faster in larger repositories and included newly staged files in their snapshots — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Improved touch interactions in conversations: web links open on a tap or plain click, dragging link text preserves selection, long presses allow native text selection, and a mobile Copy as menu offers Markdown, Slack, plain text, and email formats — [@rle-mino](https://github.com/rle-mino).
+
+### 🐛 Fixed
+
+- [**provider:claude**] Restored Cadencr's browser, project, and workspace MCP tools in current Claude Code versions while retaining compatibility with older clients — [@rle-mino](https://github.com/rle-mino).
+- [**provider:claude**] Fixed advertised model aliases such as Opus or Sonnet failing to resolve when their capitalization differs — [@rle-mino](https://github.com/rle-mino).
+- [**provider:codex**] Fixed slow model discovery making Codex models disappear from the picker, while keeping Stop, session closure, and stream recovery responsive — [@rle-mino](https://github.com/rle-mino).
+- [**provider:codex**] Fixed event-stream failures during bursts of agent or command output, preserving event order and reducing processing overhead for large outputs — [@rle-mino](https://github.com/rle-mino).
+- [**provider:codex**] Fixed resuming long conversations failing because their returned history exceeded the transport message limit — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Fixed Cursor conversations failing to start after switching to Auto or another model that does not support the previous model's Fast or thinking options — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Fixed missing Nerd Font glyphs and ignored font settings in Neovim by using the same font family and size resolution as the terminal; configuration errors now appear visibly without discarding an already running editor — [@edjubert](https://github.com/edjubert).
+- [**Desktop**] Fixed agent links written as bare absolute paths failing to open supported local documents in their default application — [@baptou12](https://github.com/baptou12).
+- [**Desktop**] Fixed terminals failing to load when accessing Cadencr remotely through a browser — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Fixed the blurred top edge and incorrect viewport sizing in the installed iOS web app — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Aligned sidebar conversation status indicators with project logos and their title text — [@rle-mino](https://github.com/rle-mino).
+- [**Desktop**] Fixed scrolling the pull-request checks list also moving the review timeline underneath it — [@rle-mino](https://github.com/rle-mino).
+
+### 🔒 Security
+
+- [**dependencies**] Updated vulnerable Electron, HTTP, Markdown, sanitization, image-processing, and build-tool dependencies, with additional hardening against unsafe HTTP cache reuse — [@rle-mino](https://github.com/rle-mino).
+
 ## v0.12.0 - 2026-09-21
 
 Previous release: v0.11.5 - 2026-09-05

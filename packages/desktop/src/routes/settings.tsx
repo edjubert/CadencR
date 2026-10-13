@@ -1,346 +1,125 @@
 import { useEffect, useRef } from "react";
+import { MARKETPLACE_ENABLED } from "@/lib/marketplace-gate";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { ArrowLeft } from "lucide-react";
 import { useShortcut } from "@/hooks/useShortcut";
-import { ArrowLeft, ChevronRight, Files, History, Save, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
-import { NotificationsSection } from "@/components/settings/NotificationsSection";
-import { BrowserSection } from "@/components/settings/BrowserSection";
-import { StorageSection } from "@/components/settings/StorageSection";
-import { McpSection } from "@/components/settings/McpSection";
-import { InterfaceSection } from "@/components/settings/InterfaceSection";
-import { GitSection } from "@/components/settings/GitSection";
-import { ProvidersSection } from "@/components/settings/ProvidersSection";
-import { AboutSection } from "@/components/settings/AboutSection";
-import { StatsSection } from "@/components/settings/StatsSection";
-import { AgentVerbositySettings } from "@/components/settings/AgentVerbositySettings";
-import { AgentSummaryModeToggle } from "@/components/settings/AgentSummaryModeToggle";
-import { ThemeSelector } from "@/components/settings/ThemeSelector";
-import { FontSelector } from "@/components/settings/FontSelector";
-import { ThemeLibrary } from "@/components/theme/ThemeLibrary";
-import { FileTreeIconSetSelector } from "@/components/settings/FileTreeIconSetSelector";
-import { LspServerList } from "@/components/settings/LspServerList";
-import { AnimationsToggle } from "@/components/settings/AnimationsToggle";
-import { SettingsSection } from "@/components/settings/SettingsSection";
-import { SettingsCard } from "@/components/settings/SettingsCard";
-import { WorkspaceJsonSettings } from "@/components/settings/SettingsJsonControls";
-import { SettingsSubsection } from "@/components/settings/SettingsSubsection";
-import { SettingsRow } from "@/components/settings/SettingsRow";
-import { SettingsSwitchRow } from "@/components/settings/SettingsSwitchRow";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { MarketplaceSection } from "@/components/MarketplaceSection";
+import { GeneralSettingsSections } from "@/components/settings/GeneralSettingsSections";
 import { SettingsNavSidebar } from "@/components/settings/SettingsNavSidebar";
 import { NAV_GROUPS } from "@/components/settings/settings-nav-groups";
-import { IconTile } from "@/components/settings/IconTile";
-import { useDebouncedSetting } from "@/hooks/useDebouncedSetting";
-import { APP_VERSION } from "@/lib/app-version";
-import { RuntimeSettingsSection } from "@/components/settings/RuntimeSettingsSection";
-import { RadioCardGroup, type RadioCardOption } from "@/components/settings/RadioCardGroup";
-import { parseVimModeLevel, type VimModeLevel } from "@/lib/vim-mode-level";
+import {
+  parseSettingsSearch,
+  resolveSettingsTab,
+  useVisitedSettingsViews,
+} from "@/components/settings/settings-navigation";
 
 export const Route = createFileRoute("/settings")({
   component: SettingsPage,
-  validateSearch: (search: Record<string, unknown>): { section?: string } => {
-    if (typeof search.section === "string") return { section: search.section };
-    return {};
-  },
+  validateSearch: parseSettingsSearch,
 });
 
 function SettingsPage() {
-  const { section } = Route.useSearch();
+  const search = Route.useSearch();
+  const activeTab = resolveSettingsTab(search);
+  const visited = useVisitedSettingsViews(activeTab);
   const navigate = useNavigate();
   const mainRef = useRef<HTMLElement | null>(null);
-
   const goBack = () => {
     void navigate({ to: "/" });
   };
 
-  // Escape leaves the settings page. `useShortcut` defaults to firing from
-  // inside form controls so users don't have to defocus first.
+  // Preserve the existing Escape behavior, including inside form controls.
   useShortcut("settings-back", (e) => {
     e.preventDefault();
     goBack();
   });
 
-  // Honor `?section=...` deep links. Anchors carry their own `scroll-mt-*`
-  // gutter, so the browser places them — the target can be a card nested inside
-  // a section, which an `offsetTop` measurement could not reach.
   useEffect(() => {
-    if (!section) return;
-    document.getElementById(section)?.scrollIntoView({ block: "start" });
-  }, [section]);
+    if (activeTab !== "general" || !search.section) return;
+    document.getElementById(search.section)?.scrollIntoView({ block: "start" });
+  }, [activeTab, search.section]);
 
   return (
-    <div className="flex h-full bg-background text-foreground">
-      <SettingsNavSidebar
-        groups={NAV_GROUPS}
-        scrollRef={mainRef}
-        header={<SidebarHeader />}
-        footer={<SidebarFooter onBack={goBack} />}
-      />
-
-      <main ref={mainRef} className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-[820px] space-y-6 px-4 py-6 md:px-10 md:py-8">
-          <header className="flex items-start justify-between gap-4">
-            <div className="space-y-1">
-              <Breadcrumbs />
-              <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-              <p className="text-sm text-muted-foreground">
-                Configure how Cadencr looks, runs, and orchestrates agents.
-              </p>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={goBack}
-              className="shrink-0 gap-1.5"
-              title="Back to workspace (Esc)"
-            >
-              <ArrowLeft className="size-3.5" />
-              Back
-            </Button>
-          </header>
-
-          <SettingsCard padded>
-            <WorkspaceJsonSettings />
-          </SettingsCard>
-
-          <AppearanceSection />
-          <EditorSection />
-          <InterfaceSection />
-          <NotificationsSection />
-          <BrowserSection />
-          <StorageSection />
-          <McpSection />
-          <RuntimeSettingsSection />
-          <GitSection />
-          <ProvidersSection />
-          <StatsSection />
-          <AboutSection />
-
-          <div className="h-12" />
-        </div>
-      </main>
-    </div>
+    <Tabs
+      value={activeTab}
+      onValueChange={(tab) => {
+        if (tab !== "general" && (tab !== "marketplace" || !MARKETPLACE_ENABLED)) return;
+        void navigate({ to: "/settings", search: { tab } });
+      }}
+      className="h-full min-h-0 bg-background text-foreground"
+    >
+      <SettingsPageHeader onBack={goBack} />
+      <TabsContent
+        value="general"
+        forceMount
+        hidden={activeTab !== "general"}
+        aria-hidden={activeTab !== "general"}
+        inert={activeTab !== "general"}
+        style={activeTab !== "general" ? { display: "none" } : undefined}
+        className="overflow-hidden data-[state=active]:flex"
+      >
+        {visited.general && (
+          <>
+            {activeTab === "general" && (
+              <SettingsNavSidebar groups={NAV_GROUPS} scrollRef={mainRef} />
+            )}
+            <main ref={mainRef} className="relative min-w-0 flex-1 overflow-y-auto">
+              <div className="mx-auto max-w-[820px] space-y-6 px-4 py-6 md:px-10 md:py-8">
+                <GeneralSettingsSections />
+                <div className="h-12" />
+              </div>
+            </main>
+          </>
+        )}
+      </TabsContent>
+      {MARKETPLACE_ENABLED && (
+        <TabsContent
+          value="marketplace"
+          forceMount
+          hidden={activeTab !== "marketplace"}
+          aria-hidden={activeTab !== "marketplace"}
+          inert={activeTab !== "marketplace"}
+          style={activeTab !== "marketplace" ? { display: "none" } : undefined}
+          className="overflow-y-auto"
+        >
+          {visited.marketplace && (
+            <main className="mx-auto max-w-[1100px] p-4">
+              <MarketplaceSection />
+            </main>
+          )}
+        </TabsContent>
+      )}
+    </Tabs>
   );
 }
 
-function SidebarHeader(): React.JSX.Element {
+function SettingsPageHeader({ onBack }: { onBack: () => void }): React.JSX.Element {
   return (
-    <div className="flex items-center gap-2">
-      <div className="grid size-7 place-items-center rounded-md bg-primary text-[var(--primary-foreground)]">
-        <Settings2 className="size-4" />
-      </div>
-      <div className="min-w-0">
-        <div className="text-sm font-semibold">Settings</div>
-        <div className="truncate text-[11px] text-muted-foreground">Cadencr v{APP_VERSION}</div>
-      </div>
-    </div>
-  );
-}
-
-function SidebarFooter({ onBack }: { onBack: () => void }): React.JSX.Element {
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <span>Changes save automatically.</span>
-      <button
-        type="button"
+    <header className="flex min-h-11 shrink-0 items-center gap-3 border-b border-border px-4">
+      <h1 className="shrink-0 text-sm font-semibold">Settings</h1>
+      <TabsList aria-label="Settings views" className="h-11 min-w-0 flex-1 border-b-0">
+        <TabsTrigger value="general" className="px-2">
+          General
+        </TabsTrigger>
+        {MARKETPLACE_ENABLED && (
+          <TabsTrigger value="marketplace" className="px-2">
+            Marketplace
+          </TabsTrigger>
+        )}
+      </TabsList>
+      <Button
+        variant="ghost"
+        size="sm"
         onClick={onBack}
         title="Back to workspace (Esc)"
-        className="inline-flex items-center gap-1 rounded border border-border bg-card px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        aria-label="Back to workspace"
+        className="h-7 shrink-0 gap-1.5 px-2"
       >
-        <ArrowLeft className="size-3" />
-        Esc
-      </button>
-    </div>
-  );
-}
-
-function Breadcrumbs(): React.JSX.Element {
-  return (
-    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-      <span>Cadencr</span>
-      <ChevronRight className="size-3" />
-      <span>Settings</span>
-    </div>
-  );
-}
-
-/* ─── Appearance ─────────────────────────────────────────────────────── */
-
-function AppearanceSection(): React.JSX.Element {
-  return (
-    <SettingsSection id="appearance" title="Appearance" subtitle="Theme · Animations · Verbosity">
-      <SettingsCard>
-        <SettingsSubsection padded={false}>
-          <ThemeSelector />
-          <AnimationsToggle divided />
-        </SettingsSubsection>
-        <FontSelector />
-        <SettingsSubsection
-          title="Theme library"
-          description="Start from any theme you like and make it your own. Each theme gets a project of its own in the sidebar: change the JSON by hand or ask the agent for it, keep working anywhere in the app, and watch it restyle itself as you go. Your themes appear in the picker alongside the built-ins."
-        >
-          <ThemeLibrary />
-        </SettingsSubsection>
-        <SettingsSubsection
-          title="Agent output verbosity"
-          description="Control how much of each agent turn stays expanded in the stream. Switching modes does not affect what the agent does. It only changes how the output is rendered."
-        >
-          <AgentVerbositySettings />
-          <AgentSummaryModeToggle />
-        </SettingsSubsection>
-      </SettingsCard>
-    </SettingsSection>
-  );
-}
-
-/* ─── Editor ─────────────────────────────────────────────────────────── */
-
-function MaxOpenTabsControl(): React.JSX.Element {
-  const maxTabs = useDebouncedSetting("editor_max_tabs");
-  const maxTabsValue = maxTabs.value ?? "10";
-  const isLimited = maxTabsValue !== "0";
-  const maxTabsNum = isLimited ? parseInt(maxTabsValue, 10) || 10 : 10;
-  const setMaxTabsNum = (value: number): void => {
-    const clamped = Math.max(1, Math.min(50, value));
-    maxTabs.setValue(String(clamped));
-  };
-  return (
-    <div className="flex items-center gap-2">
-      <button
-        type="button"
-        onClick={() => setMaxTabsNum(maxTabsNum - 1)}
-        disabled={!isLimited}
-        className="grid size-7 place-items-center rounded-md border border-border bg-card text-sm transition-colors hover:bg-accent disabled:opacity-40"
-        aria-label="Decrease max tabs"
-      >
-        −
-      </button>
-      <Input
-        type="number"
-        min={1}
-        max={50}
-        disabled={!isLimited}
-        value={maxTabsNum}
-        onChange={(event) => setMaxTabsNum(parseInt(event.target.value, 10) || 1)}
-        className="h-7 w-14 text-center disabled:opacity-50"
-      />
-      <button
-        type="button"
-        onClick={() => setMaxTabsNum(maxTabsNum + 1)}
-        disabled={!isLimited}
-        className="grid size-7 place-items-center rounded-md border border-border bg-card text-sm transition-colors hover:bg-accent disabled:opacity-40"
-        aria-label="Increase max tabs"
-      >
-        +
-      </button>
-      <label
-        htmlFor="max-tabs-unlimited"
-        className="ml-2 flex cursor-pointer items-center gap-2 text-xs text-muted-foreground hover:text-foreground"
-      >
-        Unlimited
-        <Switch
-          id="max-tabs-unlimited"
-          size="sm"
-          checked={!isLimited}
-          onCheckedChange={(checked) => maxTabs.setValue(checked ? "0" : "10")}
-        />
-      </label>
-    </div>
-  );
-}
-
-function useVimModeLevelOptions(): RadioCardOption<VimModeLevel>[] {
-  return [
-    {
-      value: "0",
-      label: "Off",
-      description: "Standard editing, no vim motions.",
-    },
-    {
-      value: "1",
-      label: "Vim motion",
-      description: "Modal editing via the built-in vim emulation.",
-    },
-    {
-      value: "2",
-      label: "Full Neovim",
-      description:
-        "A real Neovim instance with your own config, plugins and UI, rendered in the editor panel.",
-    },
-  ];
-}
-
-function EditorSection(): React.JSX.Element {
-  const vimModeLevel = useDebouncedSetting("editor_vim_mode_level");
-  const autoSave = useDebouncedSetting("editor_auto_save");
-  const gitBlame = useDebouncedSetting("editor_git_blame");
-  const vimModeLevelOptions = useVimModeLevelOptions();
-
-  const currentVimModeLevel = parseVimModeLevel(vimModeLevel.value);
-  const isAutoSaveEnabled = (autoSave.value ?? "false") === "true";
-  const isGitBlameEnabled = (gitBlame.value ?? "false") === "true";
-
-  return (
-    <SettingsSection id="editor" title="Editor" subtitle="CodeMirror · File tree">
-      <SettingsCard>
-        <SettingsSubsection
-          title="File tree icons"
-          description="Controls the icon density of the editor's file tree. Affects every project."
-        >
-          <FileTreeIconSetSelector />
-        </SettingsSubsection>
-        <SettingsSubsection
-          title="Language servers"
-          description="Cmd-click and F12 jump-to-definition use these. Servers launch on demand the first time you open a matching file."
-        >
-          <LspServerList />
-        </SettingsSubsection>
-        <SettingsSubsection
-          title="Vim mode"
-          description="Choose how vim motions apply to the built-in code editor."
-        >
-          <RadioCardGroup<VimModeLevel>
-            ariaLabel="Vim mode level"
-            value={currentVimModeLevel}
-            onChange={(next) => vimModeLevel.setValue(next)}
-            options={vimModeLevelOptions}
-            layout="stack"
-          />
-        </SettingsSubsection>
-        <SettingsSubsection padded={false}>
-          <SettingsSwitchRow
-            icon={<Save className="size-4" />}
-            iconTint="green"
-            label="Auto-save"
-            description="Automatically save files after a short delay."
-            checked={isAutoSaveEnabled}
-            onCheckedChange={(checked) => autoSave.setValue(checked ? "true" : "false")}
-            divided
-          />
-          <SettingsSwitchRow
-            icon={<History className="size-4" />}
-            iconTint="orange"
-            label="Git blame"
-            description="Show blame annotation on the current line."
-            checked={isGitBlameEnabled}
-            onCheckedChange={(checked) => gitBlame.setValue(checked ? "true" : "false")}
-            divided
-          />
-          <SettingsRow
-            divided
-            align="start"
-            icon={
-              <IconTile tint="pink">
-                <Files className="size-4" />
-              </IconTile>
-            }
-            label="Max open tabs"
-            description="Older tabs are closed once you exceed the cap. Disable to keep them all."
-            control={<MaxOpenTabsControl />}
-          />
-        </SettingsSubsection>
-      </SettingsCard>
-    </SettingsSection>
+        <ArrowLeft aria-hidden="true" className="size-3.5" />
+        <span className="hidden sm:inline">Back</span>
+      </Button>
+    </header>
   );
 }

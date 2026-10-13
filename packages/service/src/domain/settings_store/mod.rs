@@ -29,6 +29,7 @@ pub mod file;
 pub mod generation;
 pub mod lock;
 pub mod migrate;
+pub mod notch_default;
 pub mod paths;
 pub mod registry;
 pub mod store;
@@ -40,8 +41,8 @@ pub use ephemeral::prune_ephemeral_global;
 pub use paths::name_is_shared;
 pub use store::{
     global_get, global_get_nonempty, global_get_object, global_list, global_modify_object,
-    global_read_for_edit, global_set, global_snapshot, global_write_content, project_get,
-    project_list, project_path, project_read_for_edit, project_rename, project_set,
+    global_read_for_edit, global_set, global_set_many, global_snapshot, global_write_content,
+    project_get, project_list, project_path, project_read_for_edit, project_rename, project_set,
     project_write_content,
 };
 

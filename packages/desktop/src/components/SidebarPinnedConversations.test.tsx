@@ -63,6 +63,26 @@ vi.mock("@/lib/project-auto-expand", () => ({
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
+// Ordering, ports, and activity have their own coverage; keep backend order and no badges.
+vi.mock("@/hooks/useStableFeatureOrder", () => ({
+  useStableFeatureOrder: (features: Feature[]) => features,
+}));
+
+vi.mock("@/hooks/useFeaturePorts", () => ({
+  NO_PORTS: [],
+  useFeaturePorts: () => new Map(),
+}));
+
+vi.mock("@/hooks/useLiveFeatureMeta", () => ({ useLiveFeatureMeta: () => ({}) }));
+
+vi.mock("@/hooks/usePinnedActivity", () => ({
+  usePinnedActivity: () => ({
+    shellCountByFeatureId: new Map(),
+    liveWorktreeFeatureIds: new Set(),
+    worktreeByFeatureId: new Map(),
+  }),
+}));
+
 // Stub the row so this suite stays focused on the section's own behavior
 // (fetch → header/empty, navigate, unpin) without wiring every store the row
 // reads. The stub surfaces the props the section is responsible for.
@@ -84,6 +104,7 @@ vi.mock("@/components/PinnedConversationRow", () => ({
 }));
 
 import { SidebarPinnedConversations } from "./SidebarPinnedConversations";
+import { useSidebarFilterStore } from "@/stores/sidebar-filter-store";
 
 function feature(id: number, projectId: number): Feature {
   return {
@@ -113,6 +134,22 @@ describe("SidebarPinnedConversations", () => {
     mocks.invalidateByUrlPrefix.mockClear();
     mocks.skipProjectAutoExpand.mockClear();
     mocks.setPinned([]);
+    useSidebarFilterStore.getState().close();
+  });
+
+  it("keeps only the pinned rows the sidebar filter matches", () => {
+    mocks.setPinned([feature(1, 5), { ...feature(2, 9), title: "Login bug" }]);
+    useSidebarFilterStore.getState().start("login");
+    renderSection();
+    expect(screen.getByText("open-2")).toBeInTheDocument();
+    expect(screen.queryByText("open-1")).not.toBeInTheDocument();
+  });
+
+  it("hides the section when the filter matches no pinned row", () => {
+    mocks.setPinned([feature(1, 5)]);
+    useSidebarFilterStore.getState().start("zzz");
+    const { container } = renderSection();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("renders nothing when no conversation is pinned", () => {

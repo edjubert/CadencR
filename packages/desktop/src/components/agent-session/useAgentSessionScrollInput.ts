@@ -4,16 +4,20 @@ import { isIos } from "@/lib/is-ios";
 import { isResizing } from "@/lib/resize-coordinator";
 import {
   canScrollStream,
+  findStreamItemList,
   isVerticalScrollbarPointer,
   pinToBottom,
   HISTORY_SCROLL_TOP_PX,
   type ScrollRef,
 } from "./agent-session-scroll-utils";
+import type { ScrollAnchorGuard } from "./stream-scroll-anchor";
 
 interface ScrollInputParams {
   scrollerElRef: React.MutableRefObject<HTMLElement | null>;
   /** Bottom-stick engaged? Read live so the height-pin observer respects it. */
   stickRef: React.MutableRefObject<boolean>;
+  /** Attached to the scroller alongside the height-pin observer. */
+  anchorGuard: Pick<ScrollAnchorGuard, "attach" | "detach">;
   historyLoadArmedRef: React.MutableRefObject<boolean>;
   lastScrollTopRef: React.MutableRefObject<number>;
   userScrollIntentRef: React.MutableRefObject<boolean>;
@@ -26,6 +30,7 @@ interface ScrollInputParams {
 interface ScrollContainerRefParams {
   scrollerElRef: ScrollInputParams["scrollerElRef"];
   stickRef: ScrollInputParams["stickRef"];
+  anchorGuard: ScrollInputParams["anchorGuard"];
   lastScrollTopRef: ScrollInputParams["lastScrollTopRef"];
   growthObserverRef: React.MutableRefObject<MutationObserver | null>;
   onKeyDown: (event: KeyboardEvent) => void;
@@ -36,9 +41,16 @@ interface ScrollContainerRefParams {
   onTouchMove: (event: TouchEvent) => void;
 }
 
+/**
+ * Virtuoso's `scrollerRef`. Its identity must hold across renders, so every
+ * handler it closes over is stable: Virtuoso re-runs its ref effect when it
+ * changes, detaching and re-attaching every listener and observer — and
+ * dropping the anchor guard's bridge mid-frame.
+ */
 function useScrollContainerRef({
   scrollerElRef,
   stickRef,
+  anchorGuard,
   lastScrollTopRef,
   growthObserverRef,
   onKeyDown,
@@ -62,6 +74,7 @@ function useScrollContainerRef({
       }
       growthObserverRef.current?.disconnect();
       growthObserverRef.current = null;
+      anchorGuard.detach();
       scrollerElRef.current = element;
       if (element) {
         lastScrollTopRef.current = element.scrollTop;
@@ -72,9 +85,11 @@ function useScrollContainerRef({
         element.addEventListener("touchstart", onTouchStart, { passive: true });
         element.addEventListener("touchmove", onTouchMove, { passive: true });
         observeListGrowth(element, stickRef, growthObserverRef);
+        anchorGuard.attach(element);
       }
     },
     [
+      anchorGuard,
       growthObserverRef,
       lastScrollTopRef,
       onKeyDown,
@@ -92,8 +107,7 @@ function useScrollContainerRef({
 /**
  * Owns the raw DOM input listeners that disengage bottom-stick and arm
  * history loading. Split out of `useAgentSessionScroll` to keep that file
- * under the 400-line cap; the handler bodies and their `scrollContainerRef`
- * callback are unchanged. Synchronous `wheel`/`touchmove`-up disengage fires
+ * under the 400-line cap. Synchronous `wheel`/`touchmove`-up disengage fires
  * before the browser repaints, so a streaming-token re-anchor in the same
  * commit can't undo the user's scroll. We only disengage when the viewport
  * can actually scroll — wheel-up on a short session is idle intent, not a
@@ -102,6 +116,7 @@ function useScrollContainerRef({
 export function useAgentSessionScrollInput({
   scrollerElRef,
   stickRef,
+  anchorGuard,
   historyLoadArmedRef,
   lastScrollTopRef,
   userScrollIntentRef,
@@ -183,6 +198,7 @@ export function useAgentSessionScrollInput({
   return useScrollContainerRef({
     scrollerElRef,
     stickRef,
+    anchorGuard,
     lastScrollTopRef,
     growthObserverRef,
     onKeyDown,
@@ -219,7 +235,7 @@ export function useAgentSessionScrollInput({
  *
  * Writing an absolute `scrollTop` fights Virtuoso's iOS path, which corrects
  * position through a CSS "deviation" offset instead of a direct scroll (the
- * same reason `captureHistoryAnchor` skips iOS). The two form a closed loop:
+ * same reason `ScrollAnchorGuard` skips iOS). The two form a closed loop:
  * our write emits a `scroll` event → Virtuoso re-renders and re-applies its
  * correction → that commit mutates the observed list → the observer fires and
  * we write again. It never converges, because the list's height oscillates
@@ -233,7 +249,7 @@ function observeListGrowth(
   observerRef: React.MutableRefObject<MutationObserver | null>,
 ): void {
   if (isIos()) return;
-  const list = scroller.querySelector<HTMLElement>('[data-testid="virtuoso-item-list"]');
+  const list = findStreamItemList(scroller);
   if (!list) return;
   let lastScrollHeight = scroller.scrollHeight;
   const observer = new MutationObserver(() => {

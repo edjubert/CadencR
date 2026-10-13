@@ -25,8 +25,6 @@ describe("persistedQueries", () => {
 
   it("persists per-project settings sub-routes", () => {
     expect(shouldDehydrateQuery(makeQuery("/api/projects/42/settings"))).toBe(true);
-    expect(shouldDehydrateQuery(makeQuery("/api/projects/42/model-settings"))).toBe(true);
-    expect(shouldDehydrateQuery(makeQuery("/api/projects/42/provider-settings"))).toBe(true);
   });
 
   it("does NOT persist agent-state (multi-MB payload)", () => {

@@ -54,6 +54,11 @@ pub struct Feature {
     pub is_pinned: bool,
     pub spawned_by_feature_id: Option<i64>,
     pub spawn_link_type: Option<String>,
+    /// Latest user message across the conversation's sessions, else its
+    /// creation time: the sidebar's sort key. Set by the list endpoints only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[sqlx(default)]
+    pub last_activity_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -185,6 +190,7 @@ mod tests {
             is_pinned: false,
             spawned_by_feature_id: None,
             spawn_link_type: None,
+            last_activity_at: None,
         };
 
         let json = serde_json::to_string(&feature).unwrap();

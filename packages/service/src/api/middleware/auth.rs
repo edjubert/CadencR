@@ -22,9 +22,9 @@ pub async fn auth_middleware(
         return misdirected();
     }
 
-    // Browser WebSocket clients can't set custom headers; they authenticate
-    // via Sec-WebSocket-Protocol, validated inside the upgrade handler.
-    if is_websocket_upgrade(&request) {
+    // Only known WebSocket routes authenticate inside their upgrade handler.
+    // An Upgrade header on an ordinary API route must not bypass token checks.
+    if is_websocket_upgrade(&request) && is_known_ws_path(request.uri().path()) {
         return next.run(request).await;
     }
 
@@ -57,6 +57,15 @@ pub(crate) fn is_websocket_upgrade(request: &Request) -> bool {
         .get(header::UPGRADE)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.eq_ignore_ascii_case("websocket"))
+}
+
+/// The routes that self-authenticate via `middleware::authenticate_ws`.
+/// A new socket route must be added deliberately and wired to that check.
+pub(super) fn is_known_ws_path(path: &str) -> bool {
+    path == "/ws"
+        || path == "/api/terminal/ws"
+        || path == "/api/neovim/ws"
+        || (path.starts_with("/api/lsp/sessions/") && path.ends_with("/connect"))
 }
 
 /// DNS-rebinding defense: `Host` must name the loopback interface and carry
@@ -101,7 +110,12 @@ fn split_host_port(host: &str) -> Option<(&str, Option<u16>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{body::Body, http::Request as HttpRequest, http::StatusCode, routing::get, Router};
+    use axum::{
+        body::Body,
+        http::{Request as HttpRequest, StatusCode},
+        routing::{get, post},
+        Router,
+    };
     use tower::ServiceExt;
 
     const TEST_PORT: u16 = 5005;
@@ -115,6 +129,11 @@ mod tests {
         state.port = TEST_PORT;
         Router::new()
             .route("/api/health", get(|| async { "ok" }))
+            .route(
+                "/api/projects/1/publication-release",
+                post(|| async { "ok" }),
+            )
+            .route("/ws", get(|| async { "ok" }))
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 auth_middleware,
@@ -189,14 +208,76 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn skips_ws_upgrades() {
+    async fn skips_known_ws_upgrades() {
         let req = req_builder()
+            .uri("/ws")
             .header(header::UPGRADE, "websocket")
             .header(header::CONNECTION, "Upgrade")
             .body(Body::empty())
             .unwrap();
         let resp = app_with_token("secret").await.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn ordinary_api_cannot_bypass_auth_with_upgrade() {
+        let app = app_with_token("secret").await;
+        for (method, path) in [
+            ("GET", "/api/health"),
+            ("POST", "/api/projects/1/publication-release"),
+        ] {
+            for token in [None, Some("wrong"), Some("secret")] {
+                let mut builder = req_builder()
+                    .method(method)
+                    .uri(path)
+                    .header(header::UPGRADE, "websocket")
+                    .header(header::CONNECTION, "Upgrade");
+                if let Some(token) = token {
+                    builder = builder.header(AUTH_HEADER, token);
+                }
+                let response = app
+                    .clone()
+                    .oneshot(builder.body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status(),
+                    if token == Some("secret") {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::UNAUTHORIZED
+                    },
+                    "{method} {path} must still validate the token"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn internal_mcp_cannot_bypass_auth_with_upgrade() {
+        let app = app_with_token("ui-secret").await;
+        for token in [None, Some("ui-secret"), Some("test-mcp-token")] {
+            let mut builder = req_builder()
+                .method("POST")
+                .uri("/internal/mcp/project/context")
+                .header(header::UPGRADE, "websocket");
+            if let Some(token) = token {
+                builder = builder.header(MCP_CONTROL_HEADER, token);
+            }
+            let response = app
+                .clone()
+                .oneshot(builder.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                if token == Some("test-mcp-token") {
+                    StatusCode::NOT_FOUND
+                } else {
+                    StatusCode::UNAUTHORIZED
+                }
+            );
+        }
     }
 
     #[tokio::test]

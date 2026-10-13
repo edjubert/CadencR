@@ -23,7 +23,14 @@ vi.mock("@tanstack/react-router", () => ({
     useParams: vi.fn(() => ({})),
   }),
   useNavigate: () => vi.fn(),
-  useRouterState: () => ({ location: { pathname: "/settings" } }),
+  useRouterState: (options?: {
+    select?: (state: {
+      location: { pathname: string; search?: Record<string, unknown> };
+    }) => unknown;
+  }) => {
+    const state = { location: { pathname: "/settings" } };
+    return options?.select ? options.select(state) : state;
+  },
   Link: ({ children, to }: { children: unknown; to: string }) => {
     const React = require("react");
     return React.createElement("a", { href: to }, children);
@@ -87,9 +94,10 @@ describe("SettingsPage route", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders runtime & models section with the model selector", () => {
+  it("renders the auto-naming section with the model selector and prompt", () => {
     render(<SettingsPage />);
-    expect(screen.getByRole("heading", { name: /Runtime & Models/ })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Auto-naming" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Naming prompt" })).toBeInTheDocument();
     expect(screen.getByTestId("model-selector")).toBeInTheDocument();
   });
 

@@ -19,7 +19,9 @@ import { notifyRateLimited, WS_RATE_LIMIT_RETRY_MS } from "@/lib/ws-reconnect";
  * confusing — the user wasn't talking to the agent. Route them to a toast
  * instead, and don't transition the turn lifecycle since no turn was active.
  */
-const TOAST_ERROR_CODES = new Set(["MODE_NOT_SUPPORTED"]);
+// LAST_USED_MODEL_SAVE_FAILED: the prompt itself went through; only
+// remembering its model for the next new conversation failed.
+const TOAST_ERROR_CODES = new Set(["MODE_NOT_SUPPORTED", "LAST_USED_MODEL_SAVE_FAILED"]);
 const COMPACT_PRE_START_ERROR_CODES = new Set([
   "COMPACT_REJECTED",
   "SDK_SPAWN_ERROR",

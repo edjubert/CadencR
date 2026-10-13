@@ -1,63 +1,124 @@
-import { describe, expect, it, vi } from "vitest";
-import { http, HttpResponse } from "msw";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { render, screen, waitFor } from "@/test-utils";
-import { server } from "@/test/msw-server";
-import { AutoNamePromptSetting } from "./AutoNamePromptSetting";
+import { render, screen } from "@/test-utils";
+import { useDebouncedSetting } from "@/hooks/useDebouncedSetting";
+import { useGetAutoNamePrompt } from "@/api/generated";
+import { AutoNamePromptSetting, storedAutoNamePrompt } from "./AutoNamePromptSetting";
 
-const url = "*/api/workspace/settings/auto_name_system_prompt";
+vi.mock("@/hooks/useDebouncedSetting", () => ({
+  useDebouncedSetting: vi.fn(),
+}));
+
+vi.mock("@/api/generated", () => ({
+  useGetAutoNamePrompt: vi.fn(),
+}));
+
+const DEFAULT_PROMPT = "You are a feature naming assistant.";
+const setValue = vi.fn<(value: string) => void>();
+
+function mockSetting(value: string | null): void {
+  vi.mocked(useDebouncedSetting).mockReturnValue({
+    value,
+    setValue,
+    isLoading: false,
+    isFetched: true,
+    isSaving: false,
+  });
+}
+
+describe("storedAutoNamePrompt", () => {
+  it("stores the default and blank prompts as empty so they follow the built-in", () => {
+    expect(storedAutoNamePrompt(DEFAULT_PROMPT, DEFAULT_PROMPT)).toBe("");
+    expect(storedAutoNamePrompt(`  ${DEFAULT_PROMPT}\n`, DEFAULT_PROMPT)).toBe("");
+    expect(storedAutoNamePrompt("   ", DEFAULT_PROMPT)).toBe("");
+  });
+
+  it("stores an edited prompt verbatim", () => {
+    expect(storedAutoNamePrompt(`${DEFAULT_PROMPT} Use French.`, DEFAULT_PROMPT)).toBe(
+      `${DEFAULT_PROMPT} Use French.`,
+    );
+  });
+});
 
 describe("AutoNamePromptSetting", () => {
-  it("shows the stored prompt and debounces writes", async () => {
-    let saved: string | undefined;
-    server.use(
-      http.get(url, () => HttpResponse.json({ value: "Name sessions my way" })),
-      http.put(url, async ({ request }) => {
-        const body = (await request.json()) as { value: string };
-        saved = body.value;
-        return HttpResponse.json({ value: body.value });
-      }),
-    );
+  beforeEach(() => {
+    setValue.mockClear();
+    vi.mocked(useGetAutoNamePrompt).mockReturnValue({
+      data: { default_prompt: DEFAULT_PROMPT },
+      error: null,
+    } as unknown as ReturnType<typeof useGetAutoNamePrompt>);
+  });
+
+  it("pre-fills the built-in prompt and offers no reset while it is in use", () => {
+    mockSetting(null);
     render(<AutoNamePromptSetting />);
+
+    expect(screen.getByRole("textbox", { name: /auto-naming system prompt/i })).toHaveValue(
+      DEFAULT_PROMPT,
+    );
+    expect(screen.queryByRole("button", { name: "Reset naming prompt" })).not.toBeInTheDocument();
+  });
+
+  it("saves additions to the prompt on blur, not per keystroke", async () => {
+    mockSetting(null);
     const user = userEvent.setup();
-
-    const textarea = await screen.findByRole("textbox");
-    await waitFor(() => expect(textarea).toHaveValue("Name sessions my way"));
-
-    await user.clear(textarea);
-    await user.type(textarea, "Name sessions differently");
-    await waitFor(() => expect(saved).toBe("Name sessions differently"));
-  });
-
-  it("disables Reset until a custom prompt exists, then clears the setting on click", async () => {
-    let value = "Name sessions my way";
-    const put = vi.fn();
-    server.use(
-      http.get(url, () => HttpResponse.json({ value })),
-      http.put(url, () => {
-        put();
-        value = "";
-        return HttpResponse.json({ value: "" });
-      }),
-    );
     render(<AutoNamePromptSetting />);
 
-    const reset = await screen.findByRole("button", { name: /reset/i });
-    await waitFor(() => expect(reset).not.toBeDisabled());
-    reset.click();
+    const field = screen.getByRole("textbox", { name: /auto-naming system prompt/i });
+    await user.click(field);
+    await user.keyboard("{End} Use French.");
+    expect(setValue).not.toHaveBeenCalled();
 
-    await waitFor(() => expect(put).toHaveBeenCalled());
-    await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue(""));
-    await waitFor(() => expect(screen.getByRole("button", { name: /reset/i })).toBeDisabled());
+    await user.tab();
+    expect(setValue).toHaveBeenCalledTimes(1);
+    expect(setValue).toHaveBeenCalledWith(`${DEFAULT_PROMPT} Use French.`);
   });
 
-  it("treats an unset setting as an empty prompt", async () => {
-    server.use(http.get(url, () => HttpResponse.json({ value: null })));
+  it("does not rewrite the setting when the prompt is unchanged", async () => {
+    mockSetting(null);
+    const user = userEvent.setup();
     render(<AutoNamePromptSetting />);
 
-    const textarea = await screen.findByRole("textbox");
-    await waitFor(() => expect(textarea).not.toBeDisabled());
-    expect(textarea).toHaveValue("");
-    expect(screen.getByRole("button", { name: /reset/i })).toBeDisabled();
+    await user.click(screen.getByRole("textbox", { name: /auto-naming system prompt/i }));
+    await user.tab();
+
+    expect(setValue).not.toHaveBeenCalled();
+  });
+
+  it("saves a pending edit when unmounted before blur", async () => {
+    mockSetting(null);
+    const user = userEvent.setup();
+    const { unmount } = render(<AutoNamePromptSetting />);
+
+    await user.click(screen.getByRole("textbox", { name: /auto-naming system prompt/i }));
+    await user.keyboard("{End} Use French.");
+    unmount();
+
+    expect(setValue).toHaveBeenCalledWith(`${DEFAULT_PROMPT} Use French.`);
+  });
+
+  it("shows a custom prompt and resets it back to the built-in", async () => {
+    mockSetting("Name sessions in French.");
+    const user = userEvent.setup();
+    render(<AutoNamePromptSetting />);
+
+    const field = screen.getByRole("textbox", { name: /auto-naming system prompt/i });
+    expect(field).toHaveValue("Name sessions in French.");
+
+    await user.click(screen.getByRole("button", { name: "Reset naming prompt" }));
+
+    expect(setValue).toHaveBeenCalledWith("");
+    expect(field).toHaveValue(DEFAULT_PROMPT);
+  });
+
+  it("surfaces a failure to load the default prompt", () => {
+    mockSetting(null);
+    vi.mocked(useGetAutoNamePrompt).mockReturnValue({
+      data: undefined,
+      error: new Error("boom"),
+    } as unknown as ReturnType<typeof useGetAutoNamePrompt>);
+    render(<AutoNamePromptSetting />);
+
+    expect(screen.getByText("Failed to load the default naming prompt.")).toBeInTheDocument();
   });
 });

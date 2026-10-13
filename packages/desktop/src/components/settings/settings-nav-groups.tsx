@@ -2,16 +2,18 @@ import type { SettingsNavGroup } from "@/components/settings/SettingsNavSidebar"
 import {
   BarChart3,
   Bell,
-  BrainCircuit,
   Code2,
   GitMerge,
   Globe,
   HardDrive,
   Info,
+  ListFilter,
   MonitorCog,
   Network,
   Palette,
+  PanelLeft,
   Plug,
+  Tag,
 } from "lucide-react";
 
 /**
@@ -36,6 +38,16 @@ export const NAV_GROUPS: SettingsNavGroup[] = [
         id: "interface",
         label: "Interface & Zoom",
         icon: <MonitorCog className="size-4" />,
+      },
+      {
+        id: "sidebar-display",
+        label: "Sidebar",
+        icon: <PanelLeft className="size-4" />,
+      },
+      {
+        id: "sidebar-views",
+        label: "Saved views",
+        icon: <ListFilter className="size-4" />,
       },
       {
         id: "notifications",
@@ -68,9 +80,9 @@ export const NAV_GROUPS: SettingsNavGroup[] = [
     label: "Agents",
     items: [
       {
-        id: "runtime",
-        label: "Runtime & Models",
-        icon: <BrainCircuit className="size-4" />,
+        id: "auto-naming",
+        label: "Auto-naming",
+        icon: <Tag className="size-4" />,
       },
     ],
   },

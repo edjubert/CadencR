@@ -177,56 +177,6 @@ export function useSetWorkspaceProviderSetting(
   });
 }
 
-export function useGetProjectProviderSettings(
-  projectId: number,
-  arg: boolean | QueryExtras = true,
-) {
-  const { enabled = true, staleTime } = readQueryExtras(arg);
-  return useQuery({
-    queryKey: ["projects", "provider-settings", projectId],
-    queryFn: () =>
-      customInstance<ProviderSettings>({
-        method: "GET",
-        url: `/api/projects/${projectId}/provider-settings`,
-      }),
-    enabled,
-    staleTime,
-  });
-}
-
-export function useSetProjectProviderSetting(
-  callbacks?: ProviderMutationCallbacks<{
-    projectId: number;
-    providerType: AgentTypeSetting;
-    provider: string;
-  }>,
-) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({
-      projectId,
-      providerType,
-      provider,
-    }: {
-      projectId: number;
-      providerType: AgentTypeSetting;
-      provider: string;
-    }) =>
-      customInstance<{ success: boolean }>({
-        method: "PUT",
-        url: `/api/projects/${projectId}/provider-settings`,
-        data: { provider_type: providerType, provider },
-      }),
-    onSuccess: async (data, variables) => {
-      await queryClient.invalidateQueries({
-        queryKey: ["projects", "provider-settings", variables.projectId],
-      });
-      callbacks?.onSuccess?.(data, variables);
-    },
-    onError: (error, variables) => callbacks?.onError?.(error, variables),
-  });
-}
-
 // ---------------------------------------------------------------------------
 // Claude Code profiles & custom models
 // ---------------------------------------------------------------------------

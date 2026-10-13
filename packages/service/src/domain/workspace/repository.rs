@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crate::domain::agents::providers::provider_default_model;
 use crate::domain::agents::runtime::{
-    default_provider_settings, runtime_setting_key, validate_agent_type,
+    default_provider_settings, model_setting_key, runtime_setting_key, validate_agent_type,
 };
 
 const MODEL_KEYS: &[(&str, &str)] = &[
@@ -92,8 +92,7 @@ pub async fn set_model_setting(
             agent_type
         )));
     }
-    let db_key = format!("model_{}", agent_type);
-    set_setting(pool, &db_key, model_id).await
+    set_setting(pool, &model_setting_key(agent_type), model_id).await
 }
 
 pub async fn get_provider_settings(pool: &SqlitePool) -> Result<AgentProviderSettings, AppError> {

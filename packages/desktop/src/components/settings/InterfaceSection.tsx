@@ -6,7 +6,8 @@ import { useZoom } from "@/hooks/useZoom";
 import { useShortcutsHelpStore } from "@/stores/shortcuts-help-store";
 import { formatCombo } from "@/lib/shortcuts/format";
 import { getRegistryShortcut } from "@/lib/shortcuts/resolve";
-import { SidebarProviderLogosSetting } from "./SidebarProviderLogosSetting";
+import { AutoLayoutDefaultSetting } from "./AutoLayoutDefaultSetting";
+import { AgentMessageNavigatorSetting } from "./AgentMessageNavigatorSetting";
 import { IconTile } from "./IconTile";
 import { SettingsCard } from "./SettingsCard";
 import { SettingsRow } from "./SettingsRow";
@@ -28,7 +29,7 @@ export function InterfaceSection(): React.JSX.Element {
     <SettingsSection
       id="interface"
       title="Interface & Zoom"
-      subtitle="Sidebar · UI scaling · Keyboard"
+      subtitle="Agent tab · Auto layout · UI scaling · Keyboard"
     >
       <SettingsCard>
         <SettingsRow
@@ -90,7 +91,8 @@ export function InterfaceSection(): React.JSX.Element {
             </Button>
           }
         />
-        <SidebarProviderLogosSetting />
+        <AgentMessageNavigatorSetting />
+        {!isMobile && <AutoLayoutDefaultSetting />}
       </SettingsCard>
     </SettingsSection>
   );

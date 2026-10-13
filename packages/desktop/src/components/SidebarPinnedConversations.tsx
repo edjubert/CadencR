@@ -1,33 +1,35 @@
 import { useCallback, useMemo, useRef, type ReactElement } from "react";
-import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { PinIcon } from "lucide-react";
 import { toast } from "sonner";
-import {
-  useListPinnedFeatures,
-  useListProjects,
-  useUpdateFeaturePinned,
-  type Feature,
-  type Project,
-} from "@/api/generated";
+import { useListPinnedFeatures, useUpdateFeaturePinned, type Feature } from "@/api/generated";
 import { PinnedConversationRow } from "@/components/PinnedConversationRow";
-import { wsSessionIdFromFeature } from "@/lib/ws-session-id";
-import { getFocusedTabForFeature } from "@/lib/feature-focus-handoff";
+import { SidebarBlock } from "@/components/SidebarBlock";
+import { useSidebarOption } from "@/stores/sidebar-config-store";
+import { useCrossProjectNavigate } from "@/hooks/useCrossProjectNavigate";
 import { skipProjectAutoExpand } from "@/lib/project-auto-expand";
 import { invalidateByUrlPrefix } from "@/lib/queryClient";
 import { apiErrorMessage } from "@/lib/api-errors";
+import { useReorderAnimation } from "@/hooks/useReorderAnimation";
+import { useStableFeatureOrder } from "@/hooks/useStableFeatureOrder";
+import { NO_PORTS, useFeaturePorts } from "@/hooks/useFeaturePorts";
+import { usePinnedActivity } from "@/hooks/usePinnedActivity";
+import { useSidebarFilteredFeatures } from "@/hooks/useSidebarFilteredFeatures";
+import { useSidebarFilterQuery } from "@/stores/sidebar-filter-store";
 
 /**
  * Global "Pinned" section rendered above the project list. Pinning is a
  * feature-level concept (`features.is_pinned`), so a single backend query
  * returns every pinned conversation across all projects — each row carries its
  * project color dot so the user can tell them apart at a glance. Renders
- * nothing when no conversation is pinned.
+ * nothing when no conversation is pinned, unless empty blocks are kept.
  *
  * Unpinning here and pinning from a project row both write the same column and
  * invalidate the `/api/features` cache prefix (which covers this list); there
  * is no optimistic state — the section re-renders from the refetched data.
  */
+const EMPTY_FEATURES: Feature[] = [];
+
 export function SidebarPinnedConversations({
   activeFeatureId,
   onSelectFeature,
@@ -35,40 +37,26 @@ export function SidebarPinnedConversations({
   activeFeatureId: number | null;
   onSelectFeature: (featureId: number) => void;
 }): ReactElement | null {
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { data: pinnedFeatures = [] } = useListPinnedFeatures();
-  const { data: projects = [] } = useListProjects();
-
-  const projectsById = useMemo(() => {
-    const map = new Map<number, Project>();
-    for (const project of projects) map.set(project.id, project);
-    return map;
-  }, [projects]);
-
-  // Keep navigation stable across active-row changes: read the live active id
-  // through a ref so the click handler's identity doesn't churn every render.
-  const activeFeatureIdRef = useRef(activeFeatureId);
-  activeFeatureIdRef.current = activeFeatureId;
-
+  const { data: fetchedPinned = EMPTY_FEATURES } = useListPinnedFeatures();
+  const orderedPinned = useStableFeatureOrder(fetchedPinned);
+  const activity = usePinnedActivity(fetchedPinned);
+  const pinnedFeatures = useSidebarFilteredFeatures(orderedPinned, activity.worktreeByFeatureId);
+  const listRef = useRef<HTMLElement>(null);
+  const pinnedIds = useMemo(() => pinnedFeatures.map((feature) => feature.id), [pinnedFeatures]);
+  useReorderAnimation(listRef, pinnedIds);
+  const portsByFeatureId = useFeaturePorts();
+  const crossProjectNavigate = useCrossProjectNavigate(activeFeatureId, onSelectFeature);
+  // Opening from the pinned section must not unfold the parent project.
   const handleNavigate = useCallback(
     (feature: Feature): void => {
-      const project = projectsById.get(feature.project_id);
-      if (!project) return;
-      onSelectFeature(feature.id);
-      // Opening from the pinned section must not unfold the parent project.
       skipProjectAutoExpand(feature.project_id);
-      const focusTab = getFocusedTabForFeature(activeFeatureIdRef.current);
-      void navigate({
-        to: "/ws-session/$sessionId",
-        params: { sessionId: wsSessionIdFromFeature(feature.id) },
-        search: focusTab
-          ? { cwd: project.path, featureId: feature.id, projectId: project.id, focusTab }
-          : { cwd: project.path, featureId: feature.id, projectId: project.id },
-      });
+      crossProjectNavigate(feature);
     },
-    [navigate, projectsById, onSelectFeature],
+    [crossProjectNavigate],
   );
+  const hideEmpty = useSidebarOption("hideEmptyBlocks");
+  const filtering = useSidebarFilterQuery() !== "";
 
   const { mutate: updateFeaturePinned } = useUpdateFeaturePinned({
     mutation: {
@@ -86,23 +74,33 @@ export function SidebarPinnedConversations({
     [updateFeaturePinned],
   );
 
-  if (pinnedFeatures.length === 0) return null;
+  const isEmpty = pinnedFeatures.length === 0;
+  // An empty Pinned block only shows when empty blocks are kept and nothing is filtered out.
+  if (isEmpty && (hideEmpty || filtering)) return null;
 
   return (
-    <div className="mb-2 flex shrink-0 flex-col gap-0.5 px-1">
-      <div className="flex items-center gap-1.5 px-2 pb-0.5 pt-1 text-[10px] font-bold uppercase tracking-[0.12em] text-muted-foreground">
-        <PinIcon className="size-3 shrink-0" />
-        <span>Pinned</span>
-      </div>
+    <SidebarBlock
+      ref={listRef}
+      block="pinned"
+      label="Pinned"
+      icon={PinIcon}
+      count={pinnedFeatures.length}
+      empty="Pin a conversation to keep it here"
+      isEmpty={isEmpty}
+    >
       {pinnedFeatures.map((feature) => (
         <PinnedConversationRow
           key={feature.id}
           feature={feature}
           activeFeatureId={activeFeatureId}
+          ports={portsByFeatureId.get(feature.id) ?? NO_PORTS}
+          shellCount={activity.shellCountByFeatureId.get(feature.id) ?? 0}
+          hasLiveWorktree={activity.liveWorktreeFeatureIds.has(feature.id)}
+          worktree={activity.worktreeByFeatureId.get(feature.id)}
           onNavigate={handleNavigate}
           onUnpin={handleUnpin}
         />
       ))}
-    </div>
+    </SidebarBlock>
   );
 }

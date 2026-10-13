@@ -40,7 +40,14 @@ vi.mock("@tanstack/react-router", () => ({
   }),
   useNavigate: () => vi.fn(),
   Navigate: () => null,
-  useRouterState: () => ({ location: { pathname: "/" } }),
+  useRouterState: (options?: {
+    select?: (state: {
+      location: { pathname: string; search?: Record<string, unknown> };
+    }) => unknown;
+  }) => {
+    const state = { location: { pathname: "/" } };
+    return options?.select ? options.select(state) : state;
+  },
   Link: ({ children, to }: { children: unknown; to: string }) => {
     const React = require("react");
     return React.createElement("a", { href: to }, children);
@@ -215,10 +222,6 @@ vi.mock("@/hooks/useResolvedModel", () => ({
   useResolvedModel: vi.fn(() => ({
     resolveProvider: vi.fn(() => "claude_code"),
     resolveModel: vi.fn(() => "claude-opus-4-5"),
-    resolveModelThinkingEffort: vi.fn(() => undefined),
-    setModelThinkingEffort: vi.fn(),
-    handleProviderChange: vi.fn(),
-    handleModelChange: vi.fn(),
   })),
 }));
 
@@ -227,10 +230,6 @@ vi.mock("@/contexts/ResolvedModelContext", () => ({
   useResolvedModelContext: vi.fn(() => ({
     resolveProvider: vi.fn(() => "claude_code"),
     resolveModel: vi.fn(() => "claude-opus-4-5"),
-    resolveModelThinkingEffort: vi.fn(() => undefined),
-    setModelThinkingEffort: vi.fn(),
-    handleProviderChange: vi.fn(),
-    handleModelChange: vi.fn(),
   })),
 }));
 

@@ -1,99 +1,110 @@
 {
   "$schema": "https://v2-9-14.turborepo.dev/schema.json",
   "globalDependencies": [
-    "Cargo.lock",
-    "Cargo.toml",
-    "scripts/cargo-env.mjs"
+    ".oxfmtrc.json",
+    ".oxlintrc.json",
+    "pnpm-workspace.yaml",
+    "packages/plugin-core/**",
+    "packages/registry-core/**",
+    "packages/registry-publisher/**",
+    "tooling/marketplace-registry/tests/contribution.test.mjs"
   ],
-  "globalPassThroughEnv": [
-    "RUSTC_WRAPPER"
-  ],
+  "globalPassThroughEnv": ["RUSTC_WRAPPER"],
   "tasks": {
-    "build": {
+    "transit": {
       "dependsOn": [
-        "^build"
-      ],
+        "^transit"
+      ]
+    },
+    "build": {
+      "dependsOn": ["^build"],
       "outputs": []
     },
     "build:local": {
-      "dependsOn": [
-        "^build"
-      ],
+      "dependsOn": ["^build"],
       "outputs": []
     },
     "dev": {
-      "dependsOn": [
-        "^build"
-      ],
+      "dependsOn": ["^build"],
       "cache": false
     },
     "@cadencr/service#dev": {
       "cache": false,
       "persistent": true
     },
+    "@cadencr/service#build": {
+      "cache": false
+    },
+    "@cadencr/service#build:debug": {
+      "cache": false
+    },
+    "@cadencr/service#test": {
+      "cache": false
+    },
+    "@cadencr/service#lint": {
+      "cache": false
+    },
+    "@cadencr/service#format:check": {
+      "cache": false
+    },
     "@cadencr/desktop#dev": {
-      "dependsOn": [
-        "^build",
-        "@cadencr/service#build:debug"
-      ],
+      "dependsOn": ["^build", "@cadencr/service#build:debug"],
       "cache": false,
       "persistent": true
     },
     "@cadencr/desktop#build": {
-      "dependsOn": [
-        "^build",
-        "@cadencr/service#build"
-      ],
-      "outputs": [
-        "out/**",
-        "dist-electron/**"
-      ],
+      "dependsOn": ["^build", "@cadencr/service#build"],
+      "outputs": ["out/**", "dist-electron/**"],
       "cache": false
     },
     "@cadencr/desktop#build:local": {
-      "dependsOn": [
-        "^build",
-        "@cadencr/service#build"
-      ],
-      "outputs": [
-        "out/**",
-        "dist-electron/**"
-      ],
+      "dependsOn": ["^build", "@cadencr/service#build"],
+      "outputs": ["out/**", "dist-electron/**"],
       "cache": false
     },
     "@cadencr/desktop#build:electron": {
-      "dependsOn": [
-        "^build",
-        "@cadencr/service#build"
-      ],
-      "outputs": [
-        "out/**",
-        "dist-electron/**"
-      ],
+      "dependsOn": ["^build", "@cadencr/service#build"],
+      "outputs": ["out/**", "dist-electron/**"],
       "cache": false
     },
     "test": {
       "dependsOn": [
-        "^build"
+        "transit"
+      ],
+      "outputs": []
+    },
+    "@cadencr/landing#test": {
+      "dependsOn": [
+        "transit"
+      ],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/desktop/src/lib/shortcuts/**",
+        "$TURBO_ROOT$/packages/desktop/src/shared/**"
       ],
       "outputs": []
     },
     "@cadencr/brand#test": {
-      "dependsOn": [
-        "^build"
-      ],
       "outputs": [],
       "cache": false
     },
     "lint": {
-      "dependsOn": [
-        "^build"
-      ],
       "outputs": []
     },
     "ts-check": {
       "dependsOn": [
-        "^build"
+        "transit"
+      ],
+      "outputs": []
+    },
+    "@cadencr/landing#ts-check": {
+      "dependsOn": [
+        "transit"
+      ],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/desktop/src/lib/shortcuts/**",
+        "$TURBO_ROOT$/packages/desktop/src/shared/**"
       ],
       "outputs": []
     },
@@ -108,9 +119,7 @@
       "outputs": []
     },
     "build:release": {
-      "dependsOn": [
-        "^build:release"
-      ],
+      "dependsOn": ["^build:release"],
       "outputs": []
     }
   }
