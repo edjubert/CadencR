@@ -24,64 +24,81 @@ const FEATURE_COLUMNS: &str = r#"f.id, f.project_id, f.title, f.status,
             WHERE target_session.feature_id = f.id AND link.link_type IN ('spawned', 'handoff')
             ORDER BY link.created_at ASC, link.id ASC LIMIT 1) AS spawn_link_type"#;
 
+/// Latest user message per feature (`ua.last_user_at`): the list endpoints'
+/// sort key, exposed as `last_activity_at`.
+const LAST_USER_MESSAGE_JOIN: &str = r#"
+LEFT JOIN (
+  SELECT s.feature_id AS feature_id, MAX(m.created_at) AS last_user_at
+  FROM agent_sessions s
+  JOIN agent_messages m ON m.session_id = s.id AND m.role = 'user'
+  GROUP BY s.feature_id
+) ua ON ua.feature_id = f.id"#;
+
+const LAST_ACTIVITY_COLUMN: &str = "COALESCE(ua.last_user_at, f.created_at) AS last_activity_at";
+
 /// Join the latest agent session once so model/provider/thinking come from the same row.
 const LATEST_SESSION_JOIN: &str = r#"
 LEFT JOIN agent_sessions ls ON ls.id = (
   SELECT id FROM agent_sessions WHERE feature_id = f.id ORDER BY id DESC LIMIT 1
 )"#;
 
+/// Conversations matching `filter` (a `WHERE` body), most recently touched
+/// first: the latest *user* message in any of their sessions, else the creation
+/// time. One ordering for the project lists, Pinned and Recent.
+fn by_activity_sql(filter: &str) -> String {
+    format!(
+        "SELECT {FEATURE_COLUMNS}, {LAST_ACTIVITY_COLUMN} \
+         FROM features f \
+         {LATEST_SESSION_JOIN} \
+         {LAST_USER_MESSAGE_JOIN} \
+         WHERE {filter} \
+         ORDER BY datetime(last_activity_at) DESC, f.id DESC"
+    )
+}
+
 pub async fn list_by_project(
     pool: &SqlitePool,
     project_id: i64,
     include_archived: bool,
 ) -> Result<Vec<Feature>, AppError> {
-    let status_filter = if include_archived {
-        ""
+    let filter = if include_archived {
+        "f.project_id = ?"
     } else {
-        " AND f.status = 'active'"
+        "f.project_id = ? AND f.status = 'active'"
     };
-    // Order conversations by the most recent *user* message in any of their
-    // sessions, falling back to the feature creation time when none exists.
-    let sql = format!(
-        "SELECT {FEATURE_COLUMNS} \
-         FROM features f \
-         {LATEST_SESSION_JOIN} \
-         LEFT JOIN ( \
-             SELECT s.feature_id AS feature_id, MAX(m.created_at) AS last_user_at \
-             FROM agent_sessions s \
-             JOIN agent_messages m ON m.session_id = s.id AND m.role = 'user' \
-             GROUP BY s.feature_id \
-         ) ua ON ua.feature_id = f.id \
-         WHERE f.project_id = ?{status_filter} \
-         ORDER BY datetime(COALESCE(ua.last_user_at, f.created_at)) DESC, f.id DESC"
-    );
-    let rows = sqlx::query_as::<_, Feature>(AssertSqlSafe(sql))
+    let rows = sqlx::query_as::<_, Feature>(AssertSqlSafe(by_activity_sql(filter)))
         .bind(project_id)
         .fetch_all(pool)
         .await?;
     Ok(rows)
 }
 
+/// Every pinned conversation across all projects, for the global sidebar
+/// "Pinned" section. Pinning is only offered on active features, but the status
+/// filter guards against a stale pin on an archived row.
 pub async fn list_pinned(pool: &SqlitePool) -> Result<Vec<Feature>, AppError> {
-    // Every pinned conversation across all projects, for the global sidebar
-    // "Pinned" section. Mirrors `list_by_project`'s recency ordering (most
-    // recent user message, falling back to creation time) so pinned rows sort
-    // the same way as the per-project lists. Pinning is only offered on active
-    // features, but the status filter guards against a stale pin on an archived
-    // row.
-    let sql = format!(
-        "SELECT {FEATURE_COLUMNS} \
-         FROM features f \
-         {LATEST_SESSION_JOIN} \
-         LEFT JOIN ( \
-             SELECT s.feature_id AS feature_id, MAX(m.created_at) AS last_user_at \
-             FROM agent_sessions s \
-             JOIN agent_messages m ON m.session_id = s.id AND m.role = 'user' \
-             GROUP BY s.feature_id \
-         ) ua ON ua.feature_id = f.id \
-         WHERE f.is_pinned != 0 AND f.status = 'active' \
-         ORDER BY datetime(COALESCE(ua.last_user_at, f.created_at)) DESC, f.id DESC"
-    );
+    let sql = by_activity_sql("f.is_pinned != 0 AND f.status = 'active'");
+    let rows = sqlx::query_as::<_, Feature>(AssertSqlSafe(sql))
+        .fetch_all(pool)
+        .await?;
+    Ok(rows)
+}
+
+/// The `limit` active conversations touched most recently, across all
+/// projects, for the sidebar's "Recent" block.
+pub async fn list_recent(pool: &SqlitePool, limit: i64) -> Result<Vec<Feature>, AppError> {
+    let sql = format!("{} LIMIT ?", by_activity_sql("f.status = 'active'"));
+    let rows = sqlx::query_as::<_, Feature>(AssertSqlSafe(sql))
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows)
+}
+
+/// Every active conversation across all projects, most recently touched
+/// first, for the sidebar's cross-project lenses and saved views.
+pub async fn list_active(pool: &SqlitePool) -> Result<Vec<Feature>, AppError> {
+    let sql = by_activity_sql("f.status = 'active'");
     let rows = sqlx::query_as::<_, Feature>(AssertSqlSafe(sql))
         .fetch_all(pool)
         .await?;
@@ -606,6 +623,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_by_project_exposes_last_activity_at() {
+        let pool = setup_pool().await;
+        sqlx::query(
+            "INSERT INTO features (id, project_id, title, status, type, created_at) VALUES \
+             (1, 1, 'talked', 'active', 'ws-session', '2026-01-01T00:00:00Z'), \
+             (2, 1, 'silent', 'active', 'ws-session', '2026-01-02T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO agent_sessions (id, feature_id, status) VALUES (10, 1, 'paused')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO agent_messages (session_id, role, created_at) VALUES \
+             (10, 'user', '2026-02-01T00:00:00Z'), \
+             (10, 'assistant', '2026-04-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let features = list_by_project(&pool, 1, false).await.unwrap();
+        let activity: Vec<(i64, Option<&str>)> = features
+            .iter()
+            .map(|f| (f.id, f.last_activity_at.as_deref()))
+            .collect();
+        // Latest user message, else creation time; assistant messages don't count.
+        assert_eq!(
+            activity,
+            vec![
+                (1, Some("2026-02-01T00:00:00Z")),
+                (2, Some("2026-01-02T00:00:00Z")),
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn list_pinned_returns_only_active_pinned_across_projects() {
         let pool = setup_pool().await;
         sqlx::query(
@@ -624,6 +680,52 @@ mod tests {
         // Pinned active features from both projects, newest creation first; the
         // unpinned and the archived-but-pinned rows are excluded.
         assert_eq!(ids, vec![2, 1]);
+    }
+
+    #[tokio::test]
+    async fn list_recent_returns_latest_active_across_projects() {
+        let pool = setup_pool().await;
+        sqlx::query(
+            "INSERT INTO features (id, project_id, title, status, type, created_at) VALUES \
+             (1, 1, 'old', 'active', 'ws-session', '2026-01-01T00:00:00Z'), \
+             (2, 2, 'newest', 'active', 'ws-session', '2026-01-04T00:00:00Z'), \
+             (3, 1, 'middle', 'active', 'ws-session', '2026-01-02T00:00:00Z'), \
+             (4, 2, 'archived', 'archived', 'ws-session', '2026-01-05T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let recent = list_recent(&pool, 2).await.unwrap();
+        let ids: Vec<i64> = recent.iter().map(|f| f.id).collect();
+        // Newest first across both projects, capped at the limit; the archived
+        // row never shows even though it is the newest.
+        assert_eq!(ids, vec![2, 3]);
+        assert!(recent.iter().all(|f| f.last_activity_at.is_some()));
+    }
+
+    #[tokio::test]
+    async fn list_active_returns_every_active_across_projects() {
+        let pool = setup_pool().await;
+        sqlx::query(
+            "INSERT INTO features (id, project_id, title, status, type, is_pinned, created_at) VALUES \
+             (1, 1, 'old', 'active', 'ws-session', 0, '2026-01-01T00:00:00Z'), \
+             (2, 2, 'newest', 'active', 'ws-session', 1, '2026-01-04T00:00:00Z'), \
+             (3, 1, 'middle', 'active', 'ws-session', 0, '2026-01-02T00:00:00Z'), \
+             (4, 2, 'archived', 'archived', 'ws-session', 0, '2026-01-05T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let ids: Vec<i64> = list_active(&pool)
+            .await
+            .unwrap()
+            .iter()
+            .map(|f| f.id)
+            .collect();
+        // Pinned ones included, archived ones left out, newest first.
+        assert_eq!(ids, vec![2, 3, 1]);
     }
 
     #[tokio::test]

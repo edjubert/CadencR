@@ -10,6 +10,8 @@
 //! validator (super-defensive: a bad value never breaks the app). `None` means
 //! "treat an invalid value as unset" and let the consumer's own fallback apply.
 
+mod sidebar;
+
 /// The shape a setting's string value must take.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValueKind {
@@ -79,7 +81,7 @@ fn editor_tooling_spec(key: &str) -> Option<SettingSpec> {
 
 /// Spec for a workspace/global key, or `None` for free-form keys.
 pub fn workspace_spec(key: &str) -> Option<SettingSpec> {
-    if let Some(spec) = editor_tooling_spec(key) {
+    if let Some(spec) = editor_tooling_spec(key).or_else(|| sidebar::sidebar_display_spec(key)) {
         return Some(spec);
     }
     let spec = match key {

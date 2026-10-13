@@ -18,6 +18,7 @@ export function SettingsSwitchRow({
   icon,
   iconTint = "muted",
   divided,
+  className,
 }: {
   id?: string;
   label: ReactNode;
@@ -28,6 +29,7 @@ export function SettingsSwitchRow({
   icon?: ReactNode;
   iconTint?: IconTileTint;
   divided?: boolean;
+  className?: string;
 }): React.JSX.Element {
   const fallbackId = useId();
   const switchId = id ?? fallbackId;
@@ -40,6 +42,7 @@ export function SettingsSwitchRow({
       description={description}
       divided={divided}
       align="start"
+      className={className}
       control={
         <Switch
           id={switchId}

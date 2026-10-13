@@ -169,6 +169,14 @@ const WORKSPACE_SETTINGS_SINGLE_PREFIX = `${WORKSPACE_SETTINGS_PATH}/`;
 const WORKSPACE_SETTINGS_BULK_RESULT_TTL_MS = 500;
 let workspaceSettingsBulkRequest: Promise<unknown> | null = null;
 let workspaceSettingsBulkResult: { expiresAt: number; value: unknown } | null = null;
+/** Bumped around every settings write so a bulk read that raced it is never cached. */
+let workspaceSettingsGeneration = 0;
+
+function invalidateWorkspaceSettingsBulk(): void {
+  workspaceSettingsGeneration += 1;
+  workspaceSettingsBulkRequest = null;
+  workspaceSettingsBulkResult = null;
+}
 
 interface WorkspaceSettingEntry {
   key: string;
@@ -209,6 +217,17 @@ export async function customInstance<T>(config: AxiosRequestConfig): Promise<T> 
   if (!shouldAttachAbortSignal(finalConfig)) {
     finalConfig = { ...finalConfig, signal: undefined };
   }
+  // A write makes the short-lived bulk snapshot stale: the refetch it triggers
+  // must reach the server, not replay the values from before the write. A bulk
+  // read sent before the write lands is dropped too, on both sides of it.
+  if (isWorkspaceSettingsWrite(finalConfig)) {
+    invalidateWorkspaceSettingsBulk();
+    try {
+      return (await axiosInstance(finalConfig)).data as T;
+    } finally {
+      invalidateWorkspaceSettingsBulk();
+    }
+  }
   const workspaceSettingKey = workspaceSingleSettingKey(finalConfig);
   if (workspaceSettingKey) {
     const cachedSetting = await workspaceSettingFromBulkRequest(workspaceSettingKey);
@@ -245,6 +264,11 @@ export async function customInstance<T>(config: AxiosRequestConfig): Promise<T> 
   return response.data;
 }
 
+function isWorkspaceSettingsWrite(config: Pick<AxiosRequestConfig, "method" | "url">): boolean {
+  const method = config.method?.toUpperCase() ?? "GET";
+  return method !== "GET" && config.url?.startsWith(WORKSPACE_SETTINGS_PATH) === true;
+}
+
 function isWorkspaceSettingsBulkGet(config: Pick<AxiosRequestConfig, "method" | "url">): boolean {
   const method = config.method?.toUpperCase() ?? "GET";
   return method === "GET" && config.url === WORKSPACE_SETTINGS_PATH;
@@ -271,17 +295,20 @@ async function workspaceSettingFromBulkRequest(
 
 async function fetchWorkspaceSettingsBulk(config: AxiosRequestConfig): Promise<unknown> {
   if (workspaceSettingsBulkRequest) return workspaceSettingsBulkRequest;
+  const generation = workspaceSettingsGeneration;
   const request = axiosInstance(config).then((response) => response.data as unknown);
   workspaceSettingsBulkRequest = request;
   try {
     const result = await request;
-    workspaceSettingsBulkResult = {
-      expiresAt: Date.now() + WORKSPACE_SETTINGS_BULK_RESULT_TTL_MS,
-      value: result,
-    };
+    if (generation === workspaceSettingsGeneration) {
+      workspaceSettingsBulkResult = {
+        expiresAt: Date.now() + WORKSPACE_SETTINGS_BULK_RESULT_TTL_MS,
+        value: result,
+      };
+    }
     return result;
   } finally {
-    workspaceSettingsBulkRequest = null;
+    if (workspaceSettingsBulkRequest === request) workspaceSettingsBulkRequest = null;
   }
 }
 

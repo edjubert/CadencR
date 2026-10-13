@@ -173,6 +173,13 @@ impl AgentRuntimeAdapter for CodexAdapter {
             .thinking_effort
             .clone()
             .or(native_effective.thinking_effort);
+        let summary = native_config::reasoning_summary(&effective_config).map(ToOwned::to_owned);
+        tracing::debug!(
+            ?summary,
+            model_provider = ?effective_config.pointer("/config/model_provider").and_then(serde_json::Value::as_str),
+            native_summary = ?effective_config.pointer("/config/model_reasoning_summary").and_then(serde_json::Value::as_str),
+            "Codex reasoning summary configuration resolved"
+        );
         let event_rx = client.subscribe_reliable();
         let mut mcp_status_rx = client.subscribe();
         let mcp_config = launch::effective_thread_config(&config, &effective_config);
@@ -187,6 +194,7 @@ impl AgentRuntimeAdapter for CodexAdapter {
                 effort: config.overrides.thinking_effort,
                 effective_model,
                 effective_effort,
+                summary,
                 fast_mode: config.overrides.fast_mode,
                 permission_mode: config.permission_mode,
                 access_mode: config.access_mode,

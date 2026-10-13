@@ -4,8 +4,10 @@ import {
   clearDesktopBridgeOverrideForTests,
 } from "@/lib/desktop-bridge";
 import type { CadencrDesktopBridge } from "@/lib/desktop-bridge";
+import type { AxiosAdapter, InternalAxiosRequestConfig } from "axios";
 import {
   __resetRuntimeConfigForTests,
+  customInstance,
   getAuthTokenSync,
   preloadRuntimeConfig,
   publicationOperationTimeout,
@@ -223,5 +225,34 @@ describe("managed provider timeout policy", () => {
         timeout: 5000,
       }),
     ).toBe(5000);
+  });
+});
+
+describe("workspace settings bulk cache", () => {
+  function respond(config: InternalAxiosRequestConfig, data: unknown) {
+    return { data, status: 200, statusText: "OK", headers: {}, config };
+  }
+
+  it("never caches a bulk read that raced a settings write", async () => {
+    let releaseStaleRead: () => void = () => undefined;
+    const staleRead: AxiosAdapter = (config) =>
+      new Promise((resolve) => {
+        releaseStaleRead = () =>
+          resolve(respond(config, [{ key: "sidebar_density", value: "compact" }]));
+      });
+    const bulk = customInstance({ url: "/api/workspace/settings", adapter: staleRead });
+    await customInstance({
+      url: "/api/workspace/settings",
+      method: "PUT",
+      adapter: async (config) => respond(config, []),
+    });
+    releaseStaleRead();
+    await bulk;
+
+    const fresh = vi.fn<AxiosAdapter>(async (config) => respond(config, { value: "spacious" }));
+    await expect(
+      customInstance({ url: "/api/workspace/settings/sidebar_density", adapter: fresh }),
+    ).resolves.toEqual({ value: "spacious" });
+    expect(fresh).toHaveBeenCalledTimes(1);
   });
 });

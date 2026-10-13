@@ -4,6 +4,14 @@ import { fireEvent, render, screen } from "@/test-utils";
 import { ProjectFeatures } from "./ProjectFeatures";
 import { resetMockIds } from "@/test-fixtures";
 import { useFeatureLayoutStore } from "@/stores/feature-layout-store";
+import { resetPersistedIdSets } from "@/test/persisted-id-set-mock";
+import { DEFAULT_SIDEBAR_CONFIG } from "@/lib/sidebar-config";
+import { useSidebarConfigStore } from "@/stores/sidebar-config-store";
+
+vi.mock("@/hooks/usePersistedIdSet", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("@/test/persisted-id-set-mock")),
+}));
 
 const mockNavigate = vi.fn();
 const mockUpdateStatus = vi.fn();
@@ -134,6 +142,11 @@ function openFeatureContextMenu(featureTitle: string): void {
 
 describe("ProjectFeatures archived section", () => {
   beforeEach(() => {
+    // Fixture dates are fixed in the past: keep every conversation out of "Dormant".
+    useSidebarConfigStore.setState({
+      config: { ...DEFAULT_SIDEBAR_CONFIG, dormantAfter: "never" },
+    });
+    resetPersistedIdSets();
     resetMockIds();
     mockNavigate.mockClear();
     mockUpdateStatus.mockClear();

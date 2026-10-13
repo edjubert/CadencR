@@ -265,6 +265,7 @@ export const AgentSession = memo(
         projectPath={s.projectPath}
         scrollContainerRef={s.scroll.scrollContainerRef}
         virtuosoRef={s.scroll.virtuosoRef}
+        itemSize={s.scroll.itemSize}
         followOutput={s.scroll.followOutput}
         onAtBottomStateChange={s.scroll.onAtBottomStateChange}
         onTotalListHeightChanged={s.scroll.onTotalListHeightChanged}

@@ -9,6 +9,7 @@ use sqlx::SqlitePool;
 use std::collections::HashMap;
 
 use super::super::models::*;
+use super::reply_preview::plain_text;
 use crate::error::AppError;
 
 pub async fn get_sessions(
@@ -101,15 +102,16 @@ pub async fn get_session_status_snapshot(
     Ok(result)
 }
 
-/// Max characters of an agent reply surfaced in a notification preview.
-const PREVIEW_MAX_CHARS: usize = 120;
+/// Max characters of an agent reply surfaced in a preview.
+pub(super) const PREVIEW_MAX_CHARS: usize = 120;
 
 /// The start of the agent's most recent text reply for a feature, cleaned for a
-/// single-line notification body (whitespace collapsed, truncated with an
-/// ellipsis). Thinking blocks, tool calls and tool results are excluded — only
-/// `role = 'assistant'` / `message_type = 'text'` rows. `None` when the feature
-/// has no assistant text yet. Shared by the desktop notification endpoint and
-/// the Web Push dispatcher so both render the same body.
+/// single-line preview (markdown syntax stripped, whitespace collapsed,
+/// truncated with an ellipsis). Thinking blocks, tool calls and tool results
+/// are excluded — only `role = 'assistant'` / `message_type = 'text'` rows.
+/// `None` when the feature has no assistant prose yet. Shared by the desktop
+/// notification endpoint, the Web Push dispatcher and the sidebar row summary
+/// so all three render the same text.
 pub async fn latest_assistant_preview(
     pool: &SqlitePool,
     feature_id: i64,
@@ -123,7 +125,11 @@ pub async fn latest_assistant_preview(
     .bind(feature_id)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(content,)| preview_snippet(&content, PREVIEW_MAX_CHARS)))
+    Ok(row
+        .map(|(content,)| {
+            preview_snippet(&plain_text(&content, PREVIEW_MAX_CHARS), PREVIEW_MAX_CHARS)
+        })
+        .filter(|preview| !preview.is_empty()))
 }
 
 /// Collapse whitespace and truncate to `max_chars` on a char boundary.
@@ -151,6 +157,37 @@ mod tests {
         assert!(snippet.ends_with('…'));
         // 120 kept chars + the ellipsis.
         assert_eq!(snippet.chars().count(), PREVIEW_MAX_CHARS + 1);
+    }
+
+    #[tokio::test]
+    async fn previews_the_latest_reply_as_plain_text() {
+        let pool = setup_test_db().await;
+        let session_id = insert_session(&pool, 3, "idle").await;
+        for content in ["Old reply", "## Done\n\nAll **green**."] {
+            insert_message(&pool, session_id, "text", content, None, None, None).await;
+        }
+
+        let preview = latest_assistant_preview(&pool, 3).await.unwrap();
+
+        assert_eq!(preview.as_deref(), Some("Done All green."));
+    }
+
+    #[tokio::test]
+    async fn a_code_only_reply_has_no_preview() {
+        let pool = setup_test_db().await;
+        let session_id = insert_session(&pool, 3, "idle").await;
+        insert_message(
+            &pool,
+            session_id,
+            "text",
+            "```sh\nls\n```",
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        assert_eq!(latest_assistant_preview(&pool, 3).await.unwrap(), None);
     }
 
     #[tokio::test]

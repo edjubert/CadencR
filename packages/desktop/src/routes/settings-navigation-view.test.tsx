@@ -9,6 +9,12 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   persist: vi.fn(),
   realSetting: false,
+  marketplaceEnabled: true,
+}));
+vi.mock("@/lib/marketplace-gate", () => ({
+  get MARKETPLACE_ENABLED() {
+    return mocks.marketplaceEnabled;
+  },
 }));
 vi.mock("@tanstack/react-router", () => ({
   createFileRoute: () => (options: { component: ComponentType }) => ({
@@ -64,10 +70,23 @@ afterEach(() => {
   mocks.navigate.mockClear();
   mocks.persist.mockClear();
   mocks.realSetting = false;
+  mocks.marketplaceEnabled = true;
   vi.useRealTimers();
 });
 
 describe("Settings views", () => {
+  it.each([{ tab: "marketplace" as const }, { section: "marketplace" }, {}])(
+    "falls back to General without mounting marketplace when disabled: %j",
+    (search) => {
+      mocks.marketplaceEnabled = false;
+      mocks.search = search;
+      render(<SettingsPage />);
+      expect(screen.queryByRole("tab", { name: "Marketplace" })).toBeNull();
+      expect(screen.queryByText("Marketplace content")).toBeNull();
+      expect(screen.getByText("General content")).toBeTruthy();
+    },
+  );
+
   it("mounts only General by default and exposes accessible tabs", () => {
     render(<SettingsPage />);
     expect(screen.getByRole("tablist", { name: "Settings views" })).toBeTruthy();

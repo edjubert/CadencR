@@ -3,6 +3,8 @@
 //! provider/model here, so the next new conversation — in any project — starts
 //! on it.
 
+use std::collections::BTreeMap;
+
 use crate::domain::agents::runtime::{model_setting_key, runtime_setting_key};
 use crate::domain::settings_store;
 use crate::error::AppError;
@@ -29,7 +31,11 @@ pub async fn remember_session_selection(
     if unchanged {
         return Ok(());
     }
-    settings_store::global_set_many(&[(&provider_key, provider_id), (&model_key, model_id)]).await
+    settings_store::global_set_many(&BTreeMap::from([
+        (provider_key, Some(provider_id.to_string())),
+        (model_key, Some(model_id.to_string())),
+    ]))
+    .await
 }
 
 #[cfg(test)]

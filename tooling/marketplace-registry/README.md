@@ -1,5 +1,13 @@
 # Cadencr Marketplace Registry Template
 
+## Preparation status
+
+Marketplace UI stays hidden in v0.13.0; this template is not an activated public
+registry. CLI release pins remain `PENDING`; JavaScript is retained for schema-1
+provider compatibility, **not** mixed schema-2/theme or trust-generation support.
+Use the [contributor paths](CONTRIBUTING.md) and [operator runbook](OPERATIONS.md)
+for preparation. Do not execute remote-write examples below during this milestone.
+
 This directory is a portable bootstrap for the GitHub-only registry described in
 `docs/MARKETPLACE_V1.md`. It is a template, not a deployed registry, and contains
 no production URL, trust key, credential, or remote resource.

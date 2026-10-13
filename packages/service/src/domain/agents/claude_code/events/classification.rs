@@ -101,7 +101,8 @@ pub(super) fn classify_message(
         | claude_agent_sdk_rs::SdkMessage::TaskProgress { .. }
         | claude_agent_sdk_rs::SdkMessage::FilesPersisted { .. }
         | claude_agent_sdk_rs::SdkMessage::RateLimit { .. }
-        | claude_agent_sdk_rs::SdkMessage::PromptSuggestion { .. } => RuntimeEventKind::Other,
+        | claude_agent_sdk_rs::SdkMessage::PromptSuggestion { .. }
+        | claude_agent_sdk_rs::SdkMessage::CommandLifecycle { .. } => RuntimeEventKind::Other,
     };
 
     (kind, result_error)
@@ -229,7 +230,22 @@ pub(super) fn build_result_error(
 
 #[cfg(test)]
 mod tests {
-    use super::build_result_error;
+    use super::{build_result_error, classify_message, RuntimeEventKind};
+
+    #[test]
+    fn command_lifecycle_stays_out_of_the_conversation() {
+        // Not conversation content: as `Unknown` it would render as an error.
+        let msg = claude_agent_sdk_rs::SdkMessage::from_raw(serde_json::json!({
+            "type": "command_lifecycle",
+            "command_uuid": "c",
+            "state": "completed",
+            "uuid": "u",
+            "session_id": "s"
+        }));
+        let (kind, result_error) = classify_message(msg);
+        assert!(matches!(kind, RuntimeEventKind::Other));
+        assert!(result_error.is_none());
+    }
 
     #[test]
     fn build_result_error_falls_back_to_a_generic_message_without_detail() {

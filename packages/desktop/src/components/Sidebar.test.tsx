@@ -15,9 +15,16 @@ let mockLocation: { pathname: string; search?: Record<string, unknown> } = {
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => mockNavigate,
-  useRouterState: () => ({
-    location: mockLocation,
-  }),
+  useRouterState: (options?: {
+    select?: (state: {
+      location: { pathname: string; search?: Record<string, unknown> };
+    }) => unknown;
+  }) => {
+    const state = {
+      location: mockLocation,
+    };
+    return options?.select ? options.select(state) : state;
+  },
   Link: ({ children, to }: { children: unknown; to: string }) => {
     const React = require("react");
     return React.createElement("a", { href: to }, children);

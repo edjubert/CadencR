@@ -21,6 +21,7 @@ use crate::domain::feature_layouts::routes as feature_layouts_routes;
 use crate::domain::features::archive_routes as features_archive_routes;
 use crate::domain::features::auto_name_route as features_auto_name_route;
 use crate::domain::features::models as features_models;
+use crate::domain::features::recent_routes as features_recent_routes;
 use crate::domain::features::routes as features_routes;
 use crate::domain::imports::models as imports_models;
 use crate::domain::imports::routes as imports_routes;
@@ -83,6 +84,7 @@ use crate::domain::ws_session::routes as ws_routes;
         workspace_routes::list_settings_handler,
         workspace_routes::get_setting_handler,
         workspace_routes::set_setting_handler,
+        workspace_routes::set_workspace_settings_batch_handler,
         workspace_routes::get_settings_file_handler,
         workspace_routes::put_settings_file_handler,
         workspace_routes::get_model_settings_handler,
@@ -111,6 +113,8 @@ use crate::domain::ws_session::routes as ws_routes;
         features_routes::list_feature_activity_handler,
         ports_routes::list_feature_ports_handler,
         features_routes::list_pinned_features_handler,
+        features_recent_routes::list_recent_features_handler,
+        features_recent_routes::list_active_features_handler,
         features_routes::create_feature_handler,
         features_routes::get_feature_handler,
         features_routes::delete_feature_handler,
@@ -177,6 +181,7 @@ use crate::domain::ws_session::routes as ws_routes;
         sessions_routes::refresh_session_handler,
         sessions_routes::get_message_full_content_handler,
         sessions_routes::get_message_preview_handler,
+        sessions_routes::get_feature_row_summary_handler,
         terminal_routes::list_terminal_sessions_handler,
         terminal_routes::kill_terminal_sessions_handler,
         terminal_routes::alacritty_config_route,
@@ -261,6 +266,7 @@ use crate::domain::ws_session::routes as ws_routes;
         crate::domain::themes::managed::models::RemoveManagedThemeRequest,
         crate::domain::themes::managed::models::RemoveManagedThemeResponse,
         crate::domain::themes::managed::models::DuplicateManagedThemeRequest,
+        crate::domain::themes::managed::models::ManagedThemeDuplicateResponse,
         crate::domain::themes::managed::models::ManagedThemeCatalogResponse,
         themes_models::UserTheme,
         themes_models::ThemeDocument,
@@ -374,6 +380,7 @@ use crate::domain::ws_session::routes as ws_routes;
         workspace_models::ModelSettings,
         workspace_models::AgentProviderSettings,
         workspace_models::SetSettingRequest,
+        workspace_models::SetSettingsBatchRequest,
         workspace_models::SetModelSettingRequest,
         workspace_models::SetProviderSettingRequest,
         workspace_routes::SettingValueResponse,
@@ -499,6 +506,8 @@ use crate::domain::ws_session::routes as ws_routes;
         sessions_models::SaveDraftResponse,
         sessions_models::MessageFullContentResponse,
         sessions_models::MessagePreviewResponse,
+        sessions_models::FeatureRowSummaryResponse,
+        sessions_models::TodoProgress,
         sessions_models::RefreshSessionResponse,
         terminal_routes::TerminalSessionInfo,
         terminal_routes::KillTerminalsResponse,

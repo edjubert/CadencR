@@ -22,6 +22,14 @@ pub async fn list_pinned(pool: &SqlitePool) -> Result<Vec<Feature>, AppError> {
     repository::list_pinned(pool).await
 }
 
+pub async fn list_recent(pool: &SqlitePool, limit: i64) -> Result<Vec<Feature>, AppError> {
+    repository::list_recent(pool, limit).await
+}
+
+pub async fn list_active(pool: &SqlitePool) -> Result<Vec<Feature>, AppError> {
+    repository::list_active(pool).await
+}
+
 pub async fn get_by_id(pool: &SqlitePool, id: i64) -> Result<Option<Feature>, AppError> {
     repository::get_by_id(pool, id).await
 }

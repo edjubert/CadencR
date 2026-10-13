@@ -23,7 +23,14 @@ vi.mock("@tanstack/react-router", () => ({
     useParams: vi.fn(() => ({})),
   }),
   useNavigate: () => vi.fn(),
-  useRouterState: () => ({ location: { pathname: "/settings" } }),
+  useRouterState: (options?: {
+    select?: (state: {
+      location: { pathname: string; search?: Record<string, unknown> };
+    }) => unknown;
+  }) => {
+    const state = { location: { pathname: "/settings" } };
+    return options?.select ? options.select(state) : state;
+  },
   Link: ({ children, to }: { children: unknown; to: string }) => {
     const React = require("react");
     return React.createElement("a", { href: to }, children);

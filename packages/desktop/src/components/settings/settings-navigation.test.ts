@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parseSettingsSearch, resolveSettingsTab } from "./settings-navigation";
 import { NAV_GROUPS } from "./settings-nav-groups";
+
+vi.mock("@/lib/marketplace-gate", () => ({ MARKETPLACE_ENABLED: true }));
 
 describe("settings navigation", () => {
   it("defaults to General and preserves general section deep links", () => {

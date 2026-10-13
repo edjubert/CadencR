@@ -189,6 +189,10 @@ pub(super) async fn refresh(force: bool) -> Result<Option<String>, AppError> {
         std::time::Instant::now(),
         Utc::now(),
         || async {
+            #[cfg(test)]
+            if let Some(result) = tests::configured_fetch() {
+                return result;
+            }
             download::download(url, MAX_POLICY_BYTES)
                 .await
                 .map_err(unavailable)
@@ -355,7 +359,12 @@ pub(super) mod tests {
     use crate::domain::agents::providers::installed::managed::trust::TrustedIndexKey;
     use base64::Engine as _;
     use ed25519_dalek::{Signer as _, SigningKey};
-    type FixtureRoots = std::collections::HashMap<std::path::PathBuf, ManagedTrustStore>;
+    struct Fixture {
+        trust: ManagedTrustStore,
+        response: Result<Vec<u8>, String>,
+        calls: usize,
+    }
+    type FixtureRoots = std::collections::HashMap<std::path::PathBuf, Fixture>;
     fn fixture_roots() -> &'static std::sync::Mutex<FixtureRoots> {
         static ROOTS: std::sync::OnceLock<std::sync::Mutex<FixtureRoots>> =
             std::sync::OnceLock::new();
@@ -366,7 +375,43 @@ pub(super) mod tests {
             .lock()
             .unwrap()
             .get(&storage::root())
-            .cloned()
+            .map(|fixture| fixture.trust.clone())
+    }
+    pub(super) fn configured_fetch() -> Option<Result<Vec<u8>, AppError>> {
+        let mut roots = fixture_roots().lock().unwrap();
+        let fixture = roots.get_mut(&storage::root())?;
+        fixture.calls += 1;
+        Some(fixture.response.clone().map_err(unavailable))
+    }
+    pub(in crate::domain::themes::managed) fn respond(entries: Value, offline: bool) {
+        let mut roots = fixture_roots().lock().unwrap();
+        let fixture = roots.get_mut(&storage::root()).unwrap();
+        fixture.response = if offline {
+            Err("test policy network unavailable".into())
+        } else {
+            Ok(serde_json::to_vec(&signed(0, entries).0).unwrap())
+        };
+    }
+    pub(in crate::domain::themes::managed) fn expire_cache() {
+        let (mut envelope, _) = signed(-2, serde_json::json!([]));
+        envelope.signed["expires_at"] = (Utc::now() - chrono::Duration::minutes(1))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            .into();
+        envelope.signature.value = base64::engine::general_purpose::STANDARD.encode(
+            SigningKey::from_bytes(&[19; 32])
+                .sign(&cadencr_registry_core::canonical_json_bytes(
+                    &envelope.signed,
+                ))
+                .to_bytes(),
+        );
+        crate::shared::atomic_file::write_atomic_private(
+            &cache(),
+            &serde_json::to_string(&envelope).unwrap(),
+        )
+        .unwrap();
+    }
+    pub(in crate::domain::themes::managed) fn fetch_count() -> usize {
+        fixture_roots().lock().unwrap()[&storage::root()].calls
     }
     pub(in crate::domain::themes::managed) struct ConfiguredPolicy(std::path::PathBuf);
     impl Drop for ConfiguredPolicy {
@@ -378,7 +423,14 @@ pub(super) mod tests {
         let (envelope, trust) = signed(-1, serde_json::json!([]));
         ingest(&envelope, &trust, Utc::now()).unwrap();
         let root = storage::root();
-        fixture_roots().lock().unwrap().insert(root.clone(), trust);
+        fixture_roots().lock().unwrap().insert(
+            root.clone(),
+            Fixture {
+                trust,
+                response: Ok(serde_json::to_vec(&envelope).unwrap()),
+                calls: 0,
+            },
+        );
         ConfiguredPolicy(root)
     }
     fn signed(offset_minutes: i64, entries: Value) -> (Envelope, ManagedTrustStore) {

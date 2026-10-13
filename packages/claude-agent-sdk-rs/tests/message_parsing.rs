@@ -485,6 +485,45 @@ fn unknown_type_falls_back_to_unknown() {
     assert!(!msg.is_compaction());
 }
 
+#[test]
+fn command_lifecycle_keeps_unknown_states_typed() {
+    for state in ["started", "some_future_state"] {
+        let msg: SdkMessage = serde_json::from_value(json!({
+            "type": "command_lifecycle",
+            "command_uuid": "cmd1",
+            "state": state,
+            "uuid": "u1",
+            "session_id": "s1"
+        }))
+        .unwrap();
+        match msg {
+            SdkMessage::CommandLifecycle {
+                command_uuid,
+                state: parsed,
+                ..
+            } => {
+                assert_eq!(command_uuid, "cmd1");
+                assert_eq!(parsed, state);
+            }
+            other => panic!("expected CommandLifecycle, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn roundtrip_command_lifecycle() {
+    let raw = json!({
+        "type": "command_lifecycle",
+        "command_uuid": "cmd1",
+        "state": "completed",
+        "uuid": "u1",
+        "session_id": "s1"
+    });
+    let msg: SdkMessage = serde_json::from_value(raw.clone()).unwrap();
+    assert_eq!(msg.session_id(), Some("s1"));
+    assert_eq!(serde_json::to_value(&msg).unwrap(), raw);
+}
+
 // ── Malformed JSON ───────────────────────────────────────────────────────────
 
 #[test]

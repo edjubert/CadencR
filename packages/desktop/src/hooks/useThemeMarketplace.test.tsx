@@ -15,6 +15,7 @@ import {
 import { DRACULA_THEME } from "@/lib/themes/dracula";
 import { useThemeMarketplace } from "./useThemeMarketplace";
 
+vi.mock("@/lib/marketplace-gate", () => ({ MARKETPLACE_ENABLED: true }));
 vi.mock("@/api/generated", () => ({
   getManagedThemeCatalog: vi.fn(),
   getManagedThemes: vi.fn(),
@@ -64,6 +65,33 @@ function setup() {
   return { ...hook, client };
 }
 describe("server-confirmed theme operations", () => {
+  it.each(["apply", "duplicate"] as const)(
+    "surfaces offline policy warnings without losing confirmed %s results",
+    async (kind) => {
+      const warning =
+        "Current remote theme policy is unavailable; verified cached policy was used.";
+      const applyResponse = { ...entry, warning };
+      vi.mocked(applyManagedTheme).mockResolvedValue(applyResponse);
+      const duplicateResponse = {
+        theme: { ...entry.theme, id: "midnight-copy" },
+        workspace: { project_id: 1, feature_id: 2, cwd: "/copy", created: true },
+        warning,
+      };
+      vi.mocked(duplicateManagedTheme).mockResolvedValue(duplicateResponse);
+      const { result, client } = setup();
+      await waitFor(() => expect(result.current.inventory.isSuccess).toBe(true));
+      await act(async () => {
+        await result.current.mutation.mutateAsync(
+          kind === "apply" ? { kind, id: "midnight" } : { kind, id: "midnight", label: "Copy" },
+        );
+      });
+      expect(result.current.mutation.isSuccess).toBe(true);
+      expect(result.current.notice).toContain(`${kind} confirmed by Cadencr.`);
+      expect(result.current.notice).toContain(warning);
+      client.clear();
+    },
+  );
+
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(getManagedThemes).mockResolvedValue([entry]);

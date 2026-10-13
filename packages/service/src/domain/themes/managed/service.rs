@@ -12,8 +12,13 @@ fn lock() -> &'static tokio::sync::Mutex<()> {
 }
 
 pub use super::inventory::inventory;
-pub use super::read::preview;
-use super::read::{preview_trusted, read_theme};
+use super::read::preview as preview_cached;
+pub async fn preview(id: &str) -> Result<ManagedThemeInventoryEntry, AppError> {
+    super::read::preview_refreshed(id, &pinned_index_trust_store()).await
+}
+#[cfg(test)]
+use super::read::preview_trusted;
+use super::read::{preview_worker, read_theme};
 async fn staged(
     body: &InstallManagedThemeRequest,
 ) -> Result<(tempfile::TempDir, Receipt), AppError> {
@@ -41,13 +46,7 @@ async fn staged(
         archive::MAX_ARCHIVE_BYTES,
     )
     .await?;
-    if storage::digest(&bytes) != sha256 {
-        return Err(AppError::coded(
-            axum::http::StatusCode::BAD_REQUEST,
-            "MANAGED_THEME_HASH_MISMATCH",
-            "theme archive digest does not match signed catalog",
-        ));
-    }
+    require_archive_digest(&bytes, sha256)?;
     storage::secure(&storage::root())?;
     let stage = storage::staging()?;
     storage::write_archive(stage.path(), &bytes)?;
@@ -70,6 +69,16 @@ async fn staged(
             files,
         },
     ))
+}
+pub(super) fn require_archive_digest(bytes: &[u8], sha256: &str) -> Result<(), AppError> {
+    if storage::digest(bytes) != sha256 {
+        return Err(AppError::coded(
+            axum::http::StatusCode::BAD_REQUEST,
+            "MANAGED_THEME_HASH_MISMATCH",
+            "theme archive digest does not match signed catalog",
+        ));
+    }
+    Ok(())
 }
 pub async fn preview_package(body: InstallManagedThemeRequest) -> Result<UserTheme, AppError> {
     let (stage, _) = staged(&body).await?;
@@ -130,7 +139,7 @@ fn commit_staged(
     } else {
         storage::commit(stage.path(), &receipt)?;
     }
-    preview(&body.theme_id)
+    preview_cached(&body.theme_id)
 }
 pub async fn apply(id: &str) -> Result<ManagedThemeInventoryEntry, AppError> {
     apply_trusted(id, &pinned_index_trust_store()).await
@@ -139,11 +148,14 @@ async fn apply_trusted(
     id: &str,
     trust: &crate::domain::agents::providers::installed::managed::trust::ManagedTrustStore,
 ) -> Result<ManagedThemeInventoryEntry, AppError> {
+    let warning = super::policy::refresh(false).await?;
     let _guard = lock().lock().await;
-    preview_trusted(id, trust)?;
+    preview_worker(id, trust).await?;
     settings_store::global_set("theme_current", &format!("managed:{id}")).await?;
     settings_store::global_set("theme_follow_system", "false").await?;
-    preview_trusted(id, trust)
+    let mut entry = preview_worker(id, trust).await?;
+    entry.warning = warning;
+    Ok(entry)
 }
 pub async fn remove(id: &str, confirm: bool) -> Result<RemoveManagedThemeResponse, AppError> {
     remove_inner(id, confirm).await
@@ -188,7 +200,7 @@ pub async fn duplicate(
     pool: &sqlx::SqlitePool,
     id: &str,
     label: &str,
-) -> Result<CreateThemeResponse, AppError> {
+) -> Result<ManagedThemeDuplicateResponse, AppError> {
     duplicate_trusted(pool, id, label, &pinned_index_trust_store()).await
 }
 async fn duplicate_trusted(
@@ -196,9 +208,50 @@ async fn duplicate_trusted(
     id: &str,
     label: &str,
     trust: &crate::domain::agents::providers::installed::managed::trust::ManagedTrustStore,
-) -> Result<CreateThemeResponse, AppError> {
+) -> Result<ManagedThemeDuplicateResponse, AppError> {
+    let warning = super::policy::refresh(false).await?;
     let _guard = lock().lock().await;
-    let source = preview_trusted(id, trust)?;
+    let root = storage::root();
+    let id = id.to_owned();
+    let trust = trust.clone();
+    let PreparedDuplicate { document, files } = tokio::task::spawn_blocking(move || {
+        storage::with_root(root, || duplicate_source(&id, &trust))
+    })
+    .await
+    .map_err(archive::invalid)??;
+    let mut theme = super::super::store::create()
+        .label(label)
+        .appearance(document.appearance)
+        .css_vars(document.css_vars)
+        .xterm(document.xterm)
+        .chrome(document.chrome)
+        .call()
+        .await?;
+    for (name, bytes) in files {
+        if name != "theme.json" {
+            let path = super::super::paths::theme_dir(&theme.id)?.join(name);
+            tokio::fs::write(path, bytes)
+                .await
+                .map_err(archive::invalid)?;
+        }
+    }
+    theme = super::super::store::get(&theme.id).await?;
+    let workspace = super::super::workspace::ensure(pool, &theme.id).await?;
+    Ok(ManagedThemeDuplicateResponse {
+        created: CreateThemeResponse { theme, workspace },
+        warning,
+    })
+}
+
+struct PreparedDuplicate {
+    document: crate::domain::themes::models::ThemeDocument,
+    files: std::collections::BTreeMap<String, Vec<u8>>,
+}
+fn duplicate_source(
+    id: &str,
+    trust: &crate::domain::agents::providers::installed::managed::trust::ManagedTrustStore,
+) -> Result<PreparedDuplicate, AppError> {
+    let source = super::read::preview_trusted(id, trust)?;
     let document = source
         .theme
         .ok_or_else(|| archive::invalid("theme is unavailable"))?
@@ -222,23 +275,10 @@ async fn duplicate_trusted(
             "theme changed while preparing author copy",
         ));
     }
-    let mut theme = super::super::store::create()
-        .label(label)
-        .appearance(document.appearance)
-        .css_vars(document.css_vars)
-        .xterm(document.xterm)
-        .chrome(document.chrome)
-        .call()
-        .await?;
-    for (name, bytes) in folder.files {
-        if name != "theme.json" {
-            let path = super::super::paths::theme_dir(&theme.id)?.join(name);
-            std::fs::write(path, bytes).map_err(archive::invalid)?;
-        }
-    }
-    theme = super::super::store::get(&theme.id).await?;
-    let workspace = super::super::workspace::ensure(pool, &theme.id).await?;
-    Ok(CreateThemeResponse { theme, workspace })
+    Ok(PreparedDuplicate {
+        document,
+        files: folder.files,
+    })
 }
 
 #[cfg(test)]
@@ -246,6 +286,108 @@ pub(super) mod tests {
     use super::*;
     use base64::Engine as _;
     use ed25519_dalek::Signer as _;
+    fn revocation_fixture() -> (
+        super::super::policy::tests::ConfiguredPolicy,
+        crate::domain::agents::providers::installed::managed::trust::ManagedTrustStore,
+    ) {
+        let policy = super::super::policy::tests::configured_policy();
+        let trust = commit_fixture("midnight", "1.0.0");
+        assert!(preview_trusted("midnight", &trust).is_ok());
+        super::super::policy::tests::respond(
+            serde_json::json!([{"theme_id":"midnight","reason":"new revocation"}]),
+            false,
+        );
+        (policy, trust)
+    }
+    fn assert_revoked<T: std::fmt::Debug>(result: Result<T, AppError>) {
+        assert!(
+            matches!(
+                result,
+                Err(AppError::Coded {
+                    code: "MANAGED_THEME_REVOKED",
+                    ..
+                })
+            ),
+            "{result:?}"
+        );
+        assert_eq!(super::super::policy::tests::fetch_count(), 1);
+    }
+    #[tokio::test]
+    async fn direct_preview_polls_new_revocation_without_catalog_or_inventory() {
+        let (_policy, trust) = revocation_fixture();
+        assert_revoked(super::super::read::preview_refreshed("midnight", &trust).await);
+    }
+    #[tokio::test]
+    async fn direct_apply_polls_new_revocation_without_catalog_or_inventory() {
+        let (_policy, trust) = revocation_fixture();
+        let before = settings_store::global_get("theme_current");
+        assert_revoked(apply_trusted("midnight", &trust).await);
+        assert_eq!(settings_store::global_get("theme_current"), before);
+    }
+    #[tokio::test]
+    async fn direct_duplicate_polls_new_revocation_without_catalog_or_inventory() {
+        let (_policy, trust) = revocation_fixture();
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect_lazy("sqlite::memory:")
+            .unwrap();
+        assert_revoked(duplicate_trusted(&pool, "midnight", "Forbidden Copy", &trust).await);
+        assert!(super::super::super::store::list().await.unwrap().is_empty());
+    }
+    #[tokio::test]
+    async fn direct_actions_retain_visible_authenticated_offline_fallback() {
+        let _policy = super::super::policy::tests::configured_policy();
+        let trust = commit_fixture("midnight", "1.0.0");
+        super::super::policy::tests::respond(serde_json::json!([]), true);
+        let (preview, applied) = tokio::join!(
+            super::super::read::preview_refreshed("midnight", &trust),
+            apply_trusted("midnight", &trust),
+        );
+        for entry in [preview.unwrap(), applied.unwrap()] {
+            assert!(entry.theme.is_some());
+            assert!(entry.warning.unwrap().contains("current verified offline"));
+            assert!(entry.error.is_none());
+        }
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        crate::shared::migrate::run_migrations(
+            &crate::shared::migrate::MigrationContext::pool_only(&pool),
+        )
+        .await
+        .unwrap();
+        let copied = duplicate_trusted(&pool, "midnight", "Offline Copy", &trust)
+            .await
+            .unwrap();
+        assert!(copied.warning.unwrap().contains("current verified offline"));
+        assert_eq!(copied.created.theme.id, "offline-copy");
+        assert_eq!(
+            super::super::policy::tests::fetch_count(),
+            1,
+            "direct callers coalesce and respect backoff"
+        );
+    }
+    #[tokio::test]
+    async fn direct_actions_fail_closed_when_offline_policy_cache_expires() {
+        let _policy = super::super::policy::tests::configured_policy();
+        let trust = commit_fixture("midnight", "1.0.0");
+        super::super::policy::tests::respond(serde_json::json!([]), true);
+        super::super::read::preview_refreshed("midnight", &trust)
+            .await
+            .unwrap();
+        super::super::policy::tests::expire_cache();
+        let before = settings_store::global_get("theme_current");
+        assert!(super::super::read::preview_refreshed("midnight", &trust)
+            .await
+            .is_err());
+        assert!(apply_trusted("midnight", &trust).await.is_err());
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect_lazy("sqlite::memory:")
+            .unwrap();
+        assert!(duplicate_trusted(&pool, "midnight", "Expired Copy", &trust)
+            .await
+            .is_err());
+        assert_eq!(settings_store::global_get("theme_current"), before);
+        assert!(super::super::super::store::list().await.unwrap().is_empty());
+        assert_eq!(super::super::policy::tests::fetch_count(), 1);
+    }
     #[tokio::test]
     async fn pending_download_does_not_hold_the_lifecycle_lock() {
         let (index, _) = catalog::tests::signed();

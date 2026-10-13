@@ -1662,6 +1662,12 @@ export interface Feature {
   is_pinned: boolean;
   /** @nullable */
   label?: string | null;
+  /**
+   * Latest user message across the conversation's sessions, else its
+   * creation time: the sidebar's sort key. Set by the list endpoints only.
+   * @nullable
+   */
+  last_activity_at?: string | null;
   /** @nullable */
   model_session?: string | null;
   /**
@@ -1881,6 +1887,26 @@ export interface FeatureRespondGateRequest {
 export interface FeatureRespondGateResponse {
   request_id: string;
   resolved: boolean;
+}
+
+/**
+ * How many of the agent's todos are done, out of the whole list.
+ */
+export interface TodoProgress {
+  done: number;
+  total: number;
+}
+
+export type FeatureRowSummaryResponseTodos = null | TodoProgress;
+
+/**
+ * What a sidebar row previews of a conversation: its last agent reply and
+ * how far its todo list has come. Either is `None` until the agent has one.
+ */
+export interface FeatureRowSummaryResponse {
+  /** @nullable */
+  preview?: string | null;
+  todos?: FeatureRowSummaryResponseTodos;
 }
 
 export interface FeatureSetting {
@@ -2914,6 +2940,17 @@ export interface ManagedThemeCatalogResponse {
   verified: boolean;
 }
 
+export type ManagedThemeDuplicateResponseAllOf = {
+  /**
+   * Offline policy fallback diagnostic for a successfully created author copy.
+   * @nullable
+   */
+  warning?: string | null;
+};
+
+export type ManagedThemeDuplicateResponse = CreateThemeResponse &
+  ManagedThemeDuplicateResponseAllOf;
+
 export type ManagedThemeInventoryEntryTheme = null | UserTheme;
 
 export interface ManagedThemeInventoryEntry {
@@ -2931,6 +2968,11 @@ export interface ManagedThemeInventoryEntry {
   sha256: string;
   theme?: ManagedThemeInventoryEntryTheme;
   version: string;
+  /**
+   * Offline policy fallback diagnostic; the authenticated theme remains usable.
+   * @nullable
+   */
+  warning?: string | null;
 }
 
 export interface MarkViewedRequest {
@@ -4482,6 +4524,16 @@ export interface SetSettingRequest {
   value: string;
 }
 
+export type SetSettingsBatchRequestValues = { [key: string]: string | null };
+
+/**
+ * Several workspace keys written in one atomic pass. A `null` value removes the
+ * key, so its default applies again (the sidebar display options' reset).
+ */
+export interface SetSettingsBatchRequest {
+  values: SetSettingsBatchRequestValues;
+}
+
 export interface Setting {
   key: string;
   /** @nullable */
@@ -5155,6 +5207,14 @@ export type ListFeaturesParams = {
 export type ListFeatureActivityParams = {
   project_id: number;
   include_archived?: boolean;
+};
+
+export type ListRecentFeaturesParams = {
+  /**
+   * How many conversations to return (1–50, default 5).
+   * @nullable
+   */
+  limit?: number | null;
 };
 
 export type GetFeatureAgentStateParams = {
@@ -11203,6 +11263,109 @@ export const useCreateFeature = <TError = ErrorType<unknown>, TContext = unknown
   return useMutation(getCreateFeatureMutationOptions(options), queryClient);
 };
 
+/**
+ * @summary Every active conversation across all projects, most recently touched first.
+ */
+export const listActiveFeatures = (signal?: AbortSignal) => {
+  return customInstance<Feature[]>({ url: `/api/features/active`, method: "GET", signal });
+};
+
+export const getListActiveFeaturesQueryKey = () => {
+  return [`/api/features/active`] as const;
+};
+
+export const getListActiveFeaturesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listActiveFeatures>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof listActiveFeatures>>, TError, TData>>;
+}) => {
+  const { query: queryOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListActiveFeaturesQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listActiveFeatures>>> = ({ signal }) =>
+    listActiveFeatures(signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listActiveFeatures>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListActiveFeaturesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listActiveFeatures>>
+>;
+export type ListActiveFeaturesQueryError = ErrorType<unknown>;
+
+export function useListActiveFeatures<
+  TData = Awaited<ReturnType<typeof listActiveFeatures>>,
+  TError = ErrorType<unknown>,
+>(
+  options: {
+    query: Partial<UseQueryOptions<Awaited<ReturnType<typeof listActiveFeatures>>, TError, TData>> &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listActiveFeatures>>,
+          TError,
+          Awaited<ReturnType<typeof listActiveFeatures>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useListActiveFeatures<
+  TData = Awaited<ReturnType<typeof listActiveFeatures>>,
+  TError = ErrorType<unknown>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listActiveFeatures>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listActiveFeatures>>,
+          TError,
+          Awaited<ReturnType<typeof listActiveFeatures>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useListActiveFeatures<
+  TData = Awaited<ReturnType<typeof listActiveFeatures>>,
+  TError = ErrorType<unknown>,
+>(
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof listActiveFeatures>>, TError, TData>>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+/**
+ * @summary Every active conversation across all projects, most recently touched first.
+ */
+
+export function useListActiveFeatures<
+  TData = Awaited<ReturnType<typeof listActiveFeatures>>,
+  TError = ErrorType<unknown>,
+>(
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof listActiveFeatures>>, TError, TData>>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getListActiveFeaturesQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
 export const listFeatureActivity = (params: ListFeatureActivityParams, signal?: AbortSignal) => {
   return customInstance<FeatureActivity[]>({
     url: `/api/features/activity`,
@@ -11510,6 +11673,116 @@ export function useListFeaturePorts<
   queryClient?: QueryClient,
 ): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
   const queryOptions = getListFeaturePortsQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+/**
+ * @summary The active conversations touched most recently, across every project.
+ */
+export const listRecentFeatures = (params?: ListRecentFeaturesParams, signal?: AbortSignal) => {
+  return customInstance<Feature[]>({ url: `/api/features/recent`, method: "GET", params, signal });
+};
+
+export const getListRecentFeaturesQueryKey = (params?: ListRecentFeaturesParams) => {
+  return [`/api/features/recent`, ...(params ? [params] : [])] as const;
+};
+
+export const getListRecentFeaturesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listRecentFeatures>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListRecentFeaturesParams,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof listRecentFeatures>>, TError, TData>>;
+  },
+) => {
+  const { query: queryOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListRecentFeaturesQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listRecentFeatures>>> = ({ signal }) =>
+    listRecentFeatures(params, signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listRecentFeatures>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListRecentFeaturesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listRecentFeatures>>
+>;
+export type ListRecentFeaturesQueryError = ErrorType<unknown>;
+
+export function useListRecentFeatures<
+  TData = Awaited<ReturnType<typeof listRecentFeatures>>,
+  TError = ErrorType<unknown>,
+>(
+  params: undefined | ListRecentFeaturesParams,
+  options: {
+    query: Partial<UseQueryOptions<Awaited<ReturnType<typeof listRecentFeatures>>, TError, TData>> &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listRecentFeatures>>,
+          TError,
+          Awaited<ReturnType<typeof listRecentFeatures>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useListRecentFeatures<
+  TData = Awaited<ReturnType<typeof listRecentFeatures>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListRecentFeaturesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listRecentFeatures>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listRecentFeatures>>,
+          TError,
+          Awaited<ReturnType<typeof listRecentFeatures>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useListRecentFeatures<
+  TData = Awaited<ReturnType<typeof listRecentFeatures>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListRecentFeaturesParams,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof listRecentFeatures>>, TError, TData>>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+/**
+ * @summary The active conversations touched most recently, across every project.
+ */
+
+export function useListRecentFeatures<
+  TData = Awaited<ReturnType<typeof listRecentFeatures>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListRecentFeaturesParams,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof listRecentFeatures>>, TError, TData>>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getListRecentFeaturesQueryOptions(params, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
     queryKey: DataTag<QueryKey, TData, TError>;
@@ -12555,6 +12828,131 @@ export const useRefreshSession = <TError = ErrorType<void>, TContext = unknown>(
 > => {
   return useMutation(getRefreshSessionMutationOptions(options), queryClient);
 };
+
+/**
+ * @summary What the sidebar row previews: the last agent reply and the todo progress.
+ */
+export const getFeatureRowSummary = (featureId: number, signal?: AbortSignal) => {
+  return customInstance<FeatureRowSummaryResponse>({
+    url: `/api/features/${featureId}/row-summary`,
+    method: "GET",
+    signal,
+  });
+};
+
+export const getGetFeatureRowSummaryQueryKey = (featureId: number) => {
+  return [`/api/features/${featureId}/row-summary`] as const;
+};
+
+export const getGetFeatureRowSummaryQueryOptions = <
+  TData = Awaited<ReturnType<typeof getFeatureRowSummary>>,
+  TError = ErrorType<unknown>,
+>(
+  featureId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getFeatureRowSummary>>, TError, TData>
+    >;
+  },
+) => {
+  const { query: queryOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetFeatureRowSummaryQueryKey(featureId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getFeatureRowSummary>>> = ({ signal }) =>
+    getFeatureRowSummary(featureId, signal);
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: featureId !== null && featureId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<Awaited<ReturnType<typeof getFeatureRowSummary>>, TError, TData> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+};
+
+export type GetFeatureRowSummaryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getFeatureRowSummary>>
+>;
+export type GetFeatureRowSummaryQueryError = ErrorType<unknown>;
+
+export function useGetFeatureRowSummary<
+  TData = Awaited<ReturnType<typeof getFeatureRowSummary>>,
+  TError = ErrorType<unknown>,
+>(
+  featureId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getFeatureRowSummary>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getFeatureRowSummary>>,
+          TError,
+          Awaited<ReturnType<typeof getFeatureRowSummary>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetFeatureRowSummary<
+  TData = Awaited<ReturnType<typeof getFeatureRowSummary>>,
+  TError = ErrorType<unknown>,
+>(
+  featureId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getFeatureRowSummary>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getFeatureRowSummary>>,
+          TError,
+          Awaited<ReturnType<typeof getFeatureRowSummary>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetFeatureRowSummary<
+  TData = Awaited<ReturnType<typeof getFeatureRowSummary>>,
+  TError = ErrorType<unknown>,
+>(
+  featureId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getFeatureRowSummary>>, TError, TData>
+    >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+/**
+ * @summary What the sidebar row previews: the last agent reply and the todo progress.
+ */
+
+export function useGetFeatureRowSummary<
+  TData = Awaited<ReturnType<typeof getFeatureRowSummary>>,
+  TError = ErrorType<unknown>,
+>(
+  featureId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getFeatureRowSummary>>, TError, TData>
+    >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getGetFeatureRowSummaryQueryOptions(featureId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
 
 export const getSessions = (featureId: number, signal?: AbortSignal) => {
   return customInstance<AgentSessionRow[]>({
@@ -24831,7 +25229,7 @@ export const duplicateManagedTheme = (
   duplicateManagedThemeRequest: DuplicateManagedThemeRequest,
   signal?: AbortSignal,
 ) => {
-  return customInstance<CreateThemeResponse>({
+  return customInstance<ManagedThemeDuplicateResponse>({
     url: `/api/themes/managed/${id}/duplicate`,
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -26065,6 +26463,80 @@ export function useListWorkspaceSettings<
 
   return withQueryKey(query, queryOptions.queryKey);
 }
+
+export const setWorkspaceSettingsBatch = (
+  setSettingsBatchRequest: SetSettingsBatchRequest,
+  signal?: AbortSignal,
+) => {
+  return customInstance<Setting[]>({
+    url: `/api/workspace/settings`,
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    data: setSettingsBatchRequest,
+    signal,
+  });
+};
+
+export const getSetWorkspaceSettingsBatchMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setWorkspaceSettingsBatch>>,
+    TError,
+    SetWorkspaceSettingsBatchMutationVariables,
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof setWorkspaceSettingsBatch>>,
+  TError,
+  SetWorkspaceSettingsBatchMutationVariables,
+  TContext
+> => {
+  const mutationKey = ["setWorkspaceSettingsBatch"];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof setWorkspaceSettingsBatch>>,
+    SetWorkspaceSettingsBatchMutationVariables
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return setWorkspaceSettingsBatch(data);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SetWorkspaceSettingsBatchMutationResult = NonNullable<
+  Awaited<ReturnType<typeof setWorkspaceSettingsBatch>>
+>;
+export type SetWorkspaceSettingsBatchMutationBody = SetSettingsBatchRequest;
+export type SetWorkspaceSettingsBatchMutationError = ErrorType<unknown>;
+export type SetWorkspaceSettingsBatchMutationVariables = { data: SetSettingsBatchRequest };
+
+export const useSetWorkspaceSettingsBatch = <TError = ErrorType<unknown>, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof setWorkspaceSettingsBatch>>,
+      TError,
+      SetWorkspaceSettingsBatchMutationVariables,
+      TContext
+    >;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof setWorkspaceSettingsBatch>>,
+  TError,
+  SetWorkspaceSettingsBatchMutationVariables,
+  TContext
+> => {
+  return useMutation(getSetWorkspaceSettingsBatchMutationOptions(options), queryClient);
+};
 
 export const getSettingsFile = (signal?: AbortSignal) => {
   return customInstance<SettingsFileResponse>({

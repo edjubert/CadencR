@@ -6,6 +6,8 @@ import { BrowserSection } from "@/components/settings/BrowserSection";
 import { StorageSection } from "@/components/settings/StorageSection";
 import { McpSection } from "@/components/settings/McpSection";
 import { InterfaceSection } from "@/components/settings/InterfaceSection";
+import { SidebarSection } from "@/components/settings/SidebarSection";
+import { SidebarViewsSection } from "@/components/settings/SidebarViewsSection";
 import { GitSection } from "@/components/settings/GitSection";
 import { ProvidersSection } from "@/components/settings/ProvidersSection";
 import { AboutSection } from "@/components/settings/AboutSection";
@@ -39,6 +41,8 @@ export function GeneralSettingsSections(): React.JSX.Element {
       <AppearanceSection />
       <EditorSection />
       <InterfaceSection />
+      <SidebarSection />
+      <SidebarViewsSection />
       <NotificationsSection />
       <BrowserSection />
       <StorageSection />

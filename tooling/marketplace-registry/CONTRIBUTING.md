@@ -1,5 +1,31 @@
 # Contributing a Provider Version
 
+## Current scope: contributor preparation, not public intake
+
+v0.13.0 keeps marketplace UI hidden. Do not publish remote plugin releases or
+submit production registry updates as part of this milestone. Rust command
+examples below may be exercised locally from a reviewed build; there is no
+qualified distributed CLI pin yet. The `PENDING` pin preserves schema-1
+JavaScript CI; it **does not support mixed schema-2 themes or trust generations**.
+
+### Rust provider and theme paths
+
+| Step                  | ACP provider                                                                                                                                       | Declarative theme                                                                                                    |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Validate locally      | `cadencr plugin validate <folder> --descriptor <reviewed-descriptor.json>`                                                                         | `cadencr plugin validate <folder> --kind theme`                                                                      |
+| Package inert staging | `cadencr registry pack-provider --package <metadata.json> --target <target> --directory <staging> --output <new.tar.gz>` for every declared target | `cadencr registry pack-theme --directory <staging> --output <new.tar.gz>`                                            |
+| Review contract       | Complete target set, source commit/tag, archive hashes and ACP launch metadata; no credentials                                                     | Explicit schema-2 `kind: "theme"`, closed `theme.json` and optional declared raster asset; no executable/ACP surface |
+| Candidate review      | `cadencr registry validate --base <accepted-tree> --candidate <candidate-tree>` using trusted Rust tooling                                         | Same Rust gate; never use legacy JavaScript to claim schema-2 acceptance                                             |
+
+See the [CLI contract](../../packages/cli/README.md) for exact submission,
+schema-upgrade, bounds and diagnostics. Stage only distribution content; authoring
+projects may contain files that a distributable theme must not contain.
+Packaging and local validation are not source-ownership checks or permission to
+sign/publish. Maintainers independently review contributor ownership, immutable
+source bindings, licenses, declared permissions and all platform/theme bytes.
+The legacy provider-only procedure below is retained for current templates,
+not a theme contribution route.
+
 ## Before opening a pull request
 
 1. Implement and test `version`, `models --format acp-config-options-v1`, and

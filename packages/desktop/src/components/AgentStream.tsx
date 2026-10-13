@@ -14,6 +14,7 @@ import {
   type Components,
   type FollowOutput,
   type ListRange,
+  type SizeFunction,
   type VirtuosoHandle,
 } from "react-virtuoso";
 import type { AgentBlockData } from "./AgentBlock";
@@ -79,6 +80,8 @@ interface AgentStreamProps {
   scrollContainerRef?: ScrollRef;
   /** Imperative handle to Virtuoso (used to scroll to the true last item). */
   virtuosoRef?: Ref<VirtuosoHandle>;
+  /** Virtuoso row measurement (the scroll hook's anchor guard hooks in here). */
+  itemSize?: SizeFunction;
   /**
    * Virtuoso `followOutput` callback. Returns `'auto'` while auto-scroll is
    * engaged so the view stays pinned to the bottom across async item
@@ -217,6 +220,7 @@ interface AgentVirtuosoProps {
   items: DisplayItem[];
   firstItemIndex: number;
   context: AgentStreamVirtuosoContext;
+  itemSize?: SizeFunction;
   followOutput?: FollowOutput;
   onAtBottomStateChange?: AgentStreamProps["onAtBottomStateChange"];
   onTotalListHeightChanged?: AgentStreamProps["onTotalListHeightChanged"];
@@ -232,6 +236,7 @@ function AgentVirtuoso({
   items,
   firstItemIndex,
   context,
+  itemSize,
   followOutput,
   onAtBottomStateChange,
   onTotalListHeightChanged,
@@ -257,6 +262,7 @@ function AgentVirtuoso({
       increaseViewportBy={{ top: 600, bottom: 400 }}
       minOverscanItemCount={{ top: 4, bottom: 3 }}
       overscan={{ main: 300, reverse: 300 }}
+      itemSize={itemSize}
       components={VIRTUOSO_COMPONENTS}
       context={context}
       followOutput={followOutput}
@@ -282,6 +288,7 @@ export const AgentStream = memo(function AgentStream({
   basePath,
   scrollContainerRef,
   virtuosoRef,
+  itemSize,
   followOutput,
   onAtBottomStateChange,
   onTotalListHeightChanged,
@@ -363,6 +370,7 @@ export const AgentStream = memo(function AgentStream({
         items={displayItems}
         firstItemIndex={firstItemIndex}
         context={virtuosoContext}
+        itemSize={itemSize}
         followOutput={followOutput}
         onAtBottomStateChange={onAtBottomStateChange}
         onTotalListHeightChanged={onTotalListHeightChanged}

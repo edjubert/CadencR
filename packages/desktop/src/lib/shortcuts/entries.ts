@@ -10,8 +10,9 @@
  * macOS or Ctrl/Alt/Shift on other platforms.
  *
  * Order within a scope is the order rendered. Editor + editor-buffer
- * entries live in {@link ./entries-editor} to keep this file under the
- * 400-line limit; they are concatenated below.
+ * entries live in {@link ./entries-editor}, sidebar entries in
+ * {@link ./entries-sidebar}, to keep this file under the 400-line limit;
+ * they are concatenated below.
  *
  * `as const satisfies` keeps the literal `id` of every entry so the
  * `ShortcutId` union below is derived from this single source — typos in
@@ -22,6 +23,7 @@ import { BROWSER_SHORTCUTS } from "./entries-browser";
 import { EDITOR_SHORTCUTS } from "./entries-editor";
 import { GIT_SHORTCUTS } from "./entries-git";
 import { MODEL_PICKER_SHORTCUTS } from "./entries-model-picker";
+import { SIDEBAR_SHORTCUTS } from "./entries-sidebar";
 import { TERMINAL_SHORTCUTS } from "./entries-terminal";
 
 const APP_SHORTCUTS = [
@@ -117,26 +119,6 @@ const APP_SHORTCUTS = [
 
   // ─── Settings ────────────────────────────────────────────────────────
   { id: "settings-back", keys: ["escape"], description: "Back to workspace", scope: "settings" },
-
-  // ─── Sidebar ─────────────────────────────────────────────────────────
-  {
-    id: "sidebar-focus-down",
-    keys: ["mod", "alt", "down"],
-    description: "Move focus down",
-    scope: "sidebar",
-  },
-  {
-    id: "sidebar-focus-up",
-    keys: ["mod", "alt", "up"],
-    description: "Move focus up",
-    scope: "sidebar",
-  },
-  {
-    id: "sidebar-activate",
-    keys: ["enter"],
-    description: "Open focused item",
-    scope: "sidebar",
-  },
 
   // ─── Unified Agents ──────────────────────────────────────────────────
   {
@@ -397,6 +379,7 @@ const APP_SHORTCUTS = [
 
 export const SHORTCUTS = [
   ...APP_SHORTCUTS,
+  ...SIDEBAR_SHORTCUTS,
   ...GIT_SHORTCUTS,
   ...TERMINAL_SHORTCUTS,
   ...EDITOR_SHORTCUTS,

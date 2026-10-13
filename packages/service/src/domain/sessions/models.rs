@@ -288,6 +288,21 @@ pub struct MessagePreviewResponse {
     pub preview: Option<String>,
 }
 
+/// How many of the agent's todos are done, out of the whole list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+pub struct TodoProgress {
+    pub done: i64,
+    pub total: i64,
+}
+
+/// What a sidebar row previews of a conversation: its last agent reply and
+/// how far its todo list has come. Either is `None` until the agent has one.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FeatureRowSummaryResponse {
+    pub preview: Option<String>,
+    pub todos: Option<TodoProgress>,
+}
+
 /// Raw row used by `get_session_status_snapshot`.
 #[derive(Debug, sqlx::FromRow)]
 pub struct SessionStatusSnapshotRow {

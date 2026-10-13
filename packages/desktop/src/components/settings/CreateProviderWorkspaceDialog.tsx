@@ -350,8 +350,7 @@ function ProviderWorkspaceSummary({ source }: { source: WorkspaceSource }): Reac
         {source === "existing"
           ? "Only import code you trust: Cadencr runs bin/provider locally. It must already be built and executable; Cadencr does not build it. A folder that is already a Cadencr project cannot be reclassified. "
           : ""}
-        Restart Cadencr between connector changes before testing. Marketplace installation and
-        publishing are not part of this local flow yet.
+        Restart Cadencr between connector changes before testing.
       </p>
     </div>
   );
