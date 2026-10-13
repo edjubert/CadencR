@@ -116,6 +116,12 @@ impl Alignment {
 /// A wanted directory that doesn't exist yet is skipped, not reported — it
 /// stays out of `subscribed`, so a later recompute retries it once it
 /// exists. A failed subscription is retried the same way.
+///
+/// A subscribed directory that no longer exists is dropped from `subscribed`
+/// even when it is still wanted: on Linux the backend removes its watch on
+/// DELETE/DELETE_SELF, so keeping the stale entry would prevent the
+/// `wanted.difference(subscribed)` pass below from ever reinstalling the
+/// watch when the directory is recreated.
 fn apply_subscriptions(
     debouncer: &mut Debouncer<RecommendedWatcher>,
     subscribed: &HashSet<PathBuf>,
@@ -135,7 +141,16 @@ fn apply_subscriptions(
             Err(e) => errors.push(format!("failed to unwatch {}: {e}", dir.display())),
         }
     }
-    for dir in wanted.difference(subscribed) {
+    // Invalidate subscriptions whose directory vanished while still wanted:
+    // the OS watch is gone with it, so the entry must not survive to block
+    // reinstallation after the directory returns.
+    for dir in subscribed.intersection(wanted) {
+        if !dir.is_dir() {
+            now.remove(dir);
+        }
+    }
+    let to_watch: Vec<PathBuf> = wanted.difference(&now).cloned().collect();
+    for dir in &to_watch {
         if !dir.is_dir() {
             continue;
         }
@@ -463,6 +478,33 @@ mod tests {
     }
 
     #[test]
+    fn alignment_reinstalls_a_deleted_but_still_wanted_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let root_dir = normalize(dir.path());
+        let themes = root_dir.join("themes");
+        std::fs::create_dir(&themes).unwrap();
+        let mut debouncer = test_debouncer();
+        let wanted = HashSet::from([root_dir.clone(), themes.clone()]);
+        let first = apply_subscriptions(&mut debouncer, &HashSet::new(), &wanted);
+        assert_eq!(first.subscribed, wanted);
+
+        // Deleting the directory removes the OS watch on Linux. The
+        // directory is still wanted, but the stale `subscribed` entry must
+        // not survive: otherwise the recreate below would never reinstall
+        // the watch.
+        std::fs::remove_dir(&themes).unwrap();
+        let second = apply_subscriptions(&mut debouncer, &first.subscribed, &wanted);
+        assert_eq!(second.subscribed, HashSet::from([root_dir.clone()]));
+        assert_eq!(second.error(), None);
+
+        // Recreating the directory: the next alignment reinstalls the watch.
+        std::fs::create_dir(&themes).unwrap();
+        let third = apply_subscriptions(&mut debouncer, &second.subscribed, &wanted);
+        assert_eq!(third.subscribed, wanted);
+        assert_eq!(third.error(), None);
+    }
+
+    #[test]
     fn alignment_errors_are_joined_into_one_message() {
         let alignment = Alignment {
             subscribed: HashSet::new(),
@@ -604,6 +646,47 @@ mod tests {
     }
 
     #[test]
+    fn a_deleted_and_recreated_import_directory_keeps_live_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("alacritty");
+        let themes = config_dir.join("themes");
+        std::fs::create_dir_all(&themes).unwrap();
+        let root = config_dir.join("alacritty.toml");
+        std::fs::write(&root, "general.import = [\"themes/font.toml\"]\n").unwrap();
+        let import = themes.join("font.toml");
+        std::fs::write(&import, "[font]\nsize = 14\n").unwrap();
+
+        let (tx, _keep) = broadcast::channel(16);
+        spawn_watcher(root.clone(), tx.clone());
+        let mut rx = tx.subscribe();
+        std::thread::sleep(Duration::from_millis(500));
+
+        // Deleting the whole import directory removes the OS watch on Linux.
+        // The directory is still wanted, so a stale `subscribed` entry would
+        // block reinstallation after recreation.
+        std::fs::remove_dir_all(&themes).unwrap();
+        // The deletion itself is a matching event (the import file is gone):
+        // it pings clients and asks for a recompute.
+        assert!(
+            wait_for_event(&mut rx),
+            "deleting the import directory must ping clients"
+        );
+        drain_and_settle(&mut rx);
+
+        // Recreate the directory and the import inside it.
+        std::fs::create_dir(&themes).unwrap();
+        assert!(
+            wait_for_event(&mut rx),
+            "recreating the import directory must ping clients"
+        );
+        drain_and_settle(&mut rx);
+        assert!(
+            write_and_expect_reload(&mut rx, &import, "[font]\nsize = 16\n"),
+            "editing the recreated import must trigger a reload event"
+        );
+    }
+
+    #[test]
     fn creating_a_nested_external_import_tree_triggers_live_reload() {
         let dir = tempfile::tempdir().unwrap();
         let config_dir = dir.path().join("alacritty");
@@ -654,6 +737,36 @@ mod tests {
                 "[font]\nsize = 16\n"
             ),
             "creating the nested external import must trigger a reload event"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn editing_a_symlink_target_in_a_separate_directory_triggers_live_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("alacritty");
+        let dotfiles = dir.path().join("dotfiles");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&dotfiles).unwrap();
+        // The import is a symlink whose target lives outside every other
+        // watched directory: only the target's own parent can report edits.
+        let target = dotfiles.join("font.toml");
+        std::fs::write(&target, "[font]\nsize = 14\n").unwrap();
+        let link = config_dir.join("font.toml");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let root = config_dir.join("alacritty.toml");
+        std::fs::write(&root, "general.import = [\"font.toml\"]\n").unwrap();
+
+        let (tx, _keep) = broadcast::channel(16);
+        spawn_watcher(root.clone(), tx.clone());
+        let mut rx = tx.subscribe();
+        std::thread::sleep(Duration::from_millis(500));
+
+        // Editing the target file must trigger a reload event, even though
+        // the target's directory was never part of the import's raw path.
+        assert!(
+            write_and_expect_reload(&mut rx, &target, "[font]\nsize = 18\n"),
+            "editing a symlink target in a separate directory must trigger a reload event"
         );
     }
 

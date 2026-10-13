@@ -30,6 +30,11 @@ impl WatchState {
     /// symlinked import's own deletion event arrives under the raw symlink
     /// path — exact matching must accept both sides.
     ///
+    /// A symlinked import's parent directories are wanted under both forms
+    /// too: the link's own directory (its deletion event arrives there) and
+    /// the resolved target's directory (edits to the target file arrive
+    /// there, and that directory is often outside every other watched path).
+    ///
     /// A wanted directory that doesn't exist yet can't be subscribed, and
     /// nothing below it can produce events either — unless one of its
     /// ancestors is watched. The deepest existing ancestor of every missing
@@ -46,8 +51,12 @@ impl WatchState {
             if let Some(dir) = path.parent() {
                 dirs.insert(normalize(dir));
             }
+            let canonical = normalize(&path);
+            if let Some(target_dir) = canonical.parent() {
+                dirs.insert(normalize(target_dir));
+            }
             files.insert(path.clone());
-            files.insert(normalize(&path));
+            files.insert(canonical);
         }
         let wanted: Vec<PathBuf> = dirs.iter().cloned().collect();
         let mut unwatchable = Vec::new();
@@ -203,6 +212,28 @@ mod tests {
         let error = state.degraded_reload_error().expect("degradation reported");
         assert!(error.contains("filesystem root"), "{error}");
         assert!(error.contains("cadencr-missing-import-top"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn watch_state_watches_a_symlink_targets_parent_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("alacritty");
+        let dotfiles = dir.path().join("dotfiles");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&dotfiles).unwrap();
+        // The import is a symlink whose target lives in a directory that no
+        // other chain file touches: only the target's own parent can report
+        // edits to it.
+        let target = dotfiles.join("font.toml");
+        std::fs::write(&target, "[font]\nsize = 14\n").unwrap();
+        let link = config_dir.join("font.toml");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let root = config_dir.join("alacritty.toml");
+
+        let state = WatchState::from_touched(&root, vec![link]);
+        assert!(state.dirs.contains(&normalize(&config_dir)));
+        assert!(state.dirs.contains(&normalize(&dotfiles)));
     }
 
     #[test]
