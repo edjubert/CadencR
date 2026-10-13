@@ -1,4 +1,4 @@
-import { Download, Ellipsis, PlusIcon, Settings, Trash2 } from "lucide-react";
+import { Archive, Download, Ellipsis, PlusIcon, Settings, Trash2 } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -43,6 +43,7 @@ export function ProjectRowActions({
           <span
             role="button"
             tabIndex={0}
+            aria-label="Project actions"
             className="inline-flex h-6 w-6 items-center justify-center rounded-md hover:bg-accent"
             onClick={(event) => event.stopPropagation()}
           >
@@ -65,6 +66,14 @@ export function ProjectRowActions({
             }}
           >
             <Download className="size-4" /> Import existing sessions
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onClick={(event) => {
+              event.stopPropagation();
+              controller.setArchiveSessionsProject(target);
+            }}
+          >
+            <Archive className="size-4" /> Archive all sessions
           </DropdownMenuItem>
           <DropdownMenuItem
             className="text-destructive focus:text-destructive"
@@ -104,6 +113,12 @@ export function ProjectRowContextMenu({
       </ContextMenuActionItem>
       <ContextMenuActionItem icon={Download} onSelect={() => controller.setImportProject(target)}>
         Import existing sessions
+      </ContextMenuActionItem>
+      <ContextMenuActionItem
+        icon={Archive}
+        onSelect={() => controller.setArchiveSessionsProject(target)}
+      >
+        Archive all sessions
       </ContextMenuActionItem>
       <ContextMenuActionItem
         icon={Trash2}
