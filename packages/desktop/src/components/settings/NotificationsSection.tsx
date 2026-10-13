@@ -10,12 +10,13 @@ import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 import { IconTile } from "./IconTile";
 import { NotificationModePicker } from "./NotificationModePicker";
+import { NotchSettings } from "./NotchSettings";
 import { PushNotificationsSubsection } from "./PushNotificationsSubsection";
 import { apiErrorMessage } from "@/lib/api-errors";
 
 /**
  * Two-row Notifications section:
- *  1. Destination picker (System / In app / Off) — persisted via
+ *  1. Destination picker (Notch / System / In app / Off) — persisted via
  *     `useDebouncedSetting`, which writes through to the React Query
  *     cache that `notifyAgentDone` reads on each fire.
  *  2. "Send test" button — always fires through the OS path so users
@@ -54,6 +55,7 @@ export function NotificationsSection(): React.JSX.Element {
             no-ops. Per-device opt-in, distinct from the shared destination
             picker above. */}
         {isBrowserRemote() ? <PushNotificationsSubsection /> : null}
+        <NotchSettings />
         {/* The OS notification path only exists in the desktop shell. */}
         {isDesktopShell() ? (
           <SettingsSubsection padded={false}>

@@ -128,6 +128,29 @@ describe("FeatureTopBar", () => {
     expect(screen.getByText("My Test Feature")).toBeInTheDocument();
   });
 
+  it("carries the worktree summary inside the header and the details below it", async () => {
+    const { user } = render(
+      <FeatureTopBar
+        featureId={1}
+        projectId={1}
+        wsWorktreeStatus="ready"
+        wsWorktreeBranch="feature/my-branch"
+      />,
+    );
+    const header = screen
+      .getByRole("heading", { name: "My Test Feature" })
+      .closest("[data-feature-header]");
+    expect(header).not.toBeNull();
+    const toggle = screen.getByRole("button", { name: /worktree setup/i });
+    expect(header).toContainElement(toggle);
+    expect(screen.queryByText("Create worktree")).not.toBeInTheDocument();
+
+    await user.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(header).not.toContainElement(screen.getByText("Create worktree"));
+  });
+
   it("renders the feature label next to the title", () => {
     mockFeatureData = { ...mockFeatureData, label: "Review" };
     render(<FeatureTopBar featureId={1} projectId={1} />);

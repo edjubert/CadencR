@@ -88,6 +88,16 @@ pub enum PendingKind {
     Question,
 }
 
+/// How a turn that just went idle ended, when that matters to the user. Only
+/// failures are reported: a turn that completed normally carries no outcome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TurnOutcome {
+    /// The turn stopped on an error (provider error, stream failure, dispatch
+    /// failure) instead of completing.
+    Failed,
+}
+
 /// Live status update broadcast to subscribed WS clients.
 #[derive(Clone, Debug, Serialize)]
 pub struct SessionStatusEvent {
@@ -107,7 +117,27 @@ pub struct SessionStatusEvent {
     /// instead of each device's local clock-at-first-render.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_started_at_ms: Option<i64>,
+    /// Set on the `Idle` event that ends a failed turn, so clients can flag the
+    /// conversation until someone opens it. Never part of a snapshot: like
+    /// "unread", a failure is relative to who has seen it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<TurnOutcome>,
     pub seq: u64,
+}
+
+impl SessionStatusEvent {
+    fn new(session_id: i64, feature_id: i64, status: AgentStatus) -> Self {
+        Self {
+            session_id,
+            feature_id,
+            status,
+            kind: None,
+            request_id: None,
+            turn_started_at_ms: None,
+            outcome: None,
+            seq: 0,
+        }
+    }
 }
 
 /// The single writer for live agent status. Wraps a tokio broadcast channel
@@ -139,11 +169,7 @@ impl SessionStatusBroadcaster {
         self.seq.load(Ordering::Relaxed)
     }
 
-    /// Stamp a fresh seq, send the event. Returns the new seq.
-    ///
-    /// Send errors are intentionally swallowed — `broadcast::Sender::send`
-    /// only fails when there are no receivers, which is the normal state
-    /// when no client is connected.
+    /// Broadcast a status transition. Returns the new seq.
     pub fn broadcast(
         &self,
         session_id: i64,
@@ -152,14 +178,10 @@ impl SessionStatusBroadcaster {
         kind: Option<PendingKind>,
     ) -> u64 {
         let derived = derive_broadcast_status(status, kind);
-        self.broadcast_inner(
-            session_id,
-            feature_id,
-            derived.status,
-            derived.kind,
-            None,
-            None,
-        )
+        self.send(SessionStatusEvent {
+            kind: derived.kind,
+            ..SessionStatusEvent::new(session_id, feature_id, derived.status)
+        })
     }
 
     /// Broadcast a pending user-input gate with its stable request identity.
@@ -170,14 +192,11 @@ impl SessionStatusBroadcaster {
         kind: PendingKind,
         request_id: String,
     ) -> u64 {
-        self.broadcast_inner(
-            session_id,
-            feature_id,
-            AgentStatus::Question,
-            Some(kind),
-            Some(request_id),
-            None,
-        )
+        self.send(SessionStatusEvent {
+            kind: Some(kind),
+            request_id: Some(request_id),
+            ..SessionStatusEvent::new(session_id, feature_id, AgentStatus::Question)
+        })
     }
 
     /// Broadcast that a turn has started, carrying the server-stamped start
@@ -188,35 +207,26 @@ impl SessionStatusBroadcaster {
         feature_id: i64,
         turn_started_at_ms: i64,
     ) -> u64 {
-        self.broadcast_inner(
-            session_id,
-            feature_id,
-            AgentStatus::Agent,
-            None,
-            None,
-            Some(turn_started_at_ms),
-        )
+        self.send(SessionStatusEvent {
+            turn_started_at_ms: Some(turn_started_at_ms),
+            ..SessionStatusEvent::new(session_id, feature_id, AgentStatus::Agent)
+        })
     }
 
-    fn broadcast_inner(
-        &self,
-        session_id: i64,
-        feature_id: i64,
-        status: AgentStatus,
-        kind: Option<PendingKind>,
-        request_id: Option<String>,
-        turn_started_at_ms: Option<i64>,
-    ) -> u64 {
+    /// Broadcast that the session went idle because its turn failed.
+    pub fn broadcast_turn_failed(&self, session_id: i64, feature_id: i64) -> u64 {
+        self.send(SessionStatusEvent {
+            outcome: Some(TurnOutcome::Failed),
+            ..SessionStatusEvent::new(session_id, feature_id, AgentStatus::Idle)
+        })
+    }
+
+    /// Stamp a fresh seq and send. Send errors are intentionally swallowed —
+    /// `broadcast::Sender::send` only fails when there are no receivers, which
+    /// is the normal state when no client is connected.
+    fn send(&self, event: SessionStatusEvent) -> u64 {
         let seq = self.seq.fetch_add(1, Ordering::Relaxed) + 1;
-        let _ = self.tx.send(SessionStatusEvent {
-            session_id,
-            feature_id,
-            status,
-            kind,
-            request_id,
-            turn_started_at_ms,
-            seq,
-        });
+        let _ = self.tx.send(SessionStatusEvent { seq, ..event });
         seq
     }
 
@@ -369,6 +379,28 @@ mod tests {
             derive_broadcast_status(AgentStatus::Question, Some(PendingKind::Permission)),
             DerivedSessionStatus::question(PendingKind::Permission)
         );
+    }
+
+    #[tokio::test]
+    async fn failed_turn_goes_idle_with_a_failed_outcome() {
+        let (tx, _) = tokio::sync::broadcast::channel(4);
+        let broadcaster = SessionStatusBroadcaster::new(tx, Arc::new(AtomicU64::new(0)));
+        let mut rx = broadcaster.subscribe();
+
+        broadcaster.broadcast(7, 8, AgentStatus::Idle, None);
+        broadcaster.broadcast_turn_failed(7, 8);
+
+        let completed = rx.recv().await.unwrap();
+        assert_eq!(completed.outcome, None);
+        assert!(serde_json::to_value(&completed)
+            .unwrap()
+            .get("outcome")
+            .is_none());
+        let failed = rx.recv().await.unwrap();
+        assert_eq!(failed.status, AgentStatus::Idle);
+        assert_eq!(failed.outcome, Some(TurnOutcome::Failed));
+        assert_eq!(serde_json::to_value(&failed).unwrap()["outcome"], "failed");
+        assert!(failed.seq > completed.seq);
     }
 
     #[tokio::test]

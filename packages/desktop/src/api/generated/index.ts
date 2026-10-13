@@ -71,6 +71,43 @@ export interface AcpAgentEntry {
   [key: string]: unknown;
 }
 
+export interface AgentDigestToolCall {
+  /**
+   * The tool input JSON with long strings and arrays clipped, so a file
+   * write's body never crosses the wire. Still valid JSON when the stored
+   * input was.
+   */
+  args: string;
+  /** Tool name exactly as the provider reported it. */
+  name: string;
+}
+
+export type AgentActivityDigestEntryLastTool = null | AgentDigestToolCall;
+
+export interface AgentActivityDigestEntry {
+  feature_id: number;
+  feature_title: string;
+  /**
+   * ISO-8601 UTC timestamp of the session's latest message.
+   * @nullable
+   */
+  last_activity_at?: string | null;
+  /**
+   * Start of the agent's latest top-level text reply, whitespace-collapsed.
+   * @nullable
+   */
+  last_reply?: string | null;
+  last_tool?: AgentActivityDigestEntryLastTool;
+  project_id: number;
+  project_name: string;
+  /** @nullable */
+  provider?: string | null;
+}
+
+export interface AgentActivityDigestResponse {
+  entries: AgentActivityDigestEntry[];
+}
+
 export type AgentBlockChildBlocksItem = { [key: string]: unknown };
 
 export interface AgentMessageOrigin {
@@ -458,6 +495,14 @@ export interface ArchivedCleanupRunResponse {
    */
   eligible_features: number;
   status: ArchivedCleanupRunStatus;
+}
+
+export interface AutoNamePromptResponse {
+  /**
+   * The built-in auto-naming system prompt, used whenever the workspace
+   * `auto_name_system_prompt` setting is empty.
+   */
+  default_prompt: string;
 }
 
 export type DiscoveredSource = (typeof DiscoveredSource)[keyof typeof DiscoveredSource];
@@ -1084,16 +1129,14 @@ export interface CreateProjectRequest {
 }
 
 /**
- * Existing connector repository to import instead of scaffolding a new one.
- */
-export type CreateProviderWorkspaceRequestDirectory = string | null;
-
-/**
  * The stable identity and human label for a new provider connector project.
  */
 export interface CreateProviderWorkspaceRequest {
-  /** Existing connector repository to import instead of scaffolding a new one. */
-  directory?: CreateProviderWorkspaceRequestDirectory;
+  /**
+   * Existing connector repository to import instead of scaffolding a new one.
+   * @nullable
+   */
+  directory?: string | null;
   /** Human-readable name used in the project and scaffold. */
   display_name: string;
   /** ACP Registry-compatible provider id, e.g. `pi-connector`. */
@@ -1555,6 +1598,10 @@ export interface DraftResponse {
   draftPrompt?: string | null;
 }
 
+export interface DuplicateManagedThemeRequest {
+  label: string;
+}
+
 export interface EditorRootResponse {
   /**
    * Absolute filesystem path of the editor root (project or feature
@@ -1597,6 +1644,12 @@ export interface Feature {
   is_pinned: boolean;
   /** @nullable */
   label?: string | null;
+  /**
+   * Latest user message across the conversation's sessions, else its
+   * creation time: the sidebar's sort key. Set by the list endpoints only.
+   * @nullable
+   */
+  last_activity_at?: string | null;
   /** @nullable */
   model_session?: string | null;
   /**
@@ -1816,6 +1869,26 @@ export interface FeatureRespondGateRequest {
 export interface FeatureRespondGateResponse {
   request_id: string;
   resolved: boolean;
+}
+
+/**
+ * How many of the agent's todos are done, out of the whole list.
+ */
+export interface TodoProgress {
+  done: number;
+  total: number;
+}
+
+export type FeatureRowSummaryResponseTodos = null | TodoProgress;
+
+/**
+ * What a sidebar row previews of a conversation: its last agent reply and
+ * how far its todo list has come. Either is `None` until the agent has one.
+ */
+export interface FeatureRowSummaryResponse {
+  /** @nullable */
+  preview?: string | null;
+  todos?: FeatureRowSummaryResponseTodos;
 }
 
 export interface FeatureSetting {
@@ -2423,9 +2496,30 @@ export interface SignedManagedProviderIndex {
   signed: ManagedProviderIndex;
 }
 
+export interface MixedCatalogPayload {
+  expires_at: string;
+  generated_at: string;
+  packages: unknown[];
+  /** @minimum 0 */
+  schema_version: number;
+}
+
+export interface SignedMixedCatalog {
+  signature: ManagedIndexSignature;
+  signed: MixedCatalogPayload;
+}
+
+export type SignedProviderCatalog = SignedManagedProviderIndex | SignedMixedCatalog;
+
 export interface InstallManagedProviderRequest {
-  index: SignedManagedProviderIndex;
+  index: SignedProviderCatalog;
   provider_id: string;
+  version: string;
+}
+
+export interface InstallManagedThemeRequest {
+  index: SignedMixedCatalog;
+  theme_id: string;
   version: string;
 }
 
@@ -2637,7 +2731,12 @@ export const ManagedCatalogCacheStatus = {
   expired: "expired",
 } as const;
 
-export type ManagedCatalogResponseIndex = null | SignedManagedProviderIndex;
+export type ManagedCatalogResponseIndex = null | SignedProviderCatalog;
+
+/**
+ * Host-compatible recommendation per provider, outside the signed payload.
+ */
+export type ManagedCatalogResponseRecommendedVersions = { [key: string]: string };
 
 export interface ManagedCatalogResponse {
   cache_status: ManagedCatalogCacheStatus;
@@ -2650,6 +2749,8 @@ export interface ManagedCatalogResponse {
   /** @nullable */
   generated_at?: string | null;
   index?: ManagedCatalogResponseIndex;
+  /** Host-compatible recommendation per provider, outside the signed payload. */
+  recommended_versions?: ManagedCatalogResponseRecommendedVersions;
   refreshed: boolean;
   /** @nullable */
   signer_key_id?: string | null;
@@ -2807,6 +2908,53 @@ export interface ManagedProvidersInventory {
   providers: ManagedProviderInventoryEntry[];
   root: string;
   trust: ManagedTrustInventory;
+}
+
+export type ManagedThemeCatalogResponseIndex = null | SignedMixedCatalog;
+
+export type ManagedThemeCatalogResponseRecommendedVersions = { [key: string]: string };
+
+export interface ManagedThemeCatalogResponse {
+  /** @nullable */
+  error?: string | null;
+  index?: ManagedThemeCatalogResponseIndex;
+  recommended_versions: ManagedThemeCatalogResponseRecommendedVersions;
+  verified: boolean;
+}
+
+export type ManagedThemeDuplicateResponseAllOf = {
+  /**
+   * Offline policy fallback diagnostic for a successfully created author copy.
+   * @nullable
+   */
+  warning?: string | null;
+};
+
+export type ManagedThemeDuplicateResponse = CreateThemeResponse &
+  ManagedThemeDuplicateResponseAllOf;
+
+export type ManagedThemeInventoryEntryTheme = null | UserTheme;
+
+export interface ManagedThemeInventoryEntry {
+  /**
+   * Referenced by any saved manual/light/dark selection, not necessarily displayed.
+   * The frontend owns OS appearance and resolves the effective displayed theme.
+   */
+  active: boolean;
+  /** @nullable */
+  error?: string | null;
+  /** @nullable */
+  error_code?: string | null;
+  id: string;
+  name: string;
+  sha256: string;
+  theme?: ManagedThemeInventoryEntryTheme;
+  version: string;
+  /**
+   * Offline policy fallback diagnostic; the authenticated theme remains usable.
+   * @nullable
+   */
+  warning?: string | null;
 }
 
 export interface MarkViewedRequest {
@@ -3163,6 +3311,54 @@ export interface PrStatusSnapshot {
   unresolved_threads?: number | null;
 }
 
+export interface PreparePublicationContributionRequest {
+  bundle_id: string;
+  bundle_ids?: string[];
+  confirmed: boolean;
+  expected_plan_sha256: string;
+  release_notes: string;
+}
+
+export interface PreparePublicationPackageRequest {
+  metadata_json: string;
+  staging_directory?: string;
+  target?: string;
+}
+
+export interface PreparedPublicationContribution {
+  output_directory: string;
+  package_path: string;
+  plugin_id: string;
+  project_id: number;
+  pull_request_path: string;
+  release_url: string;
+  submission_path: string;
+  version: string;
+}
+
+export interface PreparedPublicationPackage {
+  archive_path: string;
+  metadata_path: string;
+  plugin_id: string;
+  project_id: number;
+  sha256: string;
+  /** @minimum 0 */
+  size: number;
+  target?: string;
+}
+
+export interface PreviewPublicationRegistryRequest {
+  bundle_id: string;
+  bundle_ids?: string[];
+  release_notes: string;
+}
+
+export interface PreviewPublicationReleaseRequest {
+  bundle_id: string;
+  bundle_ids?: string[];
+  release_notes: string;
+}
+
 export interface RuntimeEffectiveConfig {
   fast_mode: boolean;
   /** @nullable */
@@ -3233,10 +3429,6 @@ export interface ProjectIconCandidate {
   /** Path relative to the project root, as git reported it. */
   path: string;
   size_bytes: number;
-}
-
-export interface ProjectModelSettings {
-  session: string;
 }
 
 export interface ProjectSetting {
@@ -3400,6 +3592,191 @@ export interface ProviderSettings {
 export interface ProviderWorkspace {
   feature_id: number;
   project_id: number;
+}
+
+export type PublicationCheckStatus =
+  (typeof PublicationCheckStatus)[keyof typeof PublicationCheckStatus];
+
+export const PublicationCheckStatus = {
+  pass: "pass",
+  warning: "warning",
+  fail: "fail",
+} as const;
+
+export type PublicationOperationResultOneOfKind =
+  (typeof PublicationOperationResultOneOfKind)[keyof typeof PublicationOperationResultOneOfKind];
+
+export const PublicationOperationResultOneOfKind = {
+  release: "release",
+} as const;
+
+export interface PublishedProviderRelease {
+  already_published: boolean;
+  archive_sha256: string;
+  release_url: string;
+  repository: string;
+  source_commit: string;
+  tag: string;
+}
+
+export type PublicationOperationResultOneOfThreeKind =
+  (typeof PublicationOperationResultOneOfThreeKind)[keyof typeof PublicationOperationResultOneOfThreeKind];
+
+export const PublicationOperationResultOneOfThreeKind = {
+  registry: "registry",
+} as const;
+
+export interface PublicationRegistryResult {
+  branch: string;
+  /** @minimum 0 */
+  pull_request_number: number;
+  pull_request_url: string;
+  reused: boolean;
+}
+
+export type PublicationOperationResultOneOf = {
+  kind: PublicationOperationResultOneOfKind;
+  value: PublishedProviderRelease;
+};
+
+export type PublicationOperationResultOneOfThree = {
+  kind: PublicationOperationResultOneOfThreeKind;
+  value: PublicationRegistryResult;
+};
+
+export type PublicationOperationResult =
+  | PublicationOperationResultOneOf
+  | PublicationOperationResultOneOfThree;
+
+export type PublicationOperationResultProperty = null | PublicationOperationResult;
+
+export type PublicationOperationKind =
+  (typeof PublicationOperationKind)[keyof typeof PublicationOperationKind];
+
+export const PublicationOperationKind = {
+  release: "release",
+  registry: "registry",
+} as const;
+
+export type PublicationOperationStatus =
+  (typeof PublicationOperationStatus)[keyof typeof PublicationOperationStatus];
+
+export const PublicationOperationStatus = {
+  pending: "pending",
+  running: "running",
+  succeeded: "succeeded",
+  failed: "failed",
+  unknown: "unknown",
+} as const;
+
+export interface PublicationOperation {
+  /** @minimum 0 */
+  attempt: number;
+  created_at: string;
+  /** @nullable */
+  error?: string | null;
+  /** @nullable */
+  error_code?: string | null;
+  kind: PublicationOperationKind;
+  operation_id: string;
+  plan_sha256: string;
+  project_id: number;
+  result?: PublicationOperationResultProperty;
+  status: PublicationOperationStatus;
+  updated_at: string;
+}
+
+export interface PublicationOperationsPage {
+  /** @nullable */
+  next_cursor?: string | null;
+  operations: PublicationOperation[];
+}
+
+export type PublicationPreparationStatus =
+  (typeof PublicationPreparationStatus)[keyof typeof PublicationPreparationStatus];
+
+export const PublicationPreparationStatus = {
+  prepared: "prepared",
+  blocked: "blocked",
+} as const;
+
+export interface PublicationReadinessCheck {
+  detail: string;
+  id: string;
+  label: string;
+  status: PublicationCheckStatus;
+}
+
+/**
+ * Result of read-only, local preparation checks for an authored provider.
+ */
+export interface PublicationReadinessResponse {
+  checks: PublicationReadinessCheck[];
+  local_preparation: PublicationPreparationStatus;
+  plugin_id: string;
+  project_id: number;
+  summary: string;
+  supported_package_targets: string[];
+}
+
+export interface PublicationRegistryPreview {
+  account: string;
+  base_branch: string;
+  base_commit: string;
+  branch: string;
+  bundle_id: string;
+  bundle_ids: string[];
+  operation_id: string;
+  package_path: string;
+  plan_sha256: string;
+  plugin_id: string;
+  project_id: number;
+  registry_repository: string;
+  release_notes: string;
+  submission_path: string;
+  version: string;
+}
+
+export interface PublicationReleaseArchive {
+  archive_name: string;
+  archive_sha256: string;
+  /** @minimum 0 */
+  archive_size: number;
+  bundle_id: string;
+  target?: string;
+}
+
+export interface PublicationReleasePreview {
+  account: string;
+  archive_name: string;
+  archive_sha256: string;
+  /** @minimum 0 */
+  archive_size: number;
+  archives: PublicationReleaseArchive[];
+  bundle_id: string;
+  metadata_sha256: string;
+  operation_id: string;
+  plan_sha256: string;
+  plugin_id: string;
+  prerelease: boolean;
+  project_id: number;
+  release_notes: string;
+  release_url: string;
+  repository: string;
+  source_commit: string;
+  tag: string;
+  target?: string;
+  version: string;
+}
+
+export interface PublishPublicationReleaseRequest {
+  bundle_id: string;
+  bundle_ids?: string[];
+  confirmed: boolean;
+  expected_plan_sha256: string;
+  /** @nullable */
+  operation_id?: string | null;
+  release_notes: string;
 }
 
 /**
@@ -3626,6 +4003,16 @@ export interface RemoteStatus {
    * @nullable
    */
   tunnel_host?: string | null;
+}
+
+export interface RemoveManagedThemeRequest {
+  confirm_builtin_fallback?: boolean;
+}
+
+export interface RemoveManagedThemeResponse {
+  /** @nullable */
+  fallback?: string | null;
+  success: boolean;
 }
 
 export interface RemoveOrphanWorktreeBody {
@@ -4007,6 +4394,22 @@ export interface SessionInitPayload {
   thinking_effort?: string | null;
 }
 
+export interface SessionPrompt {
+  attachment_count: number;
+  /** @nullable */
+  created_at?: string | null;
+  /** `agent_messages.id` — matches the transcript block's `messageDbId`. */
+  id: number;
+  image_count: number;
+  /** Start of the prompt's text, whitespace-collapsed. */
+  preview: string;
+}
+
+export interface SessionPromptsResponse {
+  /** Oldest first. */
+  prompts: SessionPrompt[];
+}
+
 /**
  * Discriminant for `SessionStreamStatusPayload`.
  *
@@ -4085,16 +4488,6 @@ export interface SetModelSettingRequest {
   model_id: string;
 }
 
-export interface SetProjectModelSettingRequest {
-  model: string;
-  model_type: string;
-}
-
-export interface SetProjectProviderSettingRequest {
-  provider: string;
-  provider_type: string;
-}
-
 export interface SetProjectSettingRequest {
   key: string;
   value: string;
@@ -4111,6 +4504,16 @@ export interface SetScheduleEnabledRequest {
 
 export interface SetSettingRequest {
   value: string;
+}
+
+export type SetSettingsBatchRequestValues = { [key: string]: string | null };
+
+/**
+ * Several workspace keys written in one atomic pass. A `null` value removes the
+ * key, so its default applies again (the sidebar display options' reset).
+ */
+export interface SetSettingsBatchRequest {
+  values: SetSettingsBatchRequestValues;
 }
 
 export interface Setting {
@@ -4192,6 +4595,16 @@ export interface StashPushBody {
   include_untracked?: boolean;
   /** @nullable */
   message?: string | null;
+}
+
+export interface SubmitPublicationRegistryRequest {
+  bundle_id: string;
+  bundle_ids?: string[];
+  confirmed: boolean;
+  expected_plan_sha256: string;
+  /** @nullable */
+  operation_id?: string | null;
+  release_notes: string;
 }
 
 export interface SuccessResponse {
@@ -4355,7 +4768,7 @@ export interface UpdateLabelRequest {
 }
 
 export interface UpdateManagedProviderRequest {
-  index: SignedManagedProviderIndex;
+  index: SignedProviderCatalog;
   version: string;
 }
 
@@ -4410,7 +4823,8 @@ export interface UsageRecordingIssue {
 
 /**
  * One bucket of the usage timeline: everything the user exchanged with a
- * single provider / model / thinking-effort combination on one UTC day.
+ * single provider / model / thinking-effort combination on one UTC day — the
+ * tokens and the prompts sent.
  *
  * `model_id` and `thinking_effort` are empty strings — never null — when the
  * provider reported none; see the migration for why.
@@ -4425,6 +4839,8 @@ export interface UsageStatsEntry {
   output_tokens: number;
   provider_id: string;
   thinking_effort: string;
+  /** Prompts the user sent, filed under the model selected when sending. */
+  user_messages: number;
 }
 
 export type UsageStatsResponseRecordingIssue = null | UsageRecordingIssue;
@@ -4586,11 +5002,7 @@ export type GetAgentProfilesParams = {
 
 export type GetAgentSelectionParams = {
   /**
-   * Resolve at project scope
-   */
-  project_id?: number;
-  /**
-   * Resolve at feature scope; requires project_id
+   * Resolve at feature scope instead of the workspace
    */
   feature_id?: number;
   /**
@@ -4601,6 +5013,13 @@ export type GetAgentSelectionParams = {
    * Claude Code profile to scope the model lookup to
    */
   profile?: string;
+};
+
+export type GetAgentActivityDigestParams = {
+  /**
+   * Comma-separated feature ids (at most 32).
+   */
+  feature_ids: string;
 };
 
 export type GetUnifiedAgentsParams = {
@@ -4770,6 +5189,14 @@ export type ListFeaturesParams = {
 export type ListFeatureActivityParams = {
   project_id: number;
   include_archived?: boolean;
+};
+
+export type ListRecentFeaturesParams = {
+  /**
+   * How many conversations to return (1–50, default 5).
+   * @nullable
+   */
+  limit?: number | null;
 };
 
 export type GetFeatureAgentStateParams = {
@@ -4981,6 +5408,14 @@ export type LspRootParams = {
    * @nullable
    */
   lsp_id?: string | null;
+};
+
+export type ListPublicationOperationsParams = {
+  /**
+   * @minimum 0
+   */
+  limit?: number;
+  cursor?: string;
 };
 
 export type GetPromptCommandsParams = {
@@ -5364,6 +5799,126 @@ export function useGetAgentSelection<
   queryClient?: QueryClient,
 ): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
   const queryOptions = getGetAgentSelectionQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const getAgentActivityDigest = (
+  params: GetAgentActivityDigestParams,
+  signal?: AbortSignal,
+) => {
+  return customInstance<AgentActivityDigestResponse>({
+    url: `/api/agents/activity-digest`,
+    method: "GET",
+    params,
+    signal,
+  });
+};
+
+export const getGetAgentActivityDigestQueryKey = (params?: GetAgentActivityDigestParams) => {
+  return [`/api/agents/activity-digest`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetAgentActivityDigestQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAgentActivityDigest>>,
+  TError = ErrorType<void>,
+>(
+  params: GetAgentActivityDigestParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getAgentActivityDigest>>, TError, TData>
+    >;
+  },
+) => {
+  const { query: queryOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetAgentActivityDigestQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getAgentActivityDigest>>> = ({ signal }) =>
+    getAgentActivityDigest(params, signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAgentActivityDigest>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAgentActivityDigestQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAgentActivityDigest>>
+>;
+export type GetAgentActivityDigestQueryError = ErrorType<void>;
+
+export function useGetAgentActivityDigest<
+  TData = Awaited<ReturnType<typeof getAgentActivityDigest>>,
+  TError = ErrorType<void>,
+>(
+  params: GetAgentActivityDigestParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getAgentActivityDigest>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentActivityDigest>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentActivityDigest>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetAgentActivityDigest<
+  TData = Awaited<ReturnType<typeof getAgentActivityDigest>>,
+  TError = ErrorType<void>,
+>(
+  params: GetAgentActivityDigestParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getAgentActivityDigest>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentActivityDigest>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentActivityDigest>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetAgentActivityDigest<
+  TData = Awaited<ReturnType<typeof getAgentActivityDigest>>,
+  TError = ErrorType<void>,
+>(
+  params: GetAgentActivityDigestParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getAgentActivityDigest>>, TError, TData>
+    >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+export function useGetAgentActivityDigest<
+  TData = Awaited<ReturnType<typeof getAgentActivityDigest>>,
+  TError = ErrorType<void>,
+>(
+  params: GetAgentActivityDigestParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getAgentActivityDigest>>, TError, TData>
+    >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getGetAgentActivityDigestQueryOptions(params, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
     queryKey: DataTag<QueryKey, TData, TError>;
@@ -10690,6 +11245,109 @@ export const useCreateFeature = <TError = ErrorType<unknown>, TContext = unknown
   return useMutation(getCreateFeatureMutationOptions(options), queryClient);
 };
 
+/**
+ * @summary Every active conversation across all projects, most recently touched first.
+ */
+export const listActiveFeatures = (signal?: AbortSignal) => {
+  return customInstance<Feature[]>({ url: `/api/features/active`, method: "GET", signal });
+};
+
+export const getListActiveFeaturesQueryKey = () => {
+  return [`/api/features/active`] as const;
+};
+
+export const getListActiveFeaturesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listActiveFeatures>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof listActiveFeatures>>, TError, TData>>;
+}) => {
+  const { query: queryOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListActiveFeaturesQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listActiveFeatures>>> = ({ signal }) =>
+    listActiveFeatures(signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listActiveFeatures>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListActiveFeaturesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listActiveFeatures>>
+>;
+export type ListActiveFeaturesQueryError = ErrorType<unknown>;
+
+export function useListActiveFeatures<
+  TData = Awaited<ReturnType<typeof listActiveFeatures>>,
+  TError = ErrorType<unknown>,
+>(
+  options: {
+    query: Partial<UseQueryOptions<Awaited<ReturnType<typeof listActiveFeatures>>, TError, TData>> &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listActiveFeatures>>,
+          TError,
+          Awaited<ReturnType<typeof listActiveFeatures>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useListActiveFeatures<
+  TData = Awaited<ReturnType<typeof listActiveFeatures>>,
+  TError = ErrorType<unknown>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listActiveFeatures>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listActiveFeatures>>,
+          TError,
+          Awaited<ReturnType<typeof listActiveFeatures>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useListActiveFeatures<
+  TData = Awaited<ReturnType<typeof listActiveFeatures>>,
+  TError = ErrorType<unknown>,
+>(
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof listActiveFeatures>>, TError, TData>>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+/**
+ * @summary Every active conversation across all projects, most recently touched first.
+ */
+
+export function useListActiveFeatures<
+  TData = Awaited<ReturnType<typeof listActiveFeatures>>,
+  TError = ErrorType<unknown>,
+>(
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof listActiveFeatures>>, TError, TData>>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getListActiveFeaturesQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
 export const listFeatureActivity = (params: ListFeatureActivityParams, signal?: AbortSignal) => {
   return customInstance<FeatureActivity[]>({
     url: `/api/features/activity`,
@@ -10997,6 +11655,116 @@ export function useListFeaturePorts<
   queryClient?: QueryClient,
 ): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
   const queryOptions = getListFeaturePortsQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+/**
+ * @summary The active conversations touched most recently, across every project.
+ */
+export const listRecentFeatures = (params?: ListRecentFeaturesParams, signal?: AbortSignal) => {
+  return customInstance<Feature[]>({ url: `/api/features/recent`, method: "GET", params, signal });
+};
+
+export const getListRecentFeaturesQueryKey = (params?: ListRecentFeaturesParams) => {
+  return [`/api/features/recent`, ...(params ? [params] : [])] as const;
+};
+
+export const getListRecentFeaturesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listRecentFeatures>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListRecentFeaturesParams,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof listRecentFeatures>>, TError, TData>>;
+  },
+) => {
+  const { query: queryOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListRecentFeaturesQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listRecentFeatures>>> = ({ signal }) =>
+    listRecentFeatures(params, signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listRecentFeatures>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListRecentFeaturesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listRecentFeatures>>
+>;
+export type ListRecentFeaturesQueryError = ErrorType<unknown>;
+
+export function useListRecentFeatures<
+  TData = Awaited<ReturnType<typeof listRecentFeatures>>,
+  TError = ErrorType<unknown>,
+>(
+  params: undefined | ListRecentFeaturesParams,
+  options: {
+    query: Partial<UseQueryOptions<Awaited<ReturnType<typeof listRecentFeatures>>, TError, TData>> &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listRecentFeatures>>,
+          TError,
+          Awaited<ReturnType<typeof listRecentFeatures>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useListRecentFeatures<
+  TData = Awaited<ReturnType<typeof listRecentFeatures>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListRecentFeaturesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listRecentFeatures>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listRecentFeatures>>,
+          TError,
+          Awaited<ReturnType<typeof listRecentFeatures>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useListRecentFeatures<
+  TData = Awaited<ReturnType<typeof listRecentFeatures>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListRecentFeaturesParams,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof listRecentFeatures>>, TError, TData>>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+/**
+ * @summary The active conversations touched most recently, across every project.
+ */
+
+export function useListRecentFeatures<
+  TData = Awaited<ReturnType<typeof listRecentFeatures>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListRecentFeaturesParams,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof listRecentFeatures>>, TError, TData>>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getListRecentFeaturesQueryOptions(params, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
     queryKey: DataTag<QueryKey, TData, TError>;
@@ -12042,6 +12810,131 @@ export const useRefreshSession = <TError = ErrorType<void>, TContext = unknown>(
 > => {
   return useMutation(getRefreshSessionMutationOptions(options), queryClient);
 };
+
+/**
+ * @summary What the sidebar row previews: the last agent reply and the todo progress.
+ */
+export const getFeatureRowSummary = (featureId: number, signal?: AbortSignal) => {
+  return customInstance<FeatureRowSummaryResponse>({
+    url: `/api/features/${featureId}/row-summary`,
+    method: "GET",
+    signal,
+  });
+};
+
+export const getGetFeatureRowSummaryQueryKey = (featureId: number) => {
+  return [`/api/features/${featureId}/row-summary`] as const;
+};
+
+export const getGetFeatureRowSummaryQueryOptions = <
+  TData = Awaited<ReturnType<typeof getFeatureRowSummary>>,
+  TError = ErrorType<unknown>,
+>(
+  featureId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getFeatureRowSummary>>, TError, TData>
+    >;
+  },
+) => {
+  const { query: queryOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetFeatureRowSummaryQueryKey(featureId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getFeatureRowSummary>>> = ({ signal }) =>
+    getFeatureRowSummary(featureId, signal);
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: featureId !== null && featureId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<Awaited<ReturnType<typeof getFeatureRowSummary>>, TError, TData> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+};
+
+export type GetFeatureRowSummaryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getFeatureRowSummary>>
+>;
+export type GetFeatureRowSummaryQueryError = ErrorType<unknown>;
+
+export function useGetFeatureRowSummary<
+  TData = Awaited<ReturnType<typeof getFeatureRowSummary>>,
+  TError = ErrorType<unknown>,
+>(
+  featureId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getFeatureRowSummary>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getFeatureRowSummary>>,
+          TError,
+          Awaited<ReturnType<typeof getFeatureRowSummary>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetFeatureRowSummary<
+  TData = Awaited<ReturnType<typeof getFeatureRowSummary>>,
+  TError = ErrorType<unknown>,
+>(
+  featureId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getFeatureRowSummary>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getFeatureRowSummary>>,
+          TError,
+          Awaited<ReturnType<typeof getFeatureRowSummary>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetFeatureRowSummary<
+  TData = Awaited<ReturnType<typeof getFeatureRowSummary>>,
+  TError = ErrorType<unknown>,
+>(
+  featureId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getFeatureRowSummary>>, TError, TData>
+    >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+/**
+ * @summary What the sidebar row previews: the last agent reply and the todo progress.
+ */
+
+export function useGetFeatureRowSummary<
+  TData = Awaited<ReturnType<typeof getFeatureRowSummary>>,
+  TError = ErrorType<unknown>,
+>(
+  featureId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getFeatureRowSummary>>, TError, TData>
+    >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getGetFeatureRowSummaryQueryOptions(featureId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
 
 export const getSessions = (featureId: number, signal?: AbortSignal) => {
   return customInstance<AgentSessionRow[]>({
@@ -20089,118 +20982,209 @@ export function useListProviderConversations<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
-export const getProjectModelSettings = (id: number, signal?: AbortSignal) => {
-  return customInstance<ProjectModelSettings>({
-    url: `/api/projects/${id}/model-settings`,
-    method: "GET",
+export const preparePublicationContribution = (
+  id: number,
+  preparePublicationContributionRequest: PreparePublicationContributionRequest,
+  signal?: AbortSignal,
+) => {
+  return customInstance<PreparedPublicationContribution>({
+    url: `/api/projects/${id}/publication-contribution`,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    data: preparePublicationContributionRequest,
     signal,
   });
 };
 
-export const getGetProjectModelSettingsQueryKey = (id: number) => {
-  return [`/api/projects/${id}/model-settings`] as const;
+export const getPreparePublicationContributionMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof preparePublicationContribution>>,
+    TError,
+    PreparePublicationContributionMutationVariables,
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof preparePublicationContribution>>,
+  TError,
+  PreparePublicationContributionMutationVariables,
+  TContext
+> => {
+  const mutationKey = ["preparePublicationContribution"];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof preparePublicationContribution>>,
+    PreparePublicationContributionMutationVariables
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return preparePublicationContribution(id, data);
+  };
+
+  return { mutationFn, ...mutationOptions };
 };
 
-export const getGetProjectModelSettingsQueryOptions = <
-  TData = Awaited<ReturnType<typeof getProjectModelSettings>>,
-  TError = ErrorType<unknown>,
+export type PreparePublicationContributionMutationResult = NonNullable<
+  Awaited<ReturnType<typeof preparePublicationContribution>>
+>;
+export type PreparePublicationContributionMutationBody = PreparePublicationContributionRequest;
+export type PreparePublicationContributionMutationError = ErrorType<void>;
+export type PreparePublicationContributionMutationVariables = {
+  id: number;
+  data: PreparePublicationContributionRequest;
+};
+
+export const usePreparePublicationContribution = <TError = ErrorType<void>, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof preparePublicationContribution>>,
+      TError,
+      PreparePublicationContributionMutationVariables,
+      TContext
+    >;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof preparePublicationContribution>>,
+  TError,
+  PreparePublicationContributionMutationVariables,
+  TContext
+> => {
+  return useMutation(getPreparePublicationContributionMutationOptions(options), queryClient);
+};
+
+export const listPublicationOperations = (
+  id: number,
+  params?: ListPublicationOperationsParams,
+  signal?: AbortSignal,
+) => {
+  return customInstance<PublicationOperationsPage>({
+    url: `/api/projects/${id}/publication-operations`,
+    method: "GET",
+    params,
+    signal,
+  });
+};
+
+export const getListPublicationOperationsQueryKey = (
+  id: number,
+  params?: ListPublicationOperationsParams,
+) => {
+  return [`/api/projects/${id}/publication-operations`, ...(params ? [params] : [])] as const;
+};
+
+export const getListPublicationOperationsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listPublicationOperations>>,
+  TError = ErrorType<void>,
 >(
   id: number,
+  params?: ListPublicationOperationsParams,
   options?: {
     query?: Partial<
-      UseQueryOptions<Awaited<ReturnType<typeof getProjectModelSettings>>, TError, TData>
+      UseQueryOptions<Awaited<ReturnType<typeof listPublicationOperations>>, TError, TData>
     >;
   },
 ) => {
   const { query: queryOptions } = options ?? {};
 
-  const queryKey = queryOptions?.queryKey ?? getGetProjectModelSettingsQueryKey(id);
+  const queryKey = queryOptions?.queryKey ?? getListPublicationOperationsQueryKey(id, params);
 
-  const queryFn: QueryFunction<Awaited<ReturnType<typeof getProjectModelSettings>>> = ({
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listPublicationOperations>>> = ({
     signal,
-  }) => getProjectModelSettings(id, signal);
+  }) => listPublicationOperations(id, params, signal);
 
   return {
     queryKey,
     queryFn,
     enabled: id !== null && id !== undefined,
     ...queryOptions,
-  } as UseQueryOptions<Awaited<ReturnType<typeof getProjectModelSettings>>, TError, TData> & {
+  } as UseQueryOptions<Awaited<ReturnType<typeof listPublicationOperations>>, TError, TData> & {
     queryKey: DataTag<QueryKey, TData, TError>;
   };
 };
 
-export type GetProjectModelSettingsQueryResult = NonNullable<
-  Awaited<ReturnType<typeof getProjectModelSettings>>
+export type ListPublicationOperationsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listPublicationOperations>>
 >;
-export type GetProjectModelSettingsQueryError = ErrorType<unknown>;
+export type ListPublicationOperationsQueryError = ErrorType<void>;
 
-export function useGetProjectModelSettings<
-  TData = Awaited<ReturnType<typeof getProjectModelSettings>>,
-  TError = ErrorType<unknown>,
+export function useListPublicationOperations<
+  TData = Awaited<ReturnType<typeof listPublicationOperations>>,
+  TError = ErrorType<void>,
 >(
   id: number,
+  params: undefined | ListPublicationOperationsParams,
   options: {
     query: Partial<
-      UseQueryOptions<Awaited<ReturnType<typeof getProjectModelSettings>>, TError, TData>
+      UseQueryOptions<Awaited<ReturnType<typeof listPublicationOperations>>, TError, TData>
     > &
       Pick<
         DefinedInitialDataOptions<
-          Awaited<ReturnType<typeof getProjectModelSettings>>,
+          Awaited<ReturnType<typeof listPublicationOperations>>,
           TError,
-          Awaited<ReturnType<typeof getProjectModelSettings>>
+          Awaited<ReturnType<typeof listPublicationOperations>>
         >,
         "initialData"
       >;
   },
   queryClient?: QueryClient,
 ): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
-export function useGetProjectModelSettings<
-  TData = Awaited<ReturnType<typeof getProjectModelSettings>>,
-  TError = ErrorType<unknown>,
+export function useListPublicationOperations<
+  TData = Awaited<ReturnType<typeof listPublicationOperations>>,
+  TError = ErrorType<void>,
 >(
   id: number,
+  params?: ListPublicationOperationsParams,
   options?: {
     query?: Partial<
-      UseQueryOptions<Awaited<ReturnType<typeof getProjectModelSettings>>, TError, TData>
+      UseQueryOptions<Awaited<ReturnType<typeof listPublicationOperations>>, TError, TData>
     > &
       Pick<
         UndefinedInitialDataOptions<
-          Awaited<ReturnType<typeof getProjectModelSettings>>,
+          Awaited<ReturnType<typeof listPublicationOperations>>,
           TError,
-          Awaited<ReturnType<typeof getProjectModelSettings>>
+          Awaited<ReturnType<typeof listPublicationOperations>>
         >,
         "initialData"
       >;
   },
   queryClient?: QueryClient,
 ): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
-export function useGetProjectModelSettings<
-  TData = Awaited<ReturnType<typeof getProjectModelSettings>>,
-  TError = ErrorType<unknown>,
+export function useListPublicationOperations<
+  TData = Awaited<ReturnType<typeof listPublicationOperations>>,
+  TError = ErrorType<void>,
 >(
   id: number,
+  params?: ListPublicationOperationsParams,
   options?: {
     query?: Partial<
-      UseQueryOptions<Awaited<ReturnType<typeof getProjectModelSettings>>, TError, TData>
+      UseQueryOptions<Awaited<ReturnType<typeof listPublicationOperations>>, TError, TData>
     >;
   },
   queryClient?: QueryClient,
 ): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 
-export function useGetProjectModelSettings<
-  TData = Awaited<ReturnType<typeof getProjectModelSettings>>,
-  TError = ErrorType<unknown>,
+export function useListPublicationOperations<
+  TData = Awaited<ReturnType<typeof listPublicationOperations>>,
+  TError = ErrorType<void>,
 >(
   id: number,
+  params?: ListPublicationOperationsParams,
   options?: {
     query?: Partial<
-      UseQueryOptions<Awaited<ReturnType<typeof getProjectModelSettings>>, TError, TData>
+      UseQueryOptions<Awaited<ReturnType<typeof listPublicationOperations>>, TError, TData>
     >;
   },
   queryClient?: QueryClient,
 ): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
-  const queryOptions = getGetProjectModelSettingsQueryOptions(id, options);
+  const queryOptions = getListPublicationOperationsQueryOptions(id, params, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
     queryKey: DataTag<QueryKey, TData, TError>;
@@ -20209,196 +21193,123 @@ export function useGetProjectModelSettings<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
-export const setProjectModelSetting = (
-  id: number,
-  setProjectModelSettingRequest: SetProjectModelSettingRequest,
-  signal?: AbortSignal,
-) => {
-  return customInstance<ProjectsSuccessResponse>({
-    url: `/api/projects/${id}/model-settings`,
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    data: setProjectModelSettingRequest,
-    signal,
-  });
-};
-
-export const getSetProjectModelSettingMutationOptions = <
-  TError = ErrorType<unknown>,
-  TContext = unknown,
->(options?: {
-  mutation?: UseMutationOptions<
-    Awaited<ReturnType<typeof setProjectModelSetting>>,
-    TError,
-    SetProjectModelSettingMutationVariables,
-    TContext
-  >;
-}): UseMutationOptions<
-  Awaited<ReturnType<typeof setProjectModelSetting>>,
-  TError,
-  SetProjectModelSettingMutationVariables,
-  TContext
-> => {
-  const mutationKey = ["setProjectModelSetting"];
-  const { mutation: mutationOptions } = options
-    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
-      ? options
-      : { ...options, mutation: { ...options.mutation, mutationKey } }
-    : { mutation: { mutationKey } };
-
-  const mutationFn: MutationFunction<
-    Awaited<ReturnType<typeof setProjectModelSetting>>,
-    SetProjectModelSettingMutationVariables
-  > = (props) => {
-    const { id, data } = props ?? {};
-
-    return setProjectModelSetting(id, data);
-  };
-
-  return { mutationFn, ...mutationOptions };
-};
-
-export type SetProjectModelSettingMutationResult = NonNullable<
-  Awaited<ReturnType<typeof setProjectModelSetting>>
->;
-export type SetProjectModelSettingMutationBody = SetProjectModelSettingRequest;
-export type SetProjectModelSettingMutationError = ErrorType<unknown>;
-export type SetProjectModelSettingMutationVariables = {
-  id: number;
-  data: SetProjectModelSettingRequest;
-};
-
-export const useSetProjectModelSetting = <TError = ErrorType<unknown>, TContext = unknown>(
-  options?: {
-    mutation?: UseMutationOptions<
-      Awaited<ReturnType<typeof setProjectModelSetting>>,
-      TError,
-      SetProjectModelSettingMutationVariables,
-      TContext
-    >;
-  },
-  queryClient?: QueryClient,
-): UseMutationResult<
-  Awaited<ReturnType<typeof setProjectModelSetting>>,
-  TError,
-  SetProjectModelSettingMutationVariables,
-  TContext
-> => {
-  return useMutation(getSetProjectModelSettingMutationOptions(options), queryClient);
-};
-
-export const getProjectProviderSettings = (id: number, signal?: AbortSignal) => {
-  return customInstance<ProviderSettings>({
-    url: `/api/projects/${id}/provider-settings`,
+export const getPublicationOperation = (id: number, operationId: string, signal?: AbortSignal) => {
+  return customInstance<PublicationOperation>({
+    url: `/api/projects/${id}/publication-operations/${operationId}`,
     method: "GET",
     signal,
   });
 };
 
-export const getGetProjectProviderSettingsQueryKey = (id: number) => {
-  return [`/api/projects/${id}/provider-settings`] as const;
+export const getGetPublicationOperationQueryKey = (id: number, operationId: string) => {
+  return [`/api/projects/${id}/publication-operations/${operationId}`] as const;
 };
 
-export const getGetProjectProviderSettingsQueryOptions = <
-  TData = Awaited<ReturnType<typeof getProjectProviderSettings>>,
-  TError = ErrorType<unknown>,
+export const getGetPublicationOperationQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPublicationOperation>>,
+  TError = ErrorType<void>,
 >(
   id: number,
+  operationId: string,
   options?: {
     query?: Partial<
-      UseQueryOptions<Awaited<ReturnType<typeof getProjectProviderSettings>>, TError, TData>
+      UseQueryOptions<Awaited<ReturnType<typeof getPublicationOperation>>, TError, TData>
     >;
   },
 ) => {
   const { query: queryOptions } = options ?? {};
 
-  const queryKey = queryOptions?.queryKey ?? getGetProjectProviderSettingsQueryKey(id);
+  const queryKey = queryOptions?.queryKey ?? getGetPublicationOperationQueryKey(id, operationId);
 
-  const queryFn: QueryFunction<Awaited<ReturnType<typeof getProjectProviderSettings>>> = ({
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getPublicationOperation>>> = ({
     signal,
-  }) => getProjectProviderSettings(id, signal);
+  }) => getPublicationOperation(id, operationId, signal);
 
   return {
     queryKey,
     queryFn,
-    enabled: id !== null && id !== undefined,
+    enabled: id !== null && id !== undefined && operationId !== null && operationId !== undefined,
     ...queryOptions,
-  } as UseQueryOptions<Awaited<ReturnType<typeof getProjectProviderSettings>>, TError, TData> & {
+  } as UseQueryOptions<Awaited<ReturnType<typeof getPublicationOperation>>, TError, TData> & {
     queryKey: DataTag<QueryKey, TData, TError>;
   };
 };
 
-export type GetProjectProviderSettingsQueryResult = NonNullable<
-  Awaited<ReturnType<typeof getProjectProviderSettings>>
+export type GetPublicationOperationQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPublicationOperation>>
 >;
-export type GetProjectProviderSettingsQueryError = ErrorType<unknown>;
+export type GetPublicationOperationQueryError = ErrorType<void>;
 
-export function useGetProjectProviderSettings<
-  TData = Awaited<ReturnType<typeof getProjectProviderSettings>>,
-  TError = ErrorType<unknown>,
+export function useGetPublicationOperation<
+  TData = Awaited<ReturnType<typeof getPublicationOperation>>,
+  TError = ErrorType<void>,
 >(
   id: number,
+  operationId: string,
   options: {
     query: Partial<
-      UseQueryOptions<Awaited<ReturnType<typeof getProjectProviderSettings>>, TError, TData>
+      UseQueryOptions<Awaited<ReturnType<typeof getPublicationOperation>>, TError, TData>
     > &
       Pick<
         DefinedInitialDataOptions<
-          Awaited<ReturnType<typeof getProjectProviderSettings>>,
+          Awaited<ReturnType<typeof getPublicationOperation>>,
           TError,
-          Awaited<ReturnType<typeof getProjectProviderSettings>>
+          Awaited<ReturnType<typeof getPublicationOperation>>
         >,
         "initialData"
       >;
   },
   queryClient?: QueryClient,
 ): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
-export function useGetProjectProviderSettings<
-  TData = Awaited<ReturnType<typeof getProjectProviderSettings>>,
-  TError = ErrorType<unknown>,
+export function useGetPublicationOperation<
+  TData = Awaited<ReturnType<typeof getPublicationOperation>>,
+  TError = ErrorType<void>,
 >(
   id: number,
+  operationId: string,
   options?: {
     query?: Partial<
-      UseQueryOptions<Awaited<ReturnType<typeof getProjectProviderSettings>>, TError, TData>
+      UseQueryOptions<Awaited<ReturnType<typeof getPublicationOperation>>, TError, TData>
     > &
       Pick<
         UndefinedInitialDataOptions<
-          Awaited<ReturnType<typeof getProjectProviderSettings>>,
+          Awaited<ReturnType<typeof getPublicationOperation>>,
           TError,
-          Awaited<ReturnType<typeof getProjectProviderSettings>>
+          Awaited<ReturnType<typeof getPublicationOperation>>
         >,
         "initialData"
       >;
   },
   queryClient?: QueryClient,
 ): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
-export function useGetProjectProviderSettings<
-  TData = Awaited<ReturnType<typeof getProjectProviderSettings>>,
-  TError = ErrorType<unknown>,
+export function useGetPublicationOperation<
+  TData = Awaited<ReturnType<typeof getPublicationOperation>>,
+  TError = ErrorType<void>,
 >(
   id: number,
+  operationId: string,
   options?: {
     query?: Partial<
-      UseQueryOptions<Awaited<ReturnType<typeof getProjectProviderSettings>>, TError, TData>
+      UseQueryOptions<Awaited<ReturnType<typeof getPublicationOperation>>, TError, TData>
     >;
   },
   queryClient?: QueryClient,
 ): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 
-export function useGetProjectProviderSettings<
-  TData = Awaited<ReturnType<typeof getProjectProviderSettings>>,
-  TError = ErrorType<unknown>,
+export function useGetPublicationOperation<
+  TData = Awaited<ReturnType<typeof getPublicationOperation>>,
+  TError = ErrorType<void>,
 >(
   id: number,
+  operationId: string,
   options?: {
     query?: Partial<
-      UseQueryOptions<Awaited<ReturnType<typeof getProjectProviderSettings>>, TError, TData>
+      UseQueryOptions<Awaited<ReturnType<typeof getPublicationOperation>>, TError, TData>
     >;
   },
   queryClient?: QueryClient,
 ): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
-  const queryOptions = getGetProjectProviderSettingsQueryOptions(id, options);
+  const queryOptions = getGetPublicationOperationQueryOptions(id, operationId, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
     queryKey: DataTag<QueryKey, TData, TError>;
@@ -20407,37 +21318,37 @@ export function useGetProjectProviderSettings<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
-export const setProjectProviderSetting = (
+export const preparePublicationPackage = (
   id: number,
-  setProjectProviderSettingRequest: SetProjectProviderSettingRequest,
+  preparePublicationPackageRequest: PreparePublicationPackageRequest,
   signal?: AbortSignal,
 ) => {
-  return customInstance<ProjectsSuccessResponse>({
-    url: `/api/projects/${id}/provider-settings`,
-    method: "PUT",
+  return customInstance<PreparedPublicationPackage>({
+    url: `/api/projects/${id}/publication-package`,
+    method: "POST",
     headers: { "Content-Type": "application/json" },
-    data: setProjectProviderSettingRequest,
+    data: preparePublicationPackageRequest,
     signal,
   });
 };
 
-export const getSetProjectProviderSettingMutationOptions = <
-  TError = ErrorType<unknown>,
+export const getPreparePublicationPackageMutationOptions = <
+  TError = ErrorType<void>,
   TContext = unknown,
 >(options?: {
   mutation?: UseMutationOptions<
-    Awaited<ReturnType<typeof setProjectProviderSetting>>,
+    Awaited<ReturnType<typeof preparePublicationPackage>>,
     TError,
-    SetProjectProviderSettingMutationVariables,
+    PreparePublicationPackageMutationVariables,
     TContext
   >;
 }): UseMutationOptions<
-  Awaited<ReturnType<typeof setProjectProviderSetting>>,
+  Awaited<ReturnType<typeof preparePublicationPackage>>,
   TError,
-  SetProjectProviderSettingMutationVariables,
+  PreparePublicationPackageMutationVariables,
   TContext
 > => {
-  const mutationKey = ["setProjectProviderSetting"];
+  const mutationKey = ["preparePublicationPackage"];
   const { mutation: mutationOptions } = options
     ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
       ? options
@@ -20445,44 +21356,478 @@ export const getSetProjectProviderSettingMutationOptions = <
     : { mutation: { mutationKey } };
 
   const mutationFn: MutationFunction<
-    Awaited<ReturnType<typeof setProjectProviderSetting>>,
-    SetProjectProviderSettingMutationVariables
+    Awaited<ReturnType<typeof preparePublicationPackage>>,
+    PreparePublicationPackageMutationVariables
   > = (props) => {
     const { id, data } = props ?? {};
 
-    return setProjectProviderSetting(id, data);
+    return preparePublicationPackage(id, data);
   };
 
   return { mutationFn, ...mutationOptions };
 };
 
-export type SetProjectProviderSettingMutationResult = NonNullable<
-  Awaited<ReturnType<typeof setProjectProviderSetting>>
+export type PreparePublicationPackageMutationResult = NonNullable<
+  Awaited<ReturnType<typeof preparePublicationPackage>>
 >;
-export type SetProjectProviderSettingMutationBody = SetProjectProviderSettingRequest;
-export type SetProjectProviderSettingMutationError = ErrorType<unknown>;
-export type SetProjectProviderSettingMutationVariables = {
+export type PreparePublicationPackageMutationBody = PreparePublicationPackageRequest;
+export type PreparePublicationPackageMutationError = ErrorType<void>;
+export type PreparePublicationPackageMutationVariables = {
   id: number;
-  data: SetProjectProviderSettingRequest;
+  data: PreparePublicationPackageRequest;
 };
 
-export const useSetProjectProviderSetting = <TError = ErrorType<unknown>, TContext = unknown>(
+export const usePreparePublicationPackage = <TError = ErrorType<void>, TContext = unknown>(
   options?: {
     mutation?: UseMutationOptions<
-      Awaited<ReturnType<typeof setProjectProviderSetting>>,
+      Awaited<ReturnType<typeof preparePublicationPackage>>,
       TError,
-      SetProjectProviderSettingMutationVariables,
+      PreparePublicationPackageMutationVariables,
       TContext
     >;
   },
   queryClient?: QueryClient,
 ): UseMutationResult<
-  Awaited<ReturnType<typeof setProjectProviderSetting>>,
+  Awaited<ReturnType<typeof preparePublicationPackage>>,
   TError,
-  SetProjectProviderSettingMutationVariables,
+  PreparePublicationPackageMutationVariables,
   TContext
 > => {
-  return useMutation(getSetProjectProviderSettingMutationOptions(options), queryClient);
+  return useMutation(getPreparePublicationPackageMutationOptions(options), queryClient);
+};
+
+export const getProjectPublicationReadiness = (id: number, signal?: AbortSignal) => {
+  return customInstance<PublicationReadinessResponse>({
+    url: `/api/projects/${id}/publication-readiness`,
+    method: "GET",
+    signal,
+  });
+};
+
+export const getGetProjectPublicationReadinessQueryKey = (id: number) => {
+  return [`/api/projects/${id}/publication-readiness`] as const;
+};
+
+export const getGetProjectPublicationReadinessQueryOptions = <
+  TData = Awaited<ReturnType<typeof getProjectPublicationReadiness>>,
+  TError = ErrorType<void>,
+>(
+  id: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getProjectPublicationReadiness>>, TError, TData>
+    >;
+  },
+) => {
+  const { query: queryOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetProjectPublicationReadinessQueryKey(id);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getProjectPublicationReadiness>>> = ({
+    signal,
+  }) => getProjectPublicationReadiness(id, signal);
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getProjectPublicationReadiness>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetProjectPublicationReadinessQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getProjectPublicationReadiness>>
+>;
+export type GetProjectPublicationReadinessQueryError = ErrorType<void>;
+
+export function useGetProjectPublicationReadiness<
+  TData = Awaited<ReturnType<typeof getProjectPublicationReadiness>>,
+  TError = ErrorType<void>,
+>(
+  id: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getProjectPublicationReadiness>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getProjectPublicationReadiness>>,
+          TError,
+          Awaited<ReturnType<typeof getProjectPublicationReadiness>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetProjectPublicationReadiness<
+  TData = Awaited<ReturnType<typeof getProjectPublicationReadiness>>,
+  TError = ErrorType<void>,
+>(
+  id: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getProjectPublicationReadiness>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getProjectPublicationReadiness>>,
+          TError,
+          Awaited<ReturnType<typeof getProjectPublicationReadiness>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetProjectPublicationReadiness<
+  TData = Awaited<ReturnType<typeof getProjectPublicationReadiness>>,
+  TError = ErrorType<void>,
+>(
+  id: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getProjectPublicationReadiness>>, TError, TData>
+    >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+export function useGetProjectPublicationReadiness<
+  TData = Awaited<ReturnType<typeof getProjectPublicationReadiness>>,
+  TError = ErrorType<void>,
+>(
+  id: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getProjectPublicationReadiness>>, TError, TData>
+    >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getGetProjectPublicationReadinessQueryOptions(id, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const submitPublicationRegistry = (
+  id: number,
+  submitPublicationRegistryRequest: SubmitPublicationRegistryRequest,
+  signal?: AbortSignal,
+) => {
+  return customInstance<PublicationRegistryResult>({
+    url: `/api/projects/${id}/publication-registry`,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    data: submitPublicationRegistryRequest,
+    signal,
+  });
+};
+
+export const getSubmitPublicationRegistryMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof submitPublicationRegistry>>,
+    TError,
+    SubmitPublicationRegistryMutationVariables,
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof submitPublicationRegistry>>,
+  TError,
+  SubmitPublicationRegistryMutationVariables,
+  TContext
+> => {
+  const mutationKey = ["submitPublicationRegistry"];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof submitPublicationRegistry>>,
+    SubmitPublicationRegistryMutationVariables
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return submitPublicationRegistry(id, data);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SubmitPublicationRegistryMutationResult = NonNullable<
+  Awaited<ReturnType<typeof submitPublicationRegistry>>
+>;
+export type SubmitPublicationRegistryMutationBody = SubmitPublicationRegistryRequest;
+export type SubmitPublicationRegistryMutationError = ErrorType<void>;
+export type SubmitPublicationRegistryMutationVariables = {
+  id: number;
+  data: SubmitPublicationRegistryRequest;
+};
+
+export const useSubmitPublicationRegistry = <TError = ErrorType<void>, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof submitPublicationRegistry>>,
+      TError,
+      SubmitPublicationRegistryMutationVariables,
+      TContext
+    >;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof submitPublicationRegistry>>,
+  TError,
+  SubmitPublicationRegistryMutationVariables,
+  TContext
+> => {
+  return useMutation(getSubmitPublicationRegistryMutationOptions(options), queryClient);
+};
+
+export const previewPublicationRegistry = (
+  id: number,
+  previewPublicationRegistryRequest: PreviewPublicationRegistryRequest,
+  signal?: AbortSignal,
+) => {
+  return customInstance<PublicationRegistryPreview>({
+    url: `/api/projects/${id}/publication-registry/preview`,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    data: previewPublicationRegistryRequest,
+    signal,
+  });
+};
+
+export const getPreviewPublicationRegistryMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof previewPublicationRegistry>>,
+    TError,
+    PreviewPublicationRegistryMutationVariables,
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof previewPublicationRegistry>>,
+  TError,
+  PreviewPublicationRegistryMutationVariables,
+  TContext
+> => {
+  const mutationKey = ["previewPublicationRegistry"];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof previewPublicationRegistry>>,
+    PreviewPublicationRegistryMutationVariables
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return previewPublicationRegistry(id, data);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type PreviewPublicationRegistryMutationResult = NonNullable<
+  Awaited<ReturnType<typeof previewPublicationRegistry>>
+>;
+export type PreviewPublicationRegistryMutationBody = PreviewPublicationRegistryRequest;
+export type PreviewPublicationRegistryMutationError = ErrorType<void>;
+export type PreviewPublicationRegistryMutationVariables = {
+  id: number;
+  data: PreviewPublicationRegistryRequest;
+};
+
+export const usePreviewPublicationRegistry = <TError = ErrorType<void>, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof previewPublicationRegistry>>,
+      TError,
+      PreviewPublicationRegistryMutationVariables,
+      TContext
+    >;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof previewPublicationRegistry>>,
+  TError,
+  PreviewPublicationRegistryMutationVariables,
+  TContext
+> => {
+  return useMutation(getPreviewPublicationRegistryMutationOptions(options), queryClient);
+};
+
+export const publishPublicationRelease = (
+  id: number,
+  publishPublicationReleaseRequest: PublishPublicationReleaseRequest,
+  signal?: AbortSignal,
+) => {
+  return customInstance<PublishedProviderRelease>({
+    url: `/api/projects/${id}/publication-release`,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    data: publishPublicationReleaseRequest,
+    signal,
+  });
+};
+
+export const getPublishPublicationReleaseMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof publishPublicationRelease>>,
+    TError,
+    PublishPublicationReleaseMutationVariables,
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof publishPublicationRelease>>,
+  TError,
+  PublishPublicationReleaseMutationVariables,
+  TContext
+> => {
+  const mutationKey = ["publishPublicationRelease"];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof publishPublicationRelease>>,
+    PublishPublicationReleaseMutationVariables
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return publishPublicationRelease(id, data);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type PublishPublicationReleaseMutationResult = NonNullable<
+  Awaited<ReturnType<typeof publishPublicationRelease>>
+>;
+export type PublishPublicationReleaseMutationBody = PublishPublicationReleaseRequest;
+export type PublishPublicationReleaseMutationError = ErrorType<void>;
+export type PublishPublicationReleaseMutationVariables = {
+  id: number;
+  data: PublishPublicationReleaseRequest;
+};
+
+export const usePublishPublicationRelease = <TError = ErrorType<void>, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof publishPublicationRelease>>,
+      TError,
+      PublishPublicationReleaseMutationVariables,
+      TContext
+    >;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof publishPublicationRelease>>,
+  TError,
+  PublishPublicationReleaseMutationVariables,
+  TContext
+> => {
+  return useMutation(getPublishPublicationReleaseMutationOptions(options), queryClient);
+};
+
+export const previewPublicationRelease = (
+  id: number,
+  previewPublicationReleaseRequest: PreviewPublicationReleaseRequest,
+  signal?: AbortSignal,
+) => {
+  return customInstance<PublicationReleasePreview>({
+    url: `/api/projects/${id}/publication-release/preview`,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    data: previewPublicationReleaseRequest,
+    signal,
+  });
+};
+
+export const getPreviewPublicationReleaseMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof previewPublicationRelease>>,
+    TError,
+    PreviewPublicationReleaseMutationVariables,
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof previewPublicationRelease>>,
+  TError,
+  PreviewPublicationReleaseMutationVariables,
+  TContext
+> => {
+  const mutationKey = ["previewPublicationRelease"];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof previewPublicationRelease>>,
+    PreviewPublicationReleaseMutationVariables
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return previewPublicationRelease(id, data);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type PreviewPublicationReleaseMutationResult = NonNullable<
+  Awaited<ReturnType<typeof previewPublicationRelease>>
+>;
+export type PreviewPublicationReleaseMutationBody = PreviewPublicationReleaseRequest;
+export type PreviewPublicationReleaseMutationError = ErrorType<void>;
+export type PreviewPublicationReleaseMutationVariables = {
+  id: number;
+  data: PreviewPublicationReleaseRequest;
+};
+
+export const usePreviewPublicationRelease = <TError = ErrorType<void>, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof previewPublicationRelease>>,
+      TError,
+      PreviewPublicationReleaseMutationVariables,
+      TContext
+    >;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof previewPublicationRelease>>,
+  TError,
+  PreviewPublicationReleaseMutationVariables,
+  TContext
+> => {
+  return useMutation(getPreviewPublicationReleaseMutationOptions(options), queryClient);
 };
 
 export const getProjectSettings = (id: number, signal?: AbortSignal) => {
@@ -22641,6 +23986,117 @@ export const useSaveSessionDraft = <TError = ErrorType<unknown>, TContext = unkn
   return useMutation(getSaveSessionDraftMutationOptions(options), queryClient);
 };
 
+export const listSessionPrompts = (sessionId: number, signal?: AbortSignal) => {
+  return customInstance<SessionPromptsResponse>({
+    url: `/api/sessions/${sessionId}/prompts`,
+    method: "GET",
+    signal,
+  });
+};
+
+export const getListSessionPromptsQueryKey = (sessionId: number) => {
+  return [`/api/sessions/${sessionId}/prompts`] as const;
+};
+
+export const getListSessionPromptsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listSessionPrompts>>,
+  TError = ErrorType<void>,
+>(
+  sessionId: number,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof listSessionPrompts>>, TError, TData>>;
+  },
+) => {
+  const { query: queryOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListSessionPromptsQueryKey(sessionId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listSessionPrompts>>> = ({ signal }) =>
+    listSessionPrompts(sessionId, signal);
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: sessionId !== null && sessionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<Awaited<ReturnType<typeof listSessionPrompts>>, TError, TData> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+};
+
+export type ListSessionPromptsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listSessionPrompts>>
+>;
+export type ListSessionPromptsQueryError = ErrorType<void>;
+
+export function useListSessionPrompts<
+  TData = Awaited<ReturnType<typeof listSessionPrompts>>,
+  TError = ErrorType<void>,
+>(
+  sessionId: number,
+  options: {
+    query: Partial<UseQueryOptions<Awaited<ReturnType<typeof listSessionPrompts>>, TError, TData>> &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listSessionPrompts>>,
+          TError,
+          Awaited<ReturnType<typeof listSessionPrompts>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useListSessionPrompts<
+  TData = Awaited<ReturnType<typeof listSessionPrompts>>,
+  TError = ErrorType<void>,
+>(
+  sessionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listSessionPrompts>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listSessionPrompts>>,
+          TError,
+          Awaited<ReturnType<typeof listSessionPrompts>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useListSessionPrompts<
+  TData = Awaited<ReturnType<typeof listSessionPrompts>>,
+  TError = ErrorType<void>,
+>(
+  sessionId: number,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof listSessionPrompts>>, TError, TData>>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+export function useListSessionPrompts<
+  TData = Awaited<ReturnType<typeof listSessionPrompts>>,
+  TError = ErrorType<void>,
+>(
+  sessionId: number,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof listSessionPrompts>>, TError, TData>>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getListSessionPromptsQueryOptions(sessionId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
 export const runArchivedCleanup = (signal?: AbortSignal) => {
   return customInstance<ArchivedCleanupRunResponse>({
     url: `/api/storage-maintenance/archived-cleanup/run`,
@@ -23186,6 +24642,842 @@ export const useCreateTheme = <TError = ErrorType<unknown>, TContext = unknown>(
   return useMutation(getCreateThemeMutationOptions(options), queryClient);
 };
 
+export const getManagedThemes = (signal?: AbortSignal) => {
+  return customInstance<ManagedThemeInventoryEntry[]>({
+    url: `/api/themes/managed`,
+    method: "GET",
+    signal,
+  });
+};
+
+export const getGetManagedThemesQueryKey = () => {
+  return [`/api/themes/managed`] as const;
+};
+
+export const getGetManagedThemesQueryOptions = <
+  TData = Awaited<ReturnType<typeof getManagedThemes>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getManagedThemes>>, TError, TData>>;
+}) => {
+  const { query: queryOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetManagedThemesQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getManagedThemes>>> = ({ signal }) =>
+    getManagedThemes(signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getManagedThemes>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetManagedThemesQueryResult = NonNullable<Awaited<ReturnType<typeof getManagedThemes>>>;
+export type GetManagedThemesQueryError = ErrorType<unknown>;
+
+export function useGetManagedThemes<
+  TData = Awaited<ReturnType<typeof getManagedThemes>>,
+  TError = ErrorType<unknown>,
+>(
+  options: {
+    query: Partial<UseQueryOptions<Awaited<ReturnType<typeof getManagedThemes>>, TError, TData>> &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getManagedThemes>>,
+          TError,
+          Awaited<ReturnType<typeof getManagedThemes>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetManagedThemes<
+  TData = Awaited<ReturnType<typeof getManagedThemes>>,
+  TError = ErrorType<unknown>,
+>(
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getManagedThemes>>, TError, TData>> &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getManagedThemes>>,
+          TError,
+          Awaited<ReturnType<typeof getManagedThemes>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetManagedThemes<
+  TData = Awaited<ReturnType<typeof getManagedThemes>>,
+  TError = ErrorType<unknown>,
+>(
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getManagedThemes>>, TError, TData>>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+export function useGetManagedThemes<
+  TData = Awaited<ReturnType<typeof getManagedThemes>>,
+  TError = ErrorType<unknown>,
+>(
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getManagedThemes>>, TError, TData>>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getGetManagedThemesQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const installManagedTheme = (
+  installManagedThemeRequest: InstallManagedThemeRequest,
+  signal?: AbortSignal,
+) => {
+  return customInstance<ManagedThemeInventoryEntry>({
+    url: `/api/themes/managed`,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    data: installManagedThemeRequest,
+    signal,
+  });
+};
+
+export const getInstallManagedThemeMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof installManagedTheme>>,
+    TError,
+    InstallManagedThemeMutationVariables,
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof installManagedTheme>>,
+  TError,
+  InstallManagedThemeMutationVariables,
+  TContext
+> => {
+  const mutationKey = ["installManagedTheme"];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof installManagedTheme>>,
+    InstallManagedThemeMutationVariables
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return installManagedTheme(data);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type InstallManagedThemeMutationResult = NonNullable<
+  Awaited<ReturnType<typeof installManagedTheme>>
+>;
+export type InstallManagedThemeMutationBody = InstallManagedThemeRequest;
+export type InstallManagedThemeMutationError = ErrorType<unknown>;
+export type InstallManagedThemeMutationVariables = { data: InstallManagedThemeRequest };
+
+export const useInstallManagedTheme = <TError = ErrorType<unknown>, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof installManagedTheme>>,
+      TError,
+      InstallManagedThemeMutationVariables,
+      TContext
+    >;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof installManagedTheme>>,
+  TError,
+  InstallManagedThemeMutationVariables,
+  TContext
+> => {
+  return useMutation(getInstallManagedThemeMutationOptions(options), queryClient);
+};
+
+export const getManagedThemeCatalog = (signal?: AbortSignal) => {
+  return customInstance<ManagedThemeCatalogResponse>({
+    url: `/api/themes/managed/catalog`,
+    method: "GET",
+    signal,
+  });
+};
+
+export const getGetManagedThemeCatalogQueryKey = () => {
+  return [`/api/themes/managed/catalog`] as const;
+};
+
+export const getGetManagedThemeCatalogQueryOptions = <
+  TData = Awaited<ReturnType<typeof getManagedThemeCatalog>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<Awaited<ReturnType<typeof getManagedThemeCatalog>>, TError, TData>
+  >;
+}) => {
+  const { query: queryOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetManagedThemeCatalogQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getManagedThemeCatalog>>> = ({ signal }) =>
+    getManagedThemeCatalog(signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getManagedThemeCatalog>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetManagedThemeCatalogQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getManagedThemeCatalog>>
+>;
+export type GetManagedThemeCatalogQueryError = ErrorType<unknown>;
+
+export function useGetManagedThemeCatalog<
+  TData = Awaited<ReturnType<typeof getManagedThemeCatalog>>,
+  TError = ErrorType<unknown>,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getManagedThemeCatalog>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getManagedThemeCatalog>>,
+          TError,
+          Awaited<ReturnType<typeof getManagedThemeCatalog>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetManagedThemeCatalog<
+  TData = Awaited<ReturnType<typeof getManagedThemeCatalog>>,
+  TError = ErrorType<unknown>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getManagedThemeCatalog>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getManagedThemeCatalog>>,
+          TError,
+          Awaited<ReturnType<typeof getManagedThemeCatalog>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetManagedThemeCatalog<
+  TData = Awaited<ReturnType<typeof getManagedThemeCatalog>>,
+  TError = ErrorType<unknown>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getManagedThemeCatalog>>, TError, TData>
+    >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+export function useGetManagedThemeCatalog<
+  TData = Awaited<ReturnType<typeof getManagedThemeCatalog>>,
+  TError = ErrorType<unknown>,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getManagedThemeCatalog>>, TError, TData>
+    >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getGetManagedThemeCatalogQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const refreshManagedThemeCatalog = (signal?: AbortSignal) => {
+  return customInstance<ManagedThemeCatalogResponse>({
+    url: `/api/themes/managed/catalog/refresh`,
+    method: "POST",
+    signal,
+  });
+};
+
+export const getRefreshManagedThemeCatalogMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof refreshManagedThemeCatalog>>,
+    TError,
+    void,
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof refreshManagedThemeCatalog>>,
+  TError,
+  void,
+  TContext
+> => {
+  const mutationKey = ["refreshManagedThemeCatalog"];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof refreshManagedThemeCatalog>>,
+    void
+  > = () => {
+    return refreshManagedThemeCatalog();
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RefreshManagedThemeCatalogMutationResult = NonNullable<
+  Awaited<ReturnType<typeof refreshManagedThemeCatalog>>
+>;
+
+export type RefreshManagedThemeCatalogMutationError = ErrorType<unknown>;
+
+export const useRefreshManagedThemeCatalog = <TError = ErrorType<unknown>, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof refreshManagedThemeCatalog>>,
+      TError,
+      void,
+      TContext
+    >;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof refreshManagedThemeCatalog>>,
+  TError,
+  void,
+  TContext
+> => {
+  return useMutation(getRefreshManagedThemeCatalogMutationOptions(options), queryClient);
+};
+
+export const previewManagedThemePackage = (
+  installManagedThemeRequest: InstallManagedThemeRequest,
+  signal?: AbortSignal,
+) => {
+  return customInstance<UserTheme>({
+    url: `/api/themes/managed/preview`,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    data: installManagedThemeRequest,
+    signal,
+  });
+};
+
+export const getPreviewManagedThemePackageMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof previewManagedThemePackage>>,
+    TError,
+    PreviewManagedThemePackageMutationVariables,
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof previewManagedThemePackage>>,
+  TError,
+  PreviewManagedThemePackageMutationVariables,
+  TContext
+> => {
+  const mutationKey = ["previewManagedThemePackage"];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof previewManagedThemePackage>>,
+    PreviewManagedThemePackageMutationVariables
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return previewManagedThemePackage(data);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type PreviewManagedThemePackageMutationResult = NonNullable<
+  Awaited<ReturnType<typeof previewManagedThemePackage>>
+>;
+export type PreviewManagedThemePackageMutationBody = InstallManagedThemeRequest;
+export type PreviewManagedThemePackageMutationError = ErrorType<unknown>;
+export type PreviewManagedThemePackageMutationVariables = { data: InstallManagedThemeRequest };
+
+export const usePreviewManagedThemePackage = <TError = ErrorType<unknown>, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof previewManagedThemePackage>>,
+      TError,
+      PreviewManagedThemePackageMutationVariables,
+      TContext
+    >;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof previewManagedThemePackage>>,
+  TError,
+  PreviewManagedThemePackageMutationVariables,
+  TContext
+> => {
+  return useMutation(getPreviewManagedThemePackageMutationOptions(options), queryClient);
+};
+
+export const removeManagedTheme = (
+  id: string,
+  removeManagedThemeRequest: RemoveManagedThemeRequest,
+  signal?: AbortSignal,
+) => {
+  return customInstance<RemoveManagedThemeResponse>({
+    url: `/api/themes/managed/${id}`,
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    data: removeManagedThemeRequest,
+    signal,
+  });
+};
+
+export const getRemoveManagedThemeMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof removeManagedTheme>>,
+    TError,
+    RemoveManagedThemeMutationVariables,
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof removeManagedTheme>>,
+  TError,
+  RemoveManagedThemeMutationVariables,
+  TContext
+> => {
+  const mutationKey = ["removeManagedTheme"];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof removeManagedTheme>>,
+    RemoveManagedThemeMutationVariables
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return removeManagedTheme(id, data);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RemoveManagedThemeMutationResult = NonNullable<
+  Awaited<ReturnType<typeof removeManagedTheme>>
+>;
+export type RemoveManagedThemeMutationBody = RemoveManagedThemeRequest;
+export type RemoveManagedThemeMutationError = ErrorType<unknown>;
+export type RemoveManagedThemeMutationVariables = { id: string; data: RemoveManagedThemeRequest };
+
+export const useRemoveManagedTheme = <TError = ErrorType<unknown>, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof removeManagedTheme>>,
+      TError,
+      RemoveManagedThemeMutationVariables,
+      TContext
+    >;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof removeManagedTheme>>,
+  TError,
+  RemoveManagedThemeMutationVariables,
+  TContext
+> => {
+  return useMutation(getRemoveManagedThemeMutationOptions(options), queryClient);
+};
+
+export const applyManagedTheme = (id: string, signal?: AbortSignal) => {
+  return customInstance<ManagedThemeInventoryEntry>({
+    url: `/api/themes/managed/${id}/apply`,
+    method: "POST",
+    signal,
+  });
+};
+
+export const getApplyManagedThemeMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof applyManagedTheme>>,
+    TError,
+    ApplyManagedThemeMutationVariables,
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof applyManagedTheme>>,
+  TError,
+  ApplyManagedThemeMutationVariables,
+  TContext
+> => {
+  const mutationKey = ["applyManagedTheme"];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof applyManagedTheme>>,
+    ApplyManagedThemeMutationVariables
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return applyManagedTheme(id);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ApplyManagedThemeMutationResult = NonNullable<
+  Awaited<ReturnType<typeof applyManagedTheme>>
+>;
+
+export type ApplyManagedThemeMutationError = ErrorType<unknown>;
+export type ApplyManagedThemeMutationVariables = { id: string };
+
+export const useApplyManagedTheme = <TError = ErrorType<unknown>, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof applyManagedTheme>>,
+      TError,
+      ApplyManagedThemeMutationVariables,
+      TContext
+    >;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof applyManagedTheme>>,
+  TError,
+  ApplyManagedThemeMutationVariables,
+  TContext
+> => {
+  return useMutation(getApplyManagedThemeMutationOptions(options), queryClient);
+};
+
+export const duplicateManagedTheme = (
+  id: string,
+  duplicateManagedThemeRequest: DuplicateManagedThemeRequest,
+  signal?: AbortSignal,
+) => {
+  return customInstance<ManagedThemeDuplicateResponse>({
+    url: `/api/themes/managed/${id}/duplicate`,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    data: duplicateManagedThemeRequest,
+    signal,
+  });
+};
+
+export const getDuplicateManagedThemeMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof duplicateManagedTheme>>,
+    TError,
+    DuplicateManagedThemeMutationVariables,
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof duplicateManagedTheme>>,
+  TError,
+  DuplicateManagedThemeMutationVariables,
+  TContext
+> => {
+  const mutationKey = ["duplicateManagedTheme"];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof duplicateManagedTheme>>,
+    DuplicateManagedThemeMutationVariables
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return duplicateManagedTheme(id, data);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DuplicateManagedThemeMutationResult = NonNullable<
+  Awaited<ReturnType<typeof duplicateManagedTheme>>
+>;
+export type DuplicateManagedThemeMutationBody = DuplicateManagedThemeRequest;
+export type DuplicateManagedThemeMutationError = ErrorType<unknown>;
+export type DuplicateManagedThemeMutationVariables = {
+  id: string;
+  data: DuplicateManagedThemeRequest;
+};
+
+export const useDuplicateManagedTheme = <TError = ErrorType<unknown>, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof duplicateManagedTheme>>,
+      TError,
+      DuplicateManagedThemeMutationVariables,
+      TContext
+    >;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof duplicateManagedTheme>>,
+  TError,
+  DuplicateManagedThemeMutationVariables,
+  TContext
+> => {
+  return useMutation(getDuplicateManagedThemeMutationOptions(options), queryClient);
+};
+
+export const previewManagedTheme = (id: string, signal?: AbortSignal) => {
+  return customInstance<ManagedThemeInventoryEntry>({
+    url: `/api/themes/managed/${id}/preview`,
+    method: "GET",
+    signal,
+  });
+};
+
+export const getPreviewManagedThemeQueryKey = (id: string) => {
+  return [`/api/themes/managed/${id}/preview`] as const;
+};
+
+export const getPreviewManagedThemeQueryOptions = <
+  TData = Awaited<ReturnType<typeof previewManagedTheme>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof previewManagedTheme>>, TError, TData>
+    >;
+  },
+) => {
+  const { query: queryOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getPreviewManagedThemeQueryKey(id);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof previewManagedTheme>>> = ({ signal }) =>
+    previewManagedTheme(id, signal);
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<Awaited<ReturnType<typeof previewManagedTheme>>, TError, TData> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+};
+
+export type PreviewManagedThemeQueryResult = NonNullable<
+  Awaited<ReturnType<typeof previewManagedTheme>>
+>;
+export type PreviewManagedThemeQueryError = ErrorType<unknown>;
+
+export function usePreviewManagedTheme<
+  TData = Awaited<ReturnType<typeof previewManagedTheme>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof previewManagedTheme>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof previewManagedTheme>>,
+          TError,
+          Awaited<ReturnType<typeof previewManagedTheme>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function usePreviewManagedTheme<
+  TData = Awaited<ReturnType<typeof previewManagedTheme>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof previewManagedTheme>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof previewManagedTheme>>,
+          TError,
+          Awaited<ReturnType<typeof previewManagedTheme>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function usePreviewManagedTheme<
+  TData = Awaited<ReturnType<typeof previewManagedTheme>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof previewManagedTheme>>, TError, TData>
+    >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+export function usePreviewManagedTheme<
+  TData = Awaited<ReturnType<typeof previewManagedTheme>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof previewManagedTheme>>, TError, TData>
+    >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getPreviewManagedThemeQueryOptions(id, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const updateManagedTheme = (
+  id: string,
+  installManagedThemeRequest: InstallManagedThemeRequest,
+  signal?: AbortSignal,
+) => {
+  return customInstance<ManagedThemeInventoryEntry>({
+    url: `/api/themes/managed/${id}/update`,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    data: installManagedThemeRequest,
+    signal,
+  });
+};
+
+export const getUpdateManagedThemeMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateManagedTheme>>,
+    TError,
+    UpdateManagedThemeMutationVariables,
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateManagedTheme>>,
+  TError,
+  UpdateManagedThemeMutationVariables,
+  TContext
+> => {
+  const mutationKey = ["updateManagedTheme"];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateManagedTheme>>,
+    UpdateManagedThemeMutationVariables
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return updateManagedTheme(id, data);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateManagedThemeMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateManagedTheme>>
+>;
+export type UpdateManagedThemeMutationBody = InstallManagedThemeRequest;
+export type UpdateManagedThemeMutationError = ErrorType<unknown>;
+export type UpdateManagedThemeMutationVariables = { id: string; data: InstallManagedThemeRequest };
+
+export const useUpdateManagedTheme = <TError = ErrorType<unknown>, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof updateManagedTheme>>,
+      TError,
+      UpdateManagedThemeMutationVariables,
+      TContext
+    >;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof updateManagedTheme>>,
+  TError,
+  UpdateManagedThemeMutationVariables,
+  TContext
+> => {
+  return useMutation(getUpdateManagedThemeMutationOptions(options), queryClient);
+};
+
 export const writeTheme = (
   id: string,
   writeThemeRequest: WriteThemeRequest,
@@ -23581,6 +25873,105 @@ export const useDismissUsageRecordingIssue = <TError = ErrorType<unknown>, TCont
 > => {
   return useMutation(getDismissUsageRecordingIssueMutationOptions(options), queryClient);
 };
+
+export const getAutoNamePrompt = (signal?: AbortSignal) => {
+  return customInstance<AutoNamePromptResponse>({
+    url: `/api/workspace/auto-name-prompt`,
+    method: "GET",
+    signal,
+  });
+};
+
+export const getGetAutoNamePromptQueryKey = () => {
+  return [`/api/workspace/auto-name-prompt`] as const;
+};
+
+export const getGetAutoNamePromptQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAutoNamePrompt>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getAutoNamePrompt>>, TError, TData>>;
+}) => {
+  const { query: queryOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetAutoNamePromptQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getAutoNamePrompt>>> = ({ signal }) =>
+    getAutoNamePrompt(signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAutoNamePrompt>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAutoNamePromptQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAutoNamePrompt>>
+>;
+export type GetAutoNamePromptQueryError = ErrorType<unknown>;
+
+export function useGetAutoNamePrompt<
+  TData = Awaited<ReturnType<typeof getAutoNamePrompt>>,
+  TError = ErrorType<unknown>,
+>(
+  options: {
+    query: Partial<UseQueryOptions<Awaited<ReturnType<typeof getAutoNamePrompt>>, TError, TData>> &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAutoNamePrompt>>,
+          TError,
+          Awaited<ReturnType<typeof getAutoNamePrompt>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetAutoNamePrompt<
+  TData = Awaited<ReturnType<typeof getAutoNamePrompt>>,
+  TError = ErrorType<unknown>,
+>(
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getAutoNamePrompt>>, TError, TData>> &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAutoNamePrompt>>,
+          TError,
+          Awaited<ReturnType<typeof getAutoNamePrompt>>
+        >,
+        "initialData"
+      >;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useGetAutoNamePrompt<
+  TData = Awaited<ReturnType<typeof getAutoNamePrompt>>,
+  TError = ErrorType<unknown>,
+>(
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getAutoNamePrompt>>, TError, TData>>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+export function useGetAutoNamePrompt<
+  TData = Awaited<ReturnType<typeof getAutoNamePrompt>>,
+  TError = ErrorType<unknown>,
+>(
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getAutoNamePrompt>>, TError, TData>>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getGetAutoNamePromptQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
 
 export const getWorkspaceModelSettings = (signal?: AbortSignal) => {
   return customInstance<ModelSettings>({
@@ -24054,6 +26445,80 @@ export function useListWorkspaceSettings<
 
   return withQueryKey(query, queryOptions.queryKey);
 }
+
+export const setWorkspaceSettingsBatch = (
+  setSettingsBatchRequest: SetSettingsBatchRequest,
+  signal?: AbortSignal,
+) => {
+  return customInstance<Setting[]>({
+    url: `/api/workspace/settings`,
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    data: setSettingsBatchRequest,
+    signal,
+  });
+};
+
+export const getSetWorkspaceSettingsBatchMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setWorkspaceSettingsBatch>>,
+    TError,
+    SetWorkspaceSettingsBatchMutationVariables,
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof setWorkspaceSettingsBatch>>,
+  TError,
+  SetWorkspaceSettingsBatchMutationVariables,
+  TContext
+> => {
+  const mutationKey = ["setWorkspaceSettingsBatch"];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && "mutationKey" in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof setWorkspaceSettingsBatch>>,
+    SetWorkspaceSettingsBatchMutationVariables
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return setWorkspaceSettingsBatch(data);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SetWorkspaceSettingsBatchMutationResult = NonNullable<
+  Awaited<ReturnType<typeof setWorkspaceSettingsBatch>>
+>;
+export type SetWorkspaceSettingsBatchMutationBody = SetSettingsBatchRequest;
+export type SetWorkspaceSettingsBatchMutationError = ErrorType<unknown>;
+export type SetWorkspaceSettingsBatchMutationVariables = { data: SetSettingsBatchRequest };
+
+export const useSetWorkspaceSettingsBatch = <TError = ErrorType<unknown>, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof setWorkspaceSettingsBatch>>,
+      TError,
+      SetWorkspaceSettingsBatchMutationVariables,
+      TContext
+    >;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof setWorkspaceSettingsBatch>>,
+  TError,
+  SetWorkspaceSettingsBatchMutationVariables,
+  TContext
+> => {
+  return useMutation(getSetWorkspaceSettingsBatchMutationOptions(options), queryClient);
+};
 
 export const getSettingsFile = (signal?: AbortSignal) => {
   return customInstance<SettingsFileResponse>({

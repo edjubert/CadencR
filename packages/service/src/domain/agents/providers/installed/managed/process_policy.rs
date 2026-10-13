@@ -181,6 +181,7 @@ pub async fn capture_managed_command(
         Ok(Ok((status, stdout, stderr))) => {
             process_tree
                 .cleanup_after_exit(pid)
+                .await
                 .map_err(|error| containment_error("could not clean up descendants", error))?;
             Ok(ManagedCommandOutput {
                 status,
@@ -226,7 +227,7 @@ async fn terminate_capture(
     // wait() can reap the group leader while descendants still hold the pipes.
     // Child::id() is then None, but the original process group still needs killing.
     if child.id().is_none() {
-        process_tree.cleanup_after_exit(pid)
+        process_tree.cleanup_after_exit(pid).await
     } else {
         process_tree
             .terminate(child, Duration::from_secs(1))
@@ -398,6 +399,10 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[allow(
+        clippy::zombie_processes,
+        reason = "the exit-parent mode deliberately orphans the descendant"
+    )]
     fn managed_descendant_helper() {
         let Some(pid_file) = std::env::var_os("PROCESS_TREE_TEST_PID_FILE") else {
             return;

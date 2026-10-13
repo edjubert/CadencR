@@ -15,6 +15,7 @@ import {
 } from "@/components/sidebar-pending-gate";
 import { useFeaturePendingGate } from "@/hooks/useFeaturePendingGate";
 import { usePendingGatePopoverOpen } from "@/hooks/usePendingGatePopoverOpen";
+import { useSidebarSample } from "@/lib/sidebar-sample-context";
 import { useFeatureStatus } from "@/stores/session-status-selectors";
 import type { FeatureGateDecision, FeaturePendingGateResponse } from "@/api/generated";
 import type { SessionGateKind } from "@/lib/session-gate";
@@ -42,7 +43,7 @@ export const SidebarPendingGatePopover = memo(function SidebarPendingGatePopover
   allowAutoOpen,
   onOpenConversation,
 }: SidebarPendingGatePopoverProps): ReactElement {
-  const { open, setOpen, setHovered, hoveredFeatureId } = usePendingGatePopoverOpen(
+  const { open, setOpen, setHovered, hoveredFeatureId, hoverHandlers } = usePendingGatePopoverOpen(
     featureId,
     allowAutoOpen,
   );
@@ -53,6 +54,8 @@ export const SidebarPendingGatePopover = memo(function SidebarPendingGatePopover
   });
   const gateKind = gate ? effectiveGateKind(gate) : null;
   const isPermissionTrigger = triggerPendingKind(livePendingKind, gateKind) === "permission";
+  // A preview sample's popover is part of the preview: using it keeps the display options open.
+  const isSample = useSidebarSample() !== null;
 
   return (
     <Popover
@@ -74,6 +77,7 @@ export const SidebarPendingGatePopover = memo(function SidebarPendingGatePopover
           )}
           onClick={(event) => event.stopPropagation()}
           onPointerDown={(event) => event.stopPropagation()}
+          {...hoverHandlers}
         >
           {isPermissionTrigger ? (
             <ShieldAlertIcon className="sidebar-pending-indicator size-3.5" />
@@ -91,8 +95,10 @@ export const SidebarPendingGatePopover = memo(function SidebarPendingGatePopover
           "w-96 max-w-[min(24rem,calc(100vw-2rem))] bg-popover p-0",
           gateKind === "permission" && "border-amber-500/40",
         )}
+        data-sidebar-sample={isSample ? "" : undefined}
         onClick={(event) => event.stopPropagation()}
         onOpenAutoFocus={(event) => event.preventDefault()}
+        {...hoverHandlers}
         onMouseEnter={() => setHovered(featureId)}
         onMouseLeave={() => {
           if (hoveredFeatureId === featureId) setHovered(null);

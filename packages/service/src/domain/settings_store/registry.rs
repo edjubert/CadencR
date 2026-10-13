@@ -10,6 +10,8 @@
 //! validator (super-defensive: a bad value never breaks the app). `None` means
 //! "treat an invalid value as unset" and let the consumer's own fallback apply.
 
+mod sidebar;
+
 /// The shape a setting's string value must take.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValueKind {
@@ -79,7 +81,7 @@ fn editor_tooling_spec(key: &str) -> Option<SettingSpec> {
 
 /// Spec for a workspace/global key, or `None` for free-form keys.
 pub fn workspace_spec(key: &str) -> Option<SettingSpec> {
-    if let Some(spec) = editor_tooling_spec(key) {
+    if let Some(spec) = editor_tooling_spec(key).or_else(|| sidebar::sidebar_display_spec(key)) {
         return Some(spec);
     }
     let spec = match key {
@@ -91,13 +93,17 @@ pub fn workspace_spec(key: &str) -> Option<SettingSpec> {
         | "editor_sidebar_collapsed"
         | "git_sidebar_collapsed"
         | "theme_follow_system"
+        | "notch_always_animate"
+        | "notch_default_applied"
         | "claude_bypass_permissions_enabled"
         | "codex_full_access_enabled"
         | "onboarding_intro_shown" => SettingSpec::new(BOOL, Some("false")),
         // These default on.
         "editor_auto_save"
         | "sidebar_provider_logos"
+        | "layout_auto_mode_default"
         | "animations_enabled"
+        | "notch_always_on"
         | "browser_mcp_enabled"
         | "project_mcp_enabled" => SettingSpec::new(BOOL, Some("true")),
         "workspace_mcp_enabled" => SettingSpec::new(BOOL, Some("true")),
@@ -110,7 +116,7 @@ pub fn workspace_spec(key: &str) -> Option<SettingSpec> {
         }
         // Enums (mirrors the frontend option sets).
         "notification_mode" => SettingSpec::new(
-            ValueKind::Enum(&["native", "in_app", "off"]),
+            ValueKind::Enum(&["native", "in_app", "notch", "off"]),
             Some("native"),
         ),
         "browser_default_mode" => {
@@ -173,6 +179,14 @@ mod tests {
     }
 
     #[test]
+    fn auto_layout_defaults_on() {
+        assert_eq!(
+            workspace_spec("layout_auto_mode_default").unwrap().default,
+            Some("true")
+        );
+    }
+
+    #[test]
     fn mcp_setting_defaults_enable_agent_mcp_tools_by_default() {
         assert_eq!(
             workspace_spec("project_mcp_enabled").unwrap().default,
@@ -196,6 +210,7 @@ mod tests {
     fn enum_spec_validates() {
         let spec = workspace_spec("notification_mode").unwrap();
         assert!(spec.is_valid("native"));
+        assert!(spec.is_valid("notch"));
         assert!(!spec.is_valid("loud"));
     }
 

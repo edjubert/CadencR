@@ -219,6 +219,20 @@ pub enum SdkMessage {
         suggestion: String,
     },
 
+    /// Fate of a queued input command (prompt or slash command). `command_uuid`
+    /// is the `uuid` the client put on the inbound message — the CLI emits
+    /// nothing for commands sent without one. `state` is `queued`, `started`
+    /// once it drains into a turn, and finally `completed` / `cancelled` /
+    /// `discarded` / `refused`; it stays a string so a new state can't demote
+    /// the whole message to `Unknown`.
+    #[serde(rename = "command_lifecycle")]
+    CommandLifecycle {
+        uuid: String,
+        session_id: String,
+        command_uuid: String,
+        state: String,
+    },
+
     /// Catch-all for any message type not yet typed.
     ///
     /// Preserves the raw JSON so callers can handle future CLI additions
@@ -251,6 +265,7 @@ impl SdkMessage {
             SdkMessage::ToolUseSummary { session_id, .. } => Some(session_id),
             SdkMessage::RateLimit { session_id, .. } => Some(session_id),
             SdkMessage::PromptSuggestion { session_id, .. } => Some(session_id),
+            SdkMessage::CommandLifecycle { session_id, .. } => Some(session_id),
             SdkMessage::Unknown(_) => None,
         }
     }

@@ -7,6 +7,7 @@ import {
 } from "@/stores/feature-layout-store";
 import { makeTabHostKey, useTabHostRegistry } from "@/stores/tab-host-registry";
 import { useFreezeWidthDuringResize } from "@/lib/use-freeze-width-during-resize";
+import { noteUserLayoutChange } from "@/lib/auto-layout/auto-layout-controller";
 import { PaneChrome } from "./PaneChrome";
 import type { FeatureTabActivationHandlers, FeatureTabs } from "./types";
 
@@ -96,7 +97,12 @@ export function TabPane({
       queueMicrotask(() => {
         if (activatedTabRef.current === tab) activatedTabRef.current = null;
       });
-      if (leaf.activeTabId !== tab) setPaneActiveTab(featureId, leaf.id, tab);
+      // Re-clicking the tab already showing isn't arranging anything, so it
+      // must not hold off the agent's next reveal.
+      if (leaf.activeTabId !== tab) {
+        noteUserLayoutChange(featureId);
+        setPaneActiveTab(featureId, leaf.id, tab);
+      }
       notifyTabActivation(tab);
     },
     [featureId, leaf.activeTabId, leaf.id, markPaneFocused, notifyTabActivation, setPaneActiveTab],
@@ -122,7 +128,10 @@ export function TabPane({
       onFocusPane={markPaneFocused}
       onTabChange={handleTabChange}
       onActivateTab={activateTab}
-      onDockTab={(tab) => dockTab(featureId, tab)}
+      onDockTab={(tab) => {
+        noteUserLayoutChange(featureId, { structural: true });
+        dockTab(featureId, tab);
+      }}
     />
   );
 }

@@ -1,12 +1,14 @@
 [package]
 name = "cadencr-service"
-version = "0.12.0"
+version = "0.13.0"
 edition = "2021"
 license.workspace = true
 
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
 bon.workspace = true
+cadencr-plugin-core = { path = "../plugin-core" }
+cadencr-registry-core = { path = "../registry-core" }
 claude-agent-sdk-rs = { path = "../claude-agent-sdk-rs" }
 cli-discovery = { path = "../cli-discovery" }
 codex-app-server-sdk-rs = { path = "../codex-app-server-sdk-rs" }
@@ -87,9 +89,18 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
 ] }
 
+# Both binaries are thin wrappers over the lib and carry no unit tests, so
+# skip building and running an empty test harness for each. All unit tests live
+# in the lib (`src/lib.rs`) and run exactly once.
+[[bin]]
+name = "cadencr-service"
+path = "src/main.rs"
+test = false
+
 [[bin]]
 name = "dump-openapi"
 path = "src/bin/dump_openapi.rs"
+test = false
 
 [lints]
 workspace = true

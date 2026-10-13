@@ -1,5 +1,6 @@
 mod input;
 mod interrupt;
+mod stream;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -31,6 +32,7 @@ use crate::domain::agents::adapter::{
     RuntimeMessageRx, RuntimePermissionMode, RuntimePermissionResponse,
     RuntimePermissionResponseKind,
 };
+use stream::{error_receiver, spawn_local_forwarder, stream_channel};
 
 pub(super) struct CodexSession {
     client: CodexAppServerClient,
@@ -43,6 +45,7 @@ pub(super) struct CodexSession {
     effort: Arc<RwLock<Option<String>>>,
     effective_model: Arc<RwLock<Option<String>>>,
     effective_effort: Arc<RwLock<Option<String>>>,
+    summary: Option<String>,
     fast_mode: Arc<RwLock<Option<bool>>>,
     permission_mode: Arc<RwLock<Option<RuntimePermissionMode>>>,
     access_mode: Arc<RwLock<Option<RuntimeAccessMode>>>,
@@ -63,11 +66,11 @@ pub(super) struct CodexSessionOptions {
     pub(super) effort: Option<String>,
     pub(super) effective_model: Option<String>,
     pub(super) effective_effort: Option<String>,
+    pub(super) summary: Option<String>,
     pub(super) fast_mode: Option<bool>,
     pub(super) permission_mode: Option<RuntimePermissionMode>,
     pub(super) access_mode: Option<RuntimeAccessMode>,
     pub(super) cwd: PathBuf,
-    pub(super) mcp_servers: Vec<RuntimeMcpServerStatus>,
     pub(super) context_window: Option<u64>,
 }
 
@@ -89,6 +92,7 @@ impl CodexSession {
             effort: Arc::new(RwLock::new(options.effort)),
             effective_model: Arc::new(RwLock::new(options.effective_model)),
             effective_effort: Arc::new(RwLock::new(options.effective_effort)),
+            summary: options.summary,
             fast_mode: Arc::new(RwLock::new(options.fast_mode)),
             permission_mode: Arc::new(RwLock::new(options.permission_mode)),
             access_mode: Arc::new(RwLock::new(options.access_mode)),
@@ -100,9 +104,13 @@ impl CodexSession {
             pending_prompt_receipts: Arc::new(PendingPromptReceipts::default()),
             temp_files: Arc::new(Mutex::new(Vec::new())),
             closing: Arc::new(AtomicBool::new(false)),
-            mcp_servers: Arc::new(RwLock::new(options.mcp_servers)),
+            mcp_servers: Arc::new(RwLock::new(Vec::new())),
             context_window: options.context_window,
         }
+    }
+
+    pub(super) async fn set_mcp_servers(&self, servers: Vec<RuntimeMcpServerStatus>) {
+        *self.mcp_servers.write().await = servers;
     }
 
     pub(super) async fn send_init_event(&self) {
@@ -143,6 +151,7 @@ impl CodexSession {
                 effort,
                 collaboration_model,
                 collaboration_effort,
+                summary: self.summary.clone(),
                 fast_mode,
             },
         );
@@ -176,12 +185,12 @@ impl AgentRuntimeSession for CodexSession {
             warn!("Codex take_message_rx called twice");
             return error_receiver("Codex message stream was already taken");
         };
-        let Some(local_rx) = self.local_rx.take() else {
+        let Some(mut local_rx) = self.local_rx.take() else {
             warn!("Codex local receiver missing");
             return error_receiver("Codex local message stream is unavailable");
         };
 
-        let (tx, rx) = mpsc::channel(256);
+        let (tx, rx) = stream_channel(&mut local_rx);
         spawn_event_loop(
             self.client.clone(),
             source_rx,
@@ -366,23 +375,4 @@ impl AgentRuntimeSession for CodexSession {
     fn pid(&self) -> Option<u32> {
         self.client.pid()
     }
-}
-
-fn error_receiver(message: &'static str) -> RuntimeMessageRx {
-    let (tx, rx) = mpsc::channel(1);
-    let _ = tx.try_send(Err(RuntimeError::new(message)));
-    rx
-}
-
-fn spawn_local_forwarder(
-    mut local_rx: mpsc::UnboundedReceiver<Result<RuntimeEvent, RuntimeError>>,
-    tx: mpsc::Sender<Result<RuntimeEvent, RuntimeError>>,
-) {
-    tokio::spawn(async move {
-        while let Some(event) = local_rx.recv().await {
-            if tx.send(event).await.is_err() {
-                break;
-            }
-        }
-    });
 }

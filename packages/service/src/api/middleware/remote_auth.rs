@@ -18,7 +18,7 @@ use axum::{
     Extension,
 };
 
-use super::auth::is_websocket_upgrade;
+use super::auth::{is_known_ws_path, is_websocket_upgrade};
 use super::response::{misdirected, unauthorized};
 use super::AUTH_HEADER;
 use crate::app_state::AppState;
@@ -88,18 +88,6 @@ fn host_allowed(request: &Request, allowed: &[String]) -> bool {
 /// any static SPA asset (everything not under `/api/` and not the WS route).
 fn is_bearer_exempt(path: &str) -> bool {
     path == "/api/remote/pair" || (!path.starts_with("/api/") && path != "/ws")
-}
-
-/// The WebSocket routes that self-authenticate via `middleware::authenticate_ws`.
-/// Kept in sync with the `get(...)` WS handlers: `/ws` (agent stream),
-/// `/api/terminal/ws`, `/api/neovim/ws`, and the LSP connect upgrade
-/// (`/api/lsp/sessions/{session_id}/connect`). A WS upgrade to any other path is
-/// not exempt, so a new socket route must be added here deliberately.
-fn is_known_ws_path(path: &str) -> bool {
-    path == "/ws"
-        || path == "/api/terminal/ws"
-        || path == "/api/neovim/ws"
-        || (path.starts_with("/api/lsp/sessions/") && path.ends_with("/connect"))
 }
 
 #[cfg(test)]

@@ -22,6 +22,10 @@ import { useNarrowContainer } from "./useNarrowContainer";
 import { useAutoScrollShortcut } from "./useAutoScrollShortcut";
 import { useDebouncedSetting } from "@/hooks/useDebouncedSetting";
 import {
+  AGENT_MESSAGE_NAVIGATOR_SETTING_KEY,
+  parseAgentMessageNavigator,
+} from "@/lib/agent-message-navigator";
+import {
   AGENT_SUMMARY_MODE_SETTING_KEY,
   AGENT_VERBOSITY_SETTING_KEY,
   parseAgentSummaryMode,
@@ -110,6 +114,9 @@ function useAgentSessionScrollAndCatalog(props: AgentSessionProps) {
   const summaryMode = parseAgentSummaryMode(
     useDebouncedSetting(AGENT_SUMMARY_MODE_SETTING_KEY).value,
   );
+  const messageNavigatorEnabled = parseAgentMessageNavigator(
+    useDebouncedSetting(AGENT_MESSAGE_NAVIGATOR_SETTING_KEY).value,
+  );
   const loadOlder = onLoadOlder
     ? (): Promise<number | void> =>
         onLoadOlder({ summaryMode, compactMode: verbosityMode === "compact" })
@@ -125,7 +132,25 @@ function useAgentSessionScrollAndCatalog(props: AgentSessionProps) {
     onEnableAutoScroll: scroll.scrollToBottom,
   });
 
-  return { agentCatalog, projectPath, verbosityMode, summaryMode, scroll };
+  const { prepareJump } = scroll;
+  const { onLoadPromptTurn } = props;
+  const compactMode = verbosityMode === "compact";
+  const messageNavigator = useMemo(() => {
+    // A hidden agent tab keeps streaming: skip the rail's per-delta work there.
+    if (!messageNavigatorEnabled || !agentTabActive || !onLoadPromptTurn) return null;
+    const loadPromptTurn = (messageDbId: number): Promise<boolean> =>
+      onLoadPromptTurn(messageDbId, { summaryMode, compactMode });
+    return { prepareJump, loadPromptTurn };
+  }, [
+    messageNavigatorEnabled,
+    agentTabActive,
+    prepareJump,
+    onLoadPromptTurn,
+    summaryMode,
+    compactMode,
+  ]);
+
+  return { agentCatalog, projectPath, verbosityMode, summaryMode, messageNavigator, scroll };
 }
 
 function useAgentSessionState(props: AgentSessionProps, ref: Ref<AgentSessionHandle>) {
@@ -146,7 +171,7 @@ function useAgentSessionState(props: AgentSessionProps, ref: Ref<AgentSessionHan
     handleToggle,
     handleCollapse,
   } = useAgentSessionCollapsible(props, ref);
-  const { agentCatalog, projectPath, verbosityMode, summaryMode, scroll } =
+  const { agentCatalog, projectPath, verbosityMode, summaryMode, messageNavigator, scroll } =
     useAgentSessionScrollAndCatalog(props);
   const agentSessionContextValue = useMemo(
     () => ({ wsSessionId: wsSessionId ?? null }),
@@ -201,6 +226,7 @@ function useAgentSessionState(props: AgentSessionProps, ref: Ref<AgentSessionHan
     workingLabel,
     verbosityMode,
     summaryMode,
+    messageNavigator,
     scroll,
     isIdle,
     shouldShowPromptBar,
@@ -239,6 +265,7 @@ export const AgentSession = memo(
         projectPath={s.projectPath}
         scrollContainerRef={s.scroll.scrollContainerRef}
         virtuosoRef={s.scroll.virtuosoRef}
+        itemSize={s.scroll.itemSize}
         followOutput={s.scroll.followOutput}
         onAtBottomStateChange={s.scroll.onAtBottomStateChange}
         onTotalListHeightChanged={s.scroll.onTotalListHeightChanged}
@@ -248,6 +275,7 @@ export const AgentSession = memo(
         verbosityMode={s.verbosityMode}
         summaryMode={s.summaryMode}
         searchEnabled={(props.agentTabActive ?? true) && !props.disableShortcuts}
+        messageNavigator={s.messageNavigator}
       />
     );
 

@@ -3,7 +3,7 @@ import { ShortcutTooltip } from "@/components/ShortcutTooltip";
 import { BotIcon } from "lucide-react";
 import { useProviderMetadata } from "@/lib/provider-icons";
 import { thinkingEffortLabel, parseThinkingEffort } from "@/shared/thinking-effort";
-import { useSidebarProviderLogos } from "@/components/SidebarPreferences";
+import { useSidebarOption } from "@/stores/sidebar-config-store";
 
 interface SidebarProviderBadgeProps {
   providerId?: string | null;
@@ -18,8 +18,8 @@ export const SidebarProviderBadge = memo(function SidebarProviderBadge({
   thinkingEffort,
 }: SidebarProviderBadgeProps): ReactElement | null {
   const meta = useProviderMetadata(providerId, null, "mono");
-  const showProviderLogos = useSidebarProviderLogos();
-  if (!meta || !showProviderLogos) return null;
+  const providerDisplay = useSidebarOption("provider");
+  if (!meta || providerDisplay === "hidden") return null;
 
   const effort = parseThinkingEffort(thinkingEffort ?? undefined);
   const detail = [

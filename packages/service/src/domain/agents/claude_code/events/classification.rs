@@ -2,8 +2,7 @@ use serde_json::Value;
 use tracing::warn;
 
 use super::mapping::{
-    api_error_text, init_model_context_window, map_content_block, map_stream_event,
-    map_user_message, raw_type,
+    api_error_text, map_content_block, map_stream_event, map_user_message, raw_type,
 };
 use crate::domain::agents::adapter::{
     RuntimeAssistantMessage, RuntimeCompactMetadata, RuntimeEventKind, RuntimeInitEvent,
@@ -102,7 +101,8 @@ pub(super) fn classify_message(
         | claude_agent_sdk_rs::SdkMessage::TaskProgress { .. }
         | claude_agent_sdk_rs::SdkMessage::FilesPersisted { .. }
         | claude_agent_sdk_rs::SdkMessage::RateLimit { .. }
-        | claude_agent_sdk_rs::SdkMessage::PromptSuggestion { .. } => RuntimeEventKind::Other,
+        | claude_agent_sdk_rs::SdkMessage::PromptSuggestion { .. }
+        | claude_agent_sdk_rs::SdkMessage::CommandLifecycle { .. } => RuntimeEventKind::Other,
     };
 
     (kind, result_error)
@@ -120,7 +120,6 @@ fn classify_system_message(
         claude_agent_sdk_rs::messages::SystemMessage::Init {
             model, mcp_servers, ..
         } => {
-            let context_window = init_model_context_window(&model);
             RuntimeEventKind::Init(RuntimeInitEvent {
                 model: Some(model),
                 mcp_servers: mcp_servers
@@ -130,7 +129,9 @@ fn classify_system_message(
                         status: server.status,
                     })
                     .collect(),
-                context_window,
+                // The CLI's init carries no window; the adapter resolves it
+                // from windows learned off earlier results.
+                context_window: None,
             })
         }
         claude_agent_sdk_rs::messages::SystemMessage::CompactBoundary {
@@ -229,7 +230,22 @@ pub(super) fn build_result_error(
 
 #[cfg(test)]
 mod tests {
-    use super::build_result_error;
+    use super::{build_result_error, classify_message, RuntimeEventKind};
+
+    #[test]
+    fn command_lifecycle_stays_out_of_the_conversation() {
+        // Not conversation content: as `Unknown` it would render as an error.
+        let msg = claude_agent_sdk_rs::SdkMessage::from_raw(serde_json::json!({
+            "type": "command_lifecycle",
+            "command_uuid": "c",
+            "state": "completed",
+            "uuid": "u",
+            "session_id": "s"
+        }));
+        let (kind, result_error) = classify_message(msg);
+        assert!(matches!(kind, RuntimeEventKind::Other));
+        assert!(result_error.is_none());
+    }
 
     #[test]
     fn build_result_error_falls_back_to_a_generic_message_without_detail() {

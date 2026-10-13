@@ -126,6 +126,7 @@ export function FeaturePrIndicator({
     if (!snapshot?.error || snapshot.setup_required) return null;
     return (
       <span
+        data-feature-pr
         className="size-1.5 shrink-0 rounded-full bg-[var(--acc-red)] ring-1 ring-background"
         aria-label={`Forge status error: ${snapshot.error}`}
         title={snapshot.error}
@@ -148,6 +149,7 @@ function FeaturePrChip({
   return (
     <ShortcutTooltip label={label} toRight className="shrink-0">
       <span
+        data-feature-pr
         className={cn(
           "inline-flex h-5 max-w-full shrink-0 items-center gap-1 rounded-md border px-1.5 font-mono text-[10.5px] font-medium leading-none tabular-nums",
           PR_CHIP_SURFACE[tone],

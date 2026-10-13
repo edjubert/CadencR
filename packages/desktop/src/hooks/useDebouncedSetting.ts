@@ -14,6 +14,11 @@ interface DebouncedSettingResult {
   value: string | null;
   setValue: (value: string) => void;
   isLoading: boolean;
+  /**
+   * True once a fetch settled (successfully or not). Unlike `!isLoading`, it is
+   * false on the very first render, before the query has started fetching.
+   */
+  isFetched: boolean;
   isSaving: boolean;
 }
 
@@ -84,9 +89,10 @@ export function useDebouncedSetting(
 
   const value = query.data?.value ?? null;
   const isLoading = query.isLoading;
+  const isFetched = query.isFetched;
   return useMemo(
-    () => ({ value, setValue, isLoading, isSaving }),
-    [value, setValue, isLoading, isSaving],
+    () => ({ value, setValue, isLoading, isFetched, isSaving }),
+    [value, setValue, isLoading, isFetched, isSaving],
   );
 }
 
@@ -177,7 +183,13 @@ export function useDebouncedSettingFromMap(
   const rawValue = map[key];
   const value = rawValue === undefined ? null : rawValue;
   return useMemo(
-    () => ({ value, setValue, isLoading: isMapLoading, isSaving: mutation.isPending }),
+    () => ({
+      value,
+      setValue,
+      isLoading: isMapLoading,
+      isFetched: !isMapLoading,
+      isSaving: mutation.isPending,
+    }),
     [value, setValue, isMapLoading, mutation.isPending],
   );
 }

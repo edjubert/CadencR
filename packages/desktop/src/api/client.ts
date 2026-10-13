@@ -130,6 +130,36 @@ axiosInstance.interceptors.response.use(
  * For these calls we disable the timeout entirely.
  */
 const NO_TIMEOUT_PATHS = ["/api/git/commit", "/api/git/push", "/api/lsp/sessions"];
+const PUBLICATION_RELEASE_TIMEOUT_MS = 190000;
+const LONG_PUBLICATION_PATH =
+  /^\/api\/projects\/\d+\/(?:publication-release(?:\/preview)?|publication-contribution|publication-registry(?:\/preview)?)$/;
+
+export function publicationOperationTimeout(
+  config: Pick<AxiosRequestConfig, "method" | "timeout" | "url">,
+): number | undefined {
+  if (config.timeout !== undefined) return config.timeout;
+  const method = config.method?.toUpperCase() ?? "GET";
+  return method === "POST" &&
+    typeof config.url === "string" &&
+    LONG_PUBLICATION_PATH.test(config.url)
+    ? PUBLICATION_RELEASE_TIMEOUT_MS
+    : undefined;
+}
+// Backend permits 60 seconds for the download and 90 seconds for the complete
+// conformance probe. Allow 30 seconds for bounded extraction/activation overhead.
+const MANAGED_PROVIDER_OPERATION_TIMEOUT_MS = 180000;
+const LONG_MANAGED_PROVIDER_PATH =
+  /^\/api\/agents\/managed-providers(?:\/[^/]+\/(?:update|rollback))?$/;
+export function managedProviderOperationTimeout(
+  config: Pick<AxiosRequestConfig, "method" | "timeout" | "url">,
+): number | undefined {
+  if (config.timeout !== undefined) return config.timeout;
+  return config.method?.toUpperCase() === "POST" &&
+    typeof config.url === "string" &&
+    LONG_MANAGED_PROVIDER_PATH.test(config.url)
+    ? MANAGED_PROVIDER_OPERATION_TIMEOUT_MS
+    : undefined;
+}
 const STRICT_MODE_STABLE_GET_PATHS = ["/api/git/", "/api/feature-layouts"];
 const STRICT_MODE_STABLE_RESULT_TTL_MS = 250;
 const stableReadRequests = new Map<string, Promise<unknown>>();
@@ -139,6 +169,14 @@ const WORKSPACE_SETTINGS_SINGLE_PREFIX = `${WORKSPACE_SETTINGS_PATH}/`;
 const WORKSPACE_SETTINGS_BULK_RESULT_TTL_MS = 500;
 let workspaceSettingsBulkRequest: Promise<unknown> | null = null;
 let workspaceSettingsBulkResult: { expiresAt: number; value: unknown } | null = null;
+/** Bumped around every settings write so a bulk read that raced it is never cached. */
+let workspaceSettingsGeneration = 0;
+
+function invalidateWorkspaceSettingsBulk(): void {
+  workspaceSettingsGeneration += 1;
+  workspaceSettingsBulkRequest = null;
+  workspaceSettingsBulkResult = null;
+}
 
 interface WorkspaceSettingEntry {
   key: string;
@@ -168,12 +206,27 @@ export function strictModeStableReadRequestKey(
 }
 
 export async function customInstance<T>(config: AxiosRequestConfig): Promise<T> {
-  let finalConfig =
+  const publicationTimeout =
+    publicationOperationTimeout(config) ?? managedProviderOperationTimeout(config);
+  let finalConfig: AxiosRequestConfig =
     typeof config.url === "string" && NO_TIMEOUT_PATHS.some((p) => config.url!.startsWith(p))
       ? { ...config, timeout: 0 }
-      : config;
+      : publicationTimeout === undefined
+        ? config
+        : { ...config, timeout: publicationTimeout };
   if (!shouldAttachAbortSignal(finalConfig)) {
     finalConfig = { ...finalConfig, signal: undefined };
+  }
+  // A write makes the short-lived bulk snapshot stale: the refetch it triggers
+  // must reach the server, not replay the values from before the write. A bulk
+  // read sent before the write lands is dropped too, on both sides of it.
+  if (isWorkspaceSettingsWrite(finalConfig)) {
+    invalidateWorkspaceSettingsBulk();
+    try {
+      return (await axiosInstance(finalConfig)).data as T;
+    } finally {
+      invalidateWorkspaceSettingsBulk();
+    }
   }
   const workspaceSettingKey = workspaceSingleSettingKey(finalConfig);
   if (workspaceSettingKey) {
@@ -211,6 +264,11 @@ export async function customInstance<T>(config: AxiosRequestConfig): Promise<T> 
   return response.data;
 }
 
+function isWorkspaceSettingsWrite(config: Pick<AxiosRequestConfig, "method" | "url">): boolean {
+  const method = config.method?.toUpperCase() ?? "GET";
+  return method !== "GET" && config.url?.startsWith(WORKSPACE_SETTINGS_PATH) === true;
+}
+
 function isWorkspaceSettingsBulkGet(config: Pick<AxiosRequestConfig, "method" | "url">): boolean {
   const method = config.method?.toUpperCase() ?? "GET";
   return method === "GET" && config.url === WORKSPACE_SETTINGS_PATH;
@@ -237,17 +295,20 @@ async function workspaceSettingFromBulkRequest(
 
 async function fetchWorkspaceSettingsBulk(config: AxiosRequestConfig): Promise<unknown> {
   if (workspaceSettingsBulkRequest) return workspaceSettingsBulkRequest;
+  const generation = workspaceSettingsGeneration;
   const request = axiosInstance(config).then((response) => response.data as unknown);
   workspaceSettingsBulkRequest = request;
   try {
     const result = await request;
-    workspaceSettingsBulkResult = {
-      expiresAt: Date.now() + WORKSPACE_SETTINGS_BULK_RESULT_TTL_MS,
-      value: result,
-    };
+    if (generation === workspaceSettingsGeneration) {
+      workspaceSettingsBulkResult = {
+        expiresAt: Date.now() + WORKSPACE_SETTINGS_BULK_RESULT_TTL_MS,
+        value: result,
+      };
+    }
     return result;
   } finally {
-    workspaceSettingsBulkRequest = null;
+    if (workspaceSettingsBulkRequest === request) workspaceSettingsBulkRequest = null;
   }
 }
 

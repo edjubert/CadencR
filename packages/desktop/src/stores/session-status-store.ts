@@ -104,7 +104,7 @@ function createEnvelopeDispatcher(
         syncWsLifecycle(result.sessionId, result.entry, result.prevStatus);
       }
       if (result.featureId != null && result.nextStatus) {
-        notifyTransition(result.featureId, result.prevStatus, result.nextStatus);
+        notifyTransition(result.featureId, result.prevStatus, result.nextStatus, result.failed);
       }
     }
   };

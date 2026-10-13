@@ -18,7 +18,7 @@ import {
 
 import { PROVIDER_IDS, type ProviderId } from "./providers";
 import type { RuntimeProviderModeOption } from "@/api/agentRuntime";
-import type { PermissionMode } from "@/types/permission-mode";
+import { OPENCODE_AGENT_MODE_PREFIX, type PermissionMode } from "@/types/permission-mode";
 
 export interface ProviderMode {
   /** Wire value sent to the backend. */
@@ -49,6 +49,14 @@ export interface ProviderMode {
 
 const CLAUDE_CODE_MODES: ProviderMode[] = [
   {
+    id: "auto",
+    label: "Auto",
+    icon: Sparkles,
+    chipClass: "bg-[var(--acc-yellow)]/15 text-[var(--acc-yellow)] hover:bg-[var(--acc-yellow)]/25",
+    description:
+      "Classifier-backed: safe actions auto-run, risky ones blocked. Requires Sonnet 4.6 / Opus 4.6+.",
+  },
+  {
     id: "acceptEdits",
     label: "Auto-Accept Edits",
     icon: FileEditIcon,
@@ -70,14 +78,6 @@ const CLAUDE_CODE_MODES: ProviderMode[] = [
     chipClass: "bg-[var(--acc-red)]/15 text-[var(--acc-red)] hover:bg-[var(--acc-red)]/25",
     description: "Dangerous: skip Claude Code permission prompts and checks.",
     optIn: true,
-  },
-  {
-    id: "auto",
-    label: "Auto",
-    icon: Sparkles,
-    chipClass: "bg-[var(--acc-yellow)]/15 text-[var(--acc-yellow)] hover:bg-[var(--acc-yellow)]/25",
-    description:
-      "Classifier-backed: safe actions auto-run, risky ones blocked. Requires Sonnet 4.6 / Opus 4.6+.",
   },
 ];
 
@@ -228,6 +228,17 @@ export function findProviderMode(
 ): ProviderMode | null {
   const normalizedModeId = normalizeProviderModeId(providerId, modeId);
   return getProviderModes(providerId, catalogModes).find((m) => m.id === normalizedModeId) ?? null;
+}
+
+/**
+ * Whether a session on `providerId` can hold `modeId`: a catalog mode, or an
+ * OpenCode custom agent (those come from the live agent list, not the catalog).
+ */
+export function providerAcceptsMode(
+  providerId: string | null | undefined,
+  modeId: PermissionMode,
+): boolean {
+  return !!findProviderMode(providerId, modeId) || modeId.startsWith(OPENCODE_AGENT_MODE_PREFIX);
 }
 
 function normalizeProviderModeId(

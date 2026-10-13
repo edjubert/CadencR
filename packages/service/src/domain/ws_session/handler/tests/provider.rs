@@ -496,8 +496,7 @@ async fn failed_selection_restoration_reports_database_error() {
 
     let error = restore_persisted_selection(&app_state.write_pool, db_id, &previous)
         .await
-        .err()
-        .expect("failed compensation must surface");
+        .expect_err("failed compensation must surface");
     assert_eq!(error.code, "DB_ERROR");
     assert!(error.message.contains("could not be restored"));
 }
@@ -521,12 +520,21 @@ async fn same_provider_model_switch_preserves_profile_and_other_controls() {
         handle.desired_permission_mode =
             Some(crate::domain::agents::adapter::RuntimePermissionMode::Plan);
     }
+    // The target model's own last-used level is what a switch resumes: not the
+    // outgoing "high", and not the model's catalog default ("high" as well).
+    add_claude_custom_model(&state, "effort-test-model", &["low", "high"], Some("high")).await;
+    crate::domain::settings_store::global_set(
+        &crate::domain::settings::thinking_effort_model_key("claude_code", "effort-test-model"),
+        "low",
+    )
+    .await
+    .unwrap();
     dispatch_envelope(
         make_envelope(
             "session",
             "provider.set",
             serde_json::json!({
-                "session_id": id, "provider": "claude_code", "model": "sonnet",
+                "session_id": id, "provider": "claude_code", "model": "effort-test-model",
             }),
         ),
         &tx,
@@ -544,12 +552,13 @@ async fn same_provider_model_switch_preserves_profile_and_other_controls() {
     let QueryState::Pending(config) = &handle.state else {
         panic!("pending expected")
     };
-    assert_eq!(config.model.as_deref(), Some("sonnet"));
+    assert_eq!(config.model.as_deref(), Some("effort-test-model"));
     assert_eq!(config.env.as_ref().unwrap()["TOKEN"], "kept");
     assert_eq!(config.env_unset, ["UNSET_ME"]);
     assert_eq!(config.profile_revision.as_deref(), Some("kept-revision"));
     assert_eq!(config.profile_state_identity.as_deref(), Some("kept-home"));
-    assert_eq!(config.overrides.thinking_effort.as_deref(), Some("high"));
+    assert_eq!(config.overrides.thinking_effort.as_deref(), Some("low"));
+    assert_eq!(config.thinking_effort.as_deref(), Some("low"));
     assert_eq!(config.overrides.fast_mode, Some(false));
     assert_eq!(
         config.permission_mode,

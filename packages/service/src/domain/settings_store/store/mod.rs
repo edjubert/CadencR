@@ -62,12 +62,27 @@ pub(super) fn load_document_for_write(
 /// Set a single scalar key, preserving every other key (unknown scalars and
 /// nested sections like `profiles` alike).
 pub(super) async fn set_value(path: &Path, key: &str, value: &str) -> Result<(), AppError> {
+    set_values(
+        path,
+        &BTreeMap::from([(key.to_string(), Some(value.to_string()))]),
+    )
+    .await
+}
+
+/// Set or remove several scalar keys in one atomic write (`None` removes the
+/// key, so its in-code default applies again). Every other key is preserved.
+pub(super) async fn set_values(
+    path: &Path,
+    entries: &BTreeMap<String, Option<String>>,
+) -> Result<(), AppError> {
     let _guard = lock::write_lock().lock().await;
     let mut doc = load_document_for_write(path)?;
-    doc.insert(
-        key.to_string(),
-        serde_json::Value::String(value.to_string()),
-    );
+    for (key, value) in entries {
+        match value {
+            Some(value) => doc.insert(key.clone(), serde_json::Value::String(value.clone())),
+            None => doc.remove(key),
+        };
+    }
     file::write_atomic(path, &file::serialize_document(&doc))
 }
 
@@ -132,6 +147,35 @@ mod tests {
         assert_eq!(
             map.get("totally_made_up").map(String::as_str),
             Some("keepme")
+        );
+    }
+
+    #[tokio::test]
+    async fn set_values_writes_and_removes_in_one_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        set_value(&path, "sidebar_density", "compact")
+            .await
+            .unwrap();
+        set_value(&path, "theme_current", "tokyo-night")
+            .await
+            .unwrap();
+
+        let entries = BTreeMap::from([
+            ("sidebar_density".to_string(), None),
+            ("sidebar_row_diff".to_string(), Some("false".to_string())),
+        ]);
+        set_values(&path, &entries).await.unwrap();
+
+        let (map, _w) = load(&path, Scope::Workspace);
+        assert_eq!(map.get("sidebar_density"), None);
+        assert_eq!(
+            map.get("sidebar_row_diff").map(String::as_str),
+            Some("false")
+        );
+        assert_eq!(
+            map.get("theme_current").map(String::as_str),
+            Some("tokyo-night")
         );
     }
 

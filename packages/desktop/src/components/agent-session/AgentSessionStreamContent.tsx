@@ -17,6 +17,7 @@ interface AgentSessionStreamContentProps {
   projectPath?: string;
   scrollContainerRef: AgentStreamProps["scrollContainerRef"];
   virtuosoRef: AgentStreamProps["virtuosoRef"];
+  itemSize: AgentStreamProps["itemSize"];
   followOutput: AgentStreamProps["followOutput"];
   onAtBottomStateChange: (atBottom: boolean) => void;
   onTotalListHeightChanged: (height: number) => void;
@@ -26,6 +27,7 @@ interface AgentSessionStreamContentProps {
   verbosityMode: AgentStreamProps["verbosityMode"];
   summaryMode: AgentStreamProps["summaryMode"];
   searchEnabled: boolean;
+  messageNavigator: AgentStreamProps["messageNavigator"];
 }
 
 export const AgentSessionStreamContent = memo(function AgentSessionStreamContent({
@@ -39,6 +41,7 @@ export const AgentSessionStreamContent = memo(function AgentSessionStreamContent
   projectPath,
   scrollContainerRef,
   virtuosoRef,
+  itemSize,
   followOutput,
   onAtBottomStateChange,
   onTotalListHeightChanged,
@@ -48,6 +51,7 @@ export const AgentSessionStreamContent = memo(function AgentSessionStreamContent
   verbosityMode,
   summaryMode,
   searchEnabled,
+  messageNavigator,
 }: AgentSessionStreamContentProps): ReactElement | null {
   if (blocks.length === 0 && !isAgentWorking) return null;
 
@@ -63,6 +67,7 @@ export const AgentSessionStreamContent = memo(function AgentSessionStreamContent
       basePath={projectPath}
       scrollContainerRef={scrollContainerRef}
       virtuosoRef={virtuosoRef}
+      itemSize={itemSize}
       followOutput={followOutput}
       onAtBottomStateChange={onAtBottomStateChange}
       onTotalListHeightChanged={onTotalListHeightChanged}
@@ -72,6 +77,7 @@ export const AgentSessionStreamContent = memo(function AgentSessionStreamContent
       verbosityMode={verbosityMode}
       summaryMode={summaryMode}
       searchEnabled={searchEnabled}
+      messageNavigator={messageNavigator}
     />
   );
 });

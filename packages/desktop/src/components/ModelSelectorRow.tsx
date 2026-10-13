@@ -3,6 +3,7 @@ import { ProviderIcon } from "@/lib/provider-icons";
 import { resolveProviderModelAlias } from "@/lib/provider-model-aliases";
 import { RuntimeModelPicker } from "@/components/RuntimeModelPicker";
 import type { RuntimeModelOption } from "@/api/agentRuntime";
+import type { ModelSelectorLevel } from "@/hooks/modelSelectorShared";
 import { ChevronDownIcon } from "lucide-react";
 
 export interface ModelSelectorRowProvider {
@@ -17,7 +18,7 @@ export interface ModelSelectorRowProvider {
 interface ModelSelectorRowProps {
   agentLabel: string;
   stateLabel: string;
-  level: "global" | "project" | "feature";
+  level: ModelSelectorLevel;
   selectedProviderId: string;
   selectedProviderLabel: string;
   selectedModelId: string;

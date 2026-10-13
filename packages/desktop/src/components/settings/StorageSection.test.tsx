@@ -65,6 +65,7 @@ describe("StorageSection", () => {
       value: values.get(key) ?? null,
       setValue: setter(key),
       isLoading: false,
+      isFetched: true,
       isSaving: false,
     }));
   });
