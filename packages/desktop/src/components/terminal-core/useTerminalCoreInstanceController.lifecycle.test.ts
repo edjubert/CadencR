@@ -287,8 +287,8 @@ describe("focus deferral while the engine loads", () => {
 
   it("does not cancel a pending focus when layout focus stays on a terminal pane", () => {
     // The subscription only cancels when focus leaves the terminal entirely
-    // (`wasTerminal && !isTerminal`). Re-asserting focus on the same terminal
-    // pane must not cancel the pending request.
+    // (`wasTerminal && !isTerminal`). A store change that keeps the terminal
+    // pane focused must not cancel the pending request.
     const store = useFeatureLayoutStore.getState();
     store.splitTabAt(FEATURE, "terminal", ROOT_LEAF_ID, "right");
     const terminalPane = getLeaves(
@@ -299,11 +299,16 @@ describe("focus deferral while the engine loads", () => {
       useTerminalCoreInstanceController({ featureId: FEATURE, projectId: 2 }, ref),
     );
     act(() => ref.current?.focus());
-    // Re-assert focus on the same terminal pane (no-op in the store, but
-    // exercises the subscription path with wasTerminal && isTerminal).
+    // Resize the root split: a real store change, so the subscription fires
+    // with wasTerminal && isTerminal. A no-op `setFocusedPane` with the
+    // current id would leave the store unchanged and never call it, letting
+    // this test pass even if the subscription cancelled unconditionally.
     act(() => {
-      useFeatureLayoutStore.getState().setFocusedPane(FEATURE, terminalPane.id);
+      useFeatureLayoutStore.getState().setSplitSizes(FEATURE, [], [60, 40]);
     });
+    expect(selectFeatureLayout(FEATURE)(useFeatureLayoutStore.getState()).focusedPaneId).toBe(
+      terminalPane.id,
+    );
     mocks.engineReady = true;
     rerender();
     expect(mocks.terminal.focus).toHaveBeenCalledOnce();
