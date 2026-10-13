@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Feature } from "@/api/generated";
@@ -101,6 +101,7 @@ vi.mock("@/components/PinnedConversationRow", () => ({
 import { SidebarPinnedConversations } from "./SidebarPinnedConversations";
 import { useSidebarFilterStore } from "@/stores/sidebar-filter-store";
 import { useSidebarSurfaceStore } from "@/stores/sidebar-surface-store";
+import { collectSidebarNavItems } from "@/hooks/useSidebarKeyboardNavigation";
 
 function feature(id: number, projectId: number): Feature {
   return {
@@ -206,5 +207,67 @@ describe("SidebarPinnedConversations", () => {
     await user.click(header);
     expect(screen.getByText("open-1")).toBeInTheDocument();
     expect(screen.getByText("open-2")).toBeInTheDocument();
+  });
+
+  it("excludes closing rows from keyboard navigation during the close animation", () => {
+    // Animations ON: CollapsibleSection keeps children mounted for 200 ms
+    // under aria-hidden while the close transition runs.
+    delete document.documentElement.dataset.animations;
+    vi.useFakeTimers();
+    try {
+      mocks.setPinned([feature(1, 5)]);
+      const { container } = renderSection();
+      const header = screen.getByRole("button", { name: /Pinned/ });
+
+      // Fold via the store (the header's onClick path) inside act so React
+      // flushes the state change before we inspect the DOM.
+      act(() => {
+        useSidebarSurfaceStore.getState().toggleBlock("pinned");
+      });
+
+      // During the 200 ms close window the row is still mounted but hidden.
+      const closingRow = screen.queryByText("open-1");
+      expect(closingRow).not.toBeNull();
+      expect(closingRow?.closest('[aria-hidden="true"]')).not.toBeNull();
+
+      // Keyboard navigation must skip it: only the header remains reachable.
+      const navItems = collectSidebarNavItems(container);
+      expect(navItems).toContain(header);
+      expect(navItems.some((el) => el.contains(closingRow))).toBe(false);
+
+      // After the animation the row unmounts entirely.
+      act(() => {
+        vi.advanceTimersByTime(250);
+      });
+      expect(screen.queryByText("open-1")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("holds the block open while filtering, without changing the stored fold state", () => {
+    mocks.setPinned([feature(1, 5), { ...feature(2, 9), title: "Login bug" }]);
+    // Start folded: the stored state must stay folded throughout.
+    useSidebarSurfaceStore.setState({
+      expanded: { "for-me": true, working: true, recent: true, pinned: false },
+    });
+    renderSection();
+    // Folded and unfiltered: rows are hidden.
+    expect(screen.queryByText("open-1")).not.toBeInTheDocument();
+
+    // Filtering forces the block open so the matching pinned row is reachable.
+    act(() => {
+      useSidebarFilterStore.getState().start("login");
+    });
+    expect(screen.getByText("open-2")).toBeInTheDocument();
+    expect(screen.queryByText("open-1")).not.toBeInTheDocument();
+    expect(useSidebarSurfaceStore.getState().expanded.pinned).toBe(false);
+
+    // Clearing the filter restores the stored fold state.
+    act(() => {
+      useSidebarFilterStore.getState().close();
+    });
+    expect(screen.queryByText("open-2")).not.toBeInTheDocument();
+    expect(useSidebarSurfaceStore.getState().expanded.pinned).toBe(false);
   });
 });

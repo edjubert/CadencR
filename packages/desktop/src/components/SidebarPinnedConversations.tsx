@@ -71,6 +71,12 @@ export function SidebarPinnedConversations({
   // An empty Pinned block only shows when empty blocks are kept and nothing is filtered out.
   if (isEmpty && (hideEmpty || filtering)) return null;
 
+  // While filtering, hold the block open so a matching pinned conversation
+  // stays reachable — pinned rows are excluded from the project tree, so a
+  // folded Pinned would hide the only place the match renders. The stored
+  // fold state is left untouched; it resumes once the filter clears.
+  const foldWhileFiltering = filtering ? { expanded: true, toggle: fold.toggle } : fold;
+
   return (
     <SidebarBlock
       ref={listRef}
@@ -78,7 +84,7 @@ export function SidebarPinnedConversations({
       label="Pinned"
       icon={PinIcon}
       count={pinnedFeatures.length}
-      fold={fold}
+      fold={foldWhileFiltering}
       empty="Pin a conversation to keep it here"
       isEmpty={isEmpty}
       capped

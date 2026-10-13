@@ -95,7 +95,11 @@ export function collectSidebarNavItems(sidebar: HTMLElement): HTMLElement[] {
     sidebar.querySelectorAll<HTMLElement>("[data-nav-item], [data-virtual-nav-list]"),
   ).filter(
     (element) =>
-      element.hasAttribute("data-virtual-nav-list") ||
-      element.closest("[data-virtual-nav-list]") == null,
+      // Rows inside a closing CollapsibleSection stay mounted for the close
+      // animation (200 ms) under aria-hidden; exclude them so keyboard focus
+      // never lands on a row that is about to unmount.
+      element.closest('[aria-hidden="true"]') == null &&
+      (element.hasAttribute("data-virtual-nav-list") ||
+        element.closest("[data-virtual-nav-list]") == null),
   );
 }
