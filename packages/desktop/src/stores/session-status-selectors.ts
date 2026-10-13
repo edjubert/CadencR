@@ -20,6 +20,24 @@ export function aggregateFeatureStatus(entries: readonly SessionStatusEntry[]): 
   return best;
 }
 
+/**
+ * Each feature's aggregated status (as `aggregateFeatureStatus` ranks it), in
+ * `featureIds` order, from one pass over the sessions.
+ */
+export function aggregateFeatureStatuses(
+  bySession: Record<number, SessionStatusEntry>,
+  featureIds: readonly number[],
+): LiveAgentStatus[] {
+  const index = new Map(featureIds.map((id, position) => [id, position]));
+  const statuses: LiveAgentStatus[] = featureIds.map(() => "idle");
+  for (const entry of Object.values(bySession)) {
+    const position = index.get(entry.featureId);
+    if (position == null || statuses[position] === "question") continue;
+    if (entry.status === "question" || entry.status === "agent") statuses[position] = entry.status;
+  }
+  return statuses;
+}
+
 const EMPTY_FEATURE_STATUS: {
   status: LiveAgentStatus;
   kind: PendingKind | null;
@@ -82,6 +100,19 @@ export function useLiveActiveSessionIds(): readonly number[] {
       }
       ids.sort((a, b) => a - b);
       return ids;
+    }),
+  );
+}
+
+/** Sorted ids of `featureIds` whose agent is mid-turn; stable while unchanged. */
+export function useBusyFeatureIds(featureIds: ReadonlySet<number>): readonly number[] {
+  return useSessionStatusStore(
+    useShallow((s) => {
+      const busy = new Set<number>();
+      for (const entry of Object.values(s.bySession)) {
+        if (entry.status === "agent" && featureIds.has(entry.featureId)) busy.add(entry.featureId);
+      }
+      return [...busy].sort((a, b) => a - b);
     }),
   );
 }

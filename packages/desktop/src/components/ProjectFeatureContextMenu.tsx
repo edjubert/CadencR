@@ -6,7 +6,10 @@ import {
   FolderGit2Icon,
   GitBranchIcon,
   GitPullRequestIcon,
+  MailCheckIcon,
+  MailIcon,
   PinIcon,
+  PencilIcon,
   PinOffIcon,
   TagIcon,
   TrashIcon,
@@ -20,6 +23,8 @@ import { closeFeatureActivityNoun } from "@/lib/feature-activity-close";
 import { copyToClipboard } from "@/lib/clipboard";
 import { openPullRequestActionLabel, openPullRequestExternally } from "@/lib/open-pull-request";
 import { archiveActionLabel, pinActionLabel } from "@/components/ProjectFeatureRowParts";
+import { useIsFeatureMarked, useUnreadStore } from "@/stores/unread-store";
+import { useSidebarRenameStore } from "@/stores/sidebar-rename-store";
 
 interface ProjectFeatureContextMenuProps {
   feature: Feature;
@@ -80,6 +85,13 @@ export function ProjectFeatureContextMenu({
           {pinActionLabel(isPinned)}
         </ContextMenuActionItem>
       )}
+      <ContextMenuActionItem
+        icon={PencilIcon}
+        onSelect={() => useSidebarRenameStore.getState().open(feature.id)}
+      >
+        Rename
+      </ContextMenuActionItem>
+      <MarkReadItem featureId={feature.id} />
       <ContextMenuActionItem icon={TagIcon} onSelect={onStartLabelEditAfterMenuClose}>
         Set label
       </ContextMenuActionItem>
@@ -135,5 +147,28 @@ export function ProjectFeatureContextMenu({
         {archiveActionLabel(isArchived)}
       </ContextMenuActionItem>
     </>
+  );
+}
+
+/**
+ * Mark as unread keeps a conversation in "For me" even while it is open: only
+ * opening it again reads it.
+ */
+function MarkReadItem({ featureId }: { featureId: number }): ReactNode {
+  const isMarked = useIsFeatureMarked(featureId);
+  return isMarked ? (
+    <ContextMenuActionItem
+      icon={MailCheckIcon}
+      onSelect={() => useUnreadStore.getState().toggleMarked(featureId)}
+    >
+      Mark as read
+    </ContextMenuActionItem>
+  ) : (
+    <ContextMenuActionItem
+      icon={MailIcon}
+      onSelect={() => useUnreadStore.getState().toggleMarked(featureId)}
+    >
+      Mark as unread
+    </ContextMenuActionItem>
   );
 }

@@ -439,8 +439,8 @@ mod tests {
         .await
         .unwrap();
         let session_id: i64 = sqlx::query_scalar(
-            "INSERT INTO agent_sessions (feature_id, agent_type, status)
-             VALUES (7, 'session', 'paused') RETURNING id",
+            "INSERT INTO agent_sessions (feature_id, agent_type, status, runtime_provider, model)
+             VALUES (7, 'session', 'paused', 'codex', 'gpt-5.4') RETURNING id",
         )
         .fetch_one(&pool)
         .await
@@ -495,6 +495,15 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(count, 1);
+        // The usage counter follows the insert winner, not the deliveries.
+        let sent = crate::domain::usage_stats::repository::list_recent(&pool, 1)
+            .await
+            .unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(
+            (sent[0].model_id.as_str(), sent[0].user_messages),
+            ("gpt-5.4", 1)
+        );
     }
 
     #[tokio::test]

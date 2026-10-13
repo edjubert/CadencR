@@ -8,7 +8,7 @@ use crate::domain::workspace::models::Setting;
 use crate::error::AppError;
 
 use super::super::{dir, file, lock, paths, Scope, SettingWarning};
-use super::{load, load_document_for_write, read_for_edit, set_value, write_content};
+use super::{load, load_document_for_write, read_for_edit, set_value, set_values, write_content};
 
 fn global_path() -> PathBuf {
     paths::global_file(&dir::global_dir())
@@ -51,6 +51,13 @@ pub fn global_list() -> Vec<Setting> {
 
 pub async fn global_set(key: &str, value: &str) -> Result<(), AppError> {
     set_value(&global_path(), key, value).await?;
+    super::super::generation::bump_global();
+    Ok(())
+}
+
+/// Set or remove (`None`) several global keys in one atomic write.
+pub async fn global_set_many(entries: &BTreeMap<String, Option<String>>) -> Result<(), AppError> {
+    set_values(&global_path(), entries).await?;
     super::super::generation::bump_global();
     Ok(())
 }

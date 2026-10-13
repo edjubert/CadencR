@@ -16,6 +16,7 @@ use super::prompt_pending::{handle_pending_prompt, PendingPromptContext};
 use super::prompt_runtime_config::{
     apply_respawn_if_needed, dispatch_changes, log_dispatch_decision,
 };
+use super::prompt_send_entry::{report_prompt_result, PromptedSelection};
 
 pub(super) struct PreparedPrompt {
     pub payload: PromptSendPayload,
@@ -86,6 +87,7 @@ pub(super) async fn dispatch_local_phase(
     log_dispatch_decision(handle, db_session_id, &changes);
 
     if let QueryState::Active { query, .. } = &handle.state {
+        let selection = PromptedSelection::of(handle);
         let context = build_followup_context(
             query.clone(),
             handle.feature_id,
@@ -97,11 +99,8 @@ pub(super) async fn dispatch_local_phase(
             envelope.id.clone(),
         );
         drop(sessions);
-        report_user_message_persist_result(
-            sender,
-            &envelope.id,
-            handle_followup_prompt(context, payload).await,
-        );
+        let result = handle_followup_prompt(context, payload).await;
+        report_prompt_result(sender, &envelope.id, selection, result);
         return None;
     }
     Some(payload)
@@ -127,16 +126,13 @@ pub(super) async fn dispatch_owner_phase(
         .await
         {
             match target {
-                OwnerPromptTarget::Followup(context) => {
-                    report_user_message_persist_result(
-                        sender,
-                        &envelope.id,
-                        handle_followup_prompt(context, payload).await,
-                    );
+                OwnerPromptTarget::Followup(context, selection) => {
+                    let result = handle_followup_prompt(context, payload).await;
+                    report_prompt_result(sender, &envelope.id, selection, result);
                 }
                 OwnerPromptTarget::Pending(owner_sessions) => {
                     spawn_pending_prompt(
-                        &envelope,
+                        envelope,
                         sender,
                         &owner_sessions,
                         app_state,
@@ -188,7 +184,7 @@ fn build_followup_context(
 /// resolved via the active-turn registry. Returns `None` when that connection's
 /// turn is no longer live.
 enum OwnerPromptTarget {
-    Followup(FollowupPromptContext),
+    Followup(FollowupPromptContext, PromptedSelection),
     Pending(SdkSessions),
 }
 
@@ -200,7 +196,7 @@ async fn owner_prompt_target(
     envelope_id: &str,
     profile_update: Option<&SessionProfileUpdate>,
 ) -> Option<OwnerPromptTarget> {
-    let (query, feature_id, provider_id) = {
+    let (query, feature_id, provider_id, selection) = {
         let mut sessions = owner.lock().await;
         let handle = sessions.get_mut(&db_session_id)?;
         let changes = if profile_update.is_some() {
@@ -216,6 +212,7 @@ async fn owner_prompt_target(
                 query.clone(),
                 handle.feature_id,
                 handle.runtime_provider.clone(),
+                PromptedSelection::of(handle),
             ),
             QueryState::Pending(_) => return Some(OwnerPromptTarget::Pending(owner.clone())),
         }
@@ -224,16 +221,19 @@ async fn owner_prompt_target(
         db_session_id,
         "steering live turn owned by another connection (no new agent)"
     );
-    Some(OwnerPromptTarget::Followup(build_followup_context(
-        query,
-        feature_id,
-        db_session_id,
-        provider_id,
-        sender,
-        owner,
-        app_state,
-        envelope_id.to_string(),
-    )))
+    Some(OwnerPromptTarget::Followup(
+        build_followup_context(
+            query,
+            feature_id,
+            db_session_id,
+            provider_id,
+            sender,
+            owner,
+            app_state,
+            envelope_id.to_string(),
+        ),
+        selection,
+    ))
 }
 
 /// First prompt (or respawn after a config change): take the stored spawn
@@ -256,6 +256,7 @@ pub(super) async fn spawn_pending_prompt(
         );
         return;
     };
+    let selection = PromptedSelection::of(handle);
     let spawned_model = handle.desired_model.clone();
     let spawned_thinking_effort = handle.desired_thinking_effort.clone();
     let config = handle.config.clone();
@@ -301,17 +302,8 @@ pub(super) async fn spawn_pending_prompt(
     };
     drop(sessions);
     // Persist user message in the pending helper after releasing sdk_sessions.
-    report_user_message_persist_result(sender, &envelope.id, handle_pending_prompt(context).await);
-}
-
-fn report_user_message_persist_result(
-    sender: &WsSender,
-    envelope_id: &str,
-    result: Result<(), String>,
-) {
-    if let Err(error) = result {
-        send_error(sender, envelope_id, "USER_MESSAGE_PERSIST_FAILED", &error);
-    }
+    let result = handle_pending_prompt(context).await;
+    report_prompt_result(sender, &envelope.id, selection, result);
 }
 
 async fn resolve_prompt_profile_update(

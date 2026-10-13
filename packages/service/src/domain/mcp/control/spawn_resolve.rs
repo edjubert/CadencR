@@ -253,15 +253,14 @@ async fn effective_spawn_provider(
     if let Some(provider) = trimmed_optional(body.provider.as_deref()) {
         return provider;
     }
-    // Scope the default-provider cascade to the target project. Only inherit the
-    // caller's feature-level override when spawning inside the same project.
+    // Only inherit the caller's feature-level override when spawning inside the
+    // same project; otherwise the workspace's last-used provider applies.
     let feature_scope = (target_project.id == source.project_id).then_some(source.feature_id);
     match crate::domain::agents::resolve_selection(
         &state.read_pool,
         Some(std::path::Path::new(&target_project.path)),
         "session",
         feature_scope,
-        Some(target_project.id),
         None,
     )
     .await

@@ -4,7 +4,9 @@
     "electron.vite.config.ts",
     "electron/main/index.ts",
     "electron/preload/index.ts",
+    "electron/preload/notch.ts",
     "src/App.tsx",
+    "src/notch/main.tsx",
     "src/routes/**/*.tsx"
   ],
   "project": [

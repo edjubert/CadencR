@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+// Pinned to jsdom: relies on jsdom's focus handling for menu keyboard navigation.
 import { http, HttpResponse } from "msw";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -77,6 +79,11 @@ function bridge(): CadencrBrowserBridge {
     confirmClose: vi.fn(),
     requestQuit: vi.fn(),
     reportRendererError: vi.fn(() => Promise.resolve()),
+    notchCapabilities: vi.fn(() => Promise.resolve({ supported: false, hardware: false })),
+    notchConfigure: vi.fn(() => Promise.resolve()),
+    notchPushSnapshot: vi.fn(() => Promise.resolve()),
+    notchNotify: vi.fn(() => Promise.resolve()),
+    onNotchDismissed: vi.fn(() => () => undefined),
     setZoom: vi.fn(),
     currentTheme: vi.fn<() => Promise<"dark">>(() => Promise.resolve("dark")),
     onThemeChange: vi.fn(() => () => undefined),
@@ -177,6 +184,7 @@ function bridge(): CadencrBrowserBridge {
     clearBrowserCommentBadges: vi.fn(() => Promise.resolve()),
     onBrowserState: vi.fn(() => () => undefined),
     onBrowserTabCounts: vi.fn(() => () => undefined),
+    onBrowserAgentActivity: vi.fn(() => () => undefined),
     onBrowserDownloadsChanged: vi.fn(() => () => undefined),
     onBrowserDownloadCounts: vi.fn(() => () => undefined),
     onBrowserShortcut: vi.fn(() => () => undefined),

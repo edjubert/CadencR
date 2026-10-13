@@ -1,6 +1,8 @@
 import { createRootRoute, Outlet } from "@tanstack/react-router";
+import { ManagedThemeRegistry } from "@/hooks/useManagedThemes";
 import { AppShell } from "@/components/AppShell";
 import { GlobalOperationToasts } from "@/components/GlobalOperationToasts";
+import { NotchChannelBridge } from "@/components/notch/NotchChannelBridge";
 import { RootErrorBoundary } from "@/components/RootErrorBoundary";
 import { RootOverlays } from "@/components/RootOverlays";
 import { SidebarContext } from "@/components/SidebarContext";
@@ -51,6 +53,8 @@ function RootLayout() {
           </AppShell>
           <SuspendedBanner />
           <GlobalOperationToasts />
+          <ManagedThemeRegistry />
+          <NotchChannelBridge />
           <RootOverlays
             commandPaletteOpen={controller.commandPaletteOpen}
             setCommandPaletteOpen={controller.setCommandPaletteOpen}

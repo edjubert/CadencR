@@ -27,11 +27,7 @@ const PERSIST_PREFIXES: readonly string[] = [
  * Match suffixes that may appear after a project id under `/api/projects/{id}`.
  * Used to whitelist per-project settings reads.
  */
-const PROJECT_SETTINGS_SUFFIXES: readonly string[] = [
-  "/settings",
-  "/model-settings",
-  "/provider-settings",
-];
+const PROJECT_SETTINGS_SUFFIXES: readonly string[] = ["/settings"];
 
 /**
  * Explicit deny-list — must always return `false` even if a broader prefix

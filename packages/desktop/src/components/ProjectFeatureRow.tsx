@@ -9,15 +9,13 @@ import {
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import type { AllocatedPort, Feature, FeatureWorktreeInfo } from "@/api/generated";
 import { ProjectFeatureContextMenu } from "@/components/ProjectFeatureContextMenu";
-import {
-  FeatureRowActions,
-  FeatureRowMetaLine,
-  FeatureRowTitleLine,
-} from "@/components/ProjectFeatureRowParts";
+import { FeatureRowActions } from "@/components/ProjectFeatureRowParts";
+import { FeatureHierarchyGutter } from "@/components/FeatureHierarchyGutter";
+import { FeatureRowBody } from "@/components/FeatureRowBody";
 import { useNavShortcutHint } from "@/hooks/useNavShortcutHints";
 import { useProjectFeatureRowState } from "@/hooks/useProjectFeatureRowState";
-import { portUrl } from "@/lib/feature-ports";
-import { openLink } from "@/lib/link-routing";
+import { useOpenFeaturePort } from "@/hooks/useOpenFeaturePort";
+import { useSidebarRowActionListener } from "@/hooks/useSidebarRowActionListener";
 
 const ROW_KEYDOWN_IGNORED_SELECTOR = [
   "input",
@@ -68,9 +66,9 @@ interface ProjectFeatureRowProps {
   hierarchyControl?: ReactNode;
   /** Zero-based nesting depth; indentation stays inside the full-width row. */
   hierarchyDepth?: number;
+  /** Children folded under this row (collapsed subtree); it signals their state. */
+  hiddenDescendantIds?: readonly number[];
 }
-
-const FEATURE_NESTING_INDENT_PX = 16;
 
 type ProjectFeatureRowState = ReturnType<typeof useProjectFeatureRowState>;
 
@@ -94,6 +92,7 @@ function FeatureRowDetails({
     liveTitle,
     isAutoNaming,
     hasWorktree,
+    worktree,
     shellCount,
     browserCount,
     downloadCount,
@@ -109,19 +108,18 @@ function FeatureRowDetails({
     onArchiveOrDelete,
   } = props;
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-      <FeatureRowTitleLine
-        feature={feature}
-        liveTitle={liveTitle}
-        isAutoNaming={isAutoNaming}
-        isArchived={state.isArchived}
-        hasWorktree={hasWorktree}
-        liveStatus={state.liveStatus}
-        isActive={state.isActive}
-        isUnread={state.isUnread}
-        onOpenConversation={onOpenConversation}
-        badgeRef={badgeRef}
-      >
+    <FeatureRowBody
+      feature={feature}
+      liveTitle={liveTitle}
+      isAutoNaming={isAutoNaming}
+      isArchived={state.isArchived}
+      hasWorktree={hasWorktree}
+      worktree={worktree}
+      attention={state.attention}
+      isActive={state.isActive}
+      badgeRef={badgeRef}
+      onOpenConversation={onOpenConversation}
+      actions={
         <FeatureRowActions
           featureId={feature.id}
           isArchived={state.isArchived}
@@ -129,25 +127,27 @@ function FeatureRowDetails({
           onTogglePin={onTogglePin}
           onArchiveOrDelete={onArchiveOrDelete}
         />
-      </FeatureRowTitleLine>
-      <FeatureRowMetaLine
-        feature={feature}
-        prStatus={state.prStatus}
-        gitStats={state.gitStats}
-        shellCount={shellCount}
-        browserCount={browserCount}
-        downloadCount={downloadCount}
-        ports={ports}
-        isEditingLabel={isEditingLabel}
-        labelDraft={labelDraft}
-        labelSuggestions={labelSuggestions}
-        isSavingLabel={isSavingLabel}
-        onLabelDraftChange={onLabelDraftChange}
-        onSaveLabel={onSaveLabel}
-        onCancelLabelEdit={onCancelLabelEdit}
-        onOpenPort={onOpenPort}
-      />
-    </div>
+      }
+      prStatus={state.prStatus}
+      gitStats={state.gitStats}
+      shellCount={shellCount}
+      browserCount={browserCount}
+      downloadCount={downloadCount}
+      ports={ports}
+      labelEditor={
+        isEditingLabel
+          ? {
+              draft: labelDraft,
+              suggestions: labelSuggestions,
+              isSaving: isSavingLabel,
+              onDraftChange: onLabelDraftChange,
+              onSave: (override) => onSaveLabel(feature.id, override),
+              onCancel: onCancelLabelEdit,
+            }
+          : undefined
+      }
+      onOpenPort={onOpenPort}
+    />
   );
 }
 
@@ -215,9 +215,16 @@ export const ProjectFeatureRow = memo(function ProjectFeatureRow(
     onStartLabelEdit,
     hierarchyControl,
     hierarchyDepth = 0,
+    hiddenDescendantIds,
   } = props;
   const startLabelEditOnMenuCloseRef = useRef(false);
-  const state = useProjectFeatureRowState(feature, projectId, activeFeatureId, hasLiveWorktree);
+  const state = useProjectFeatureRowState(
+    feature,
+    projectId,
+    activeFeatureId,
+    hasLiveWorktree,
+    hiddenDescendantIds,
+  );
   const { navRef, badgeRef } = useNavShortcutHint<HTMLDivElement>();
   const markStartLabelEditAfterMenuClose = (): void => {
     startLabelEditOnMenuCloseRef.current = true;
@@ -234,21 +241,12 @@ export const ProjectFeatureRow = memo(function ProjectFeatureRow(
     onNavigate(feature);
   }, [feature, onNavigate]);
 
-  // Browser tabs are scoped per feature, so a port opened from another
-  // conversation's row would land in a pane the user isn't looking at.
-  // `openLink` falls back to the system browser off the desktop shell.
-  const handleOpenPort = useCallback(
-    (port: number): void => {
-      onNavigate(feature);
-      void openLink(portUrl(port), {
-        target: "cadencr",
-        scopeId: feature.id,
-        cookieMode: "normal",
-        domains: [],
-      });
-    },
-    [feature, onNavigate],
-  );
+  const handleOpenPort = useOpenFeaturePort(feature, onNavigate);
+  useSidebarRowActionListener(navRef, {
+    label: () => onStartLabelEdit(feature),
+    archive: () => props.onArchiveOrDelete(feature.id),
+    pin: state.isArchived ? undefined : () => props.onTogglePin(feature.id, !state.isPinned),
+  });
 
   return (
     <ContextMenu>
@@ -262,7 +260,7 @@ export const ProjectFeatureRow = memo(function ProjectFeatureRow(
           data-nav-id={String(feature.id)}
           data-nav-project-id={String(projectId)}
           data-feature-depth={hierarchyDepth}
-          className={`group/feature relative flex min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1.5 text-[12.5px] outline-none transition-colors hover:bg-sidebar-accent ${
+          className={`sidebar-row group/feature relative flex min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 outline-none transition-colors hover:bg-sidebar-accent ${
             state.isActive ? "bg-sidebar-accent" : ""
           } ${state.isArchived ? "opacity-50" : ""}`}
           onClick={(e) => {
@@ -279,13 +277,7 @@ export const ProjectFeatureRow = memo(function ProjectFeatureRow(
             }
           }}
         >
-          <div
-            data-feature-hierarchy-gutter
-            className="flex size-3.5 shrink-0 items-center justify-center"
-            style={{ marginInlineStart: hierarchyDepth * FEATURE_NESTING_INDENT_PX }}
-          >
-            {hierarchyControl}
-          </div>
+          <FeatureHierarchyGutter depth={hierarchyDepth}>{hierarchyControl}</FeatureHierarchyGutter>
 
           <FeatureRowDetails
             props={props}

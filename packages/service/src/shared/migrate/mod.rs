@@ -11,6 +11,8 @@ mod checksum_repair_data;
 #[cfg(test)]
 mod codex_permission_mode_migration_tests;
 #[cfg(test)]
+mod context_window_null_default_migration_tests;
+#[cfg(test)]
 mod custom_model_effort_migration_tests;
 #[cfg(test)]
 mod mcp_orchestration_migration_tests;
@@ -34,6 +36,8 @@ mod test_fixtures;
 mod usage_checkpoint_scope_migration_tests;
 #[cfg(test)]
 mod usage_token_schema_migration_tests;
+#[cfg(test)]
+mod user_message_count_migration_tests;
 mod version_guard;
 use crate::shared::startup_progress::emit_phase;
 pub(crate) use backup_rotation::naming::source_database_file_name as backup_source_database_file_name;
@@ -288,6 +292,8 @@ mod tests {
         let pool = test_pool(path).await;
         create_pre_ws_feature_removal_schema(&pool).await;
         test_fixtures::seed_applied_migrations_before(&pool, REMOVE_WS_FEATURE_VERSION).await;
+        test_fixtures::ensure_agent_session_context_window(&pool).await;
+        test_fixtures::ensure_user_message_count_prerequisites(&pool).await;
 
         sqlx::raw_sql(
             r#"INSERT INTO projects (id, name, path) VALUES (1, 'p', '/tmp/p');
@@ -401,10 +407,10 @@ mod tests {
             .await
             .unwrap();
         create_pre_agent_message_index_schema(&pool).await;
+        test_fixtures::seed_applied_migrations_before(&pool, AGENT_MESSAGE_INDEX_VERSION).await;
         // The schedules migration (20260724120000) folds `scheduled_messages`
         // into `schedules`, which FKs into projects/features.
         test_fixtures::create_schedules_migration_prerequisites(&pool).await;
-        test_fixtures::seed_applied_migrations_before(&pool, AGENT_MESSAGE_INDEX_VERSION).await;
         run_migrations(&MigrationContext::pool_only(&pool))
             .await
             .unwrap();
@@ -481,10 +487,10 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        test_fixtures::seed_applied_migrations_before(&pool, DROP_PIN_VERSION).await;
         // The schedules migration (20260724120000) folds `scheduled_messages`
         // into `schedules`, which FKs into projects/features.
         test_fixtures::create_schedules_migration_prerequisites(&pool).await;
-        test_fixtures::seed_applied_migrations_before(&pool, DROP_PIN_VERSION).await;
 
         run_migrations(&MigrationContext::pool_only(&pool))
             .await

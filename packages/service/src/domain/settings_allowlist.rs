@@ -13,7 +13,9 @@
 mod keys;
 
 use keys::WORKSPACE_MODEL_PREFIXES;
-pub use keys::{FEATURE_ALLOWED_KEYS, PROJECT_ALLOWED_KEYS, WORKSPACE_ALLOWED_KEYS};
+pub use keys::{
+    FEATURE_ALLOWED_KEYS, PROJECT_ALLOWED_KEYS, SIDEBAR_DISPLAY_KEYS, WORKSPACE_ALLOWED_KEYS,
+};
 
 /// Whether `suffix` is a plausible `<provider>_<model-id>` identifier: non-empty
 /// and free of whitespace and control characters.
@@ -30,7 +32,7 @@ pub fn is_project_key_allowed(key: &str) -> bool {
 }
 
 pub fn is_workspace_key_allowed(key: &str) -> bool {
-    if WORKSPACE_ALLOWED_KEYS.contains(&key) {
+    if WORKSPACE_ALLOWED_KEYS.contains(&key) || SIDEBAR_DISPLAY_KEYS.contains(&key) {
         return true;
     }
     WORKSPACE_MODEL_PREFIXES
@@ -270,6 +272,16 @@ mod tests {
         assert!(!is_project_key_allowed("git_diff_tree_display_mode"));
     }
     #[test]
+    fn workspace_accepts_sidebar_expansion_keys() {
+        // The sidebar remembers what the user expanded; without these the FE
+        // gets a BAD_REQUEST and every reload collapses the tree again.
+        assert!(is_workspace_key_allowed("sidebar_expanded_projects"));
+        assert!(is_workspace_key_allowed("sidebar_collapsed_subtrees"));
+        assert!(is_workspace_key_allowed("sidebar_archived_open_projects"));
+        assert!(is_workspace_key_allowed("sidebar_views"));
+        assert!(is_workspace_key_allowed("sidebar_active_view"));
+    }
+    #[test]
     fn workspace_accepts_favorite_models() {
         // Starred models in the model pickers; without this the FE gets a
         // BAD_REQUEST and starring silently fails.
@@ -321,6 +333,24 @@ mod tests {
         assert!(!is_project_key_allowed("agent_stream_summary_mode"));
     }
     #[test]
+    fn workspace_accepts_agent_message_navigator_enabled() {
+        // Persisted by Settings → Interface → "Message navigator" toggle via
+        // useDebouncedSetting; without this the toggle 400s.
+        assert!(is_workspace_key_allowed("agent_message_navigator_enabled"));
+        assert!(!is_feature_key_allowed("agent_message_navigator_enabled"));
+        assert!(!is_project_key_allowed("agent_message_navigator_enabled"));
+    }
+    #[test]
+    fn auto_layout_keys_are_scoped() {
+        // Workspace default from Settings → Interface; per-feature override
+        // from the auto layout toggle beside the layout menu.
+        assert!(is_workspace_key_allowed("layout_auto_mode_default"));
+        assert!(!is_feature_key_allowed("layout_auto_mode_default"));
+        assert!(is_feature_key_allowed("layout_auto_mode"));
+        assert!(!is_workspace_key_allowed("layout_auto_mode"));
+    }
+
+    #[test]
     fn workspace_accepts_animations_enabled() {
         // Master switch for fluid UI animations, persisted from the Welcome
         // onboarding step and the Settings → Appearance toggle.
@@ -369,9 +399,17 @@ mod tests {
             "model_auto_name",
             "agent_runtime_session",
             "agent_runtime_auto_name",
+            "auto_name_system_prompt",
             "sidebar_right_collapsed",
         ] {
             assert!(is_workspace_key_allowed(k), "{k} should be allowed");
+        }
+    }
+
+    #[test]
+    fn project_rejects_session_selection_keys() {
+        for k in ["model_session", "agent_runtime_session"] {
+            assert!(!is_project_key_allowed(k), "{k} is no longer per-project");
         }
     }
 }

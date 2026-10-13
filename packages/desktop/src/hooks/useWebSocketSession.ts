@@ -72,6 +72,8 @@ export interface UseWebSocketSessionReturn {
   /** Resolves with the number of older blocks that were prepended. `displayMode`
    *  sizes the prepend to the rows actually rendered under summary/compact. */
   loadOlderMessages: (displayMode?: DisplayRowMode) => Promise<number>;
+  /** Loads one unloaded prompt and the start of its turn (message navigator). */
+  loadPromptTurn: (messageDbId: number, displayMode?: DisplayRowMode) => Promise<boolean>;
 
   permissionMode: PermissionMode;
   accessMode: AccessMode;
@@ -132,6 +134,7 @@ interface UseWebSocketSessionOptions {
 type SessionActions = Pick<
   UseWebSocketSessionReturn,
   | "loadOlderMessages"
+  | "loadPromptTurn"
   | "sendPrompt"
   | "respondToPermission"
   | "respondToQuestion"
@@ -273,6 +276,8 @@ function useSessionActions(sessionId: string): SessionActions {
       // aligned and the scroll from jumping.
       loadOlderMessages: (displayMode?: DisplayRowMode): Promise<number> =>
         s.loadOlderMessages(sessionId, displayMode),
+      loadPromptTurn: (messageDbId: number, displayMode?: DisplayRowMode): Promise<boolean> =>
+        s.loadPromptTurn(sessionId, messageDbId, displayMode),
       sendPrompt: (text: string, options?: PromptDispatchOptions): void =>
         s.sendPrompt(sessionId, text, options),
       respondToPermission: (

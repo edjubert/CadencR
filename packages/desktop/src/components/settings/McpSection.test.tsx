@@ -28,6 +28,7 @@ describe("McpSection", () => {
       value: null,
       setValue: settingSetter(key),
       isLoading: false,
+      isFetched: true,
       isSaving: false,
     }));
   });
