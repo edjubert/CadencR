@@ -100,6 +100,7 @@ vi.mock("@/components/PinnedConversationRow", () => ({
 
 import { SidebarPinnedConversations } from "./SidebarPinnedConversations";
 import { useSidebarFilterStore } from "@/stores/sidebar-filter-store";
+import { useSidebarSurfaceStore } from "@/stores/sidebar-surface-store";
 
 function feature(id: number, projectId: number): Feature {
   return {
@@ -129,6 +130,9 @@ describe("SidebarPinnedConversations", () => {
     mocks.invalidateByUrlPrefix.mockClear();
     mocks.setPinned([]);
     useSidebarFilterStore.getState().close();
+    useSidebarSurfaceStore.setState({
+      expanded: { "for-me": true, working: true, recent: true, pinned: true },
+    });
   });
 
   it("keeps only the pinned rows the sidebar filter matches", () => {
@@ -182,5 +186,19 @@ describe("SidebarPinnedConversations", () => {
     // onSuccess is the only refresh path — no optimistic mutation.
     mocks.getOptions()?.mutation.onSuccess();
     expect(mocks.invalidateByUrlPrefix).toHaveBeenCalledWith(expect.anything(), "/api/features");
+  });
+
+  it("folds from its header", async () => {
+    const user = userEvent.setup();
+    mocks.setPinned([feature(1, 5), feature(2, 9)]);
+    renderSection();
+    const header = screen.getByRole("button", { name: /Pinned/ });
+    expect(screen.getByText("open-1")).toBeInTheDocument();
+    await user.click(header);
+    expect(screen.queryByText("open-1")).not.toBeInTheDocument();
+    expect(screen.queryByText("open-2")).not.toBeInTheDocument();
+    await user.click(header);
+    expect(screen.getByText("open-1")).toBeInTheDocument();
+    expect(screen.getByText("open-2")).toBeInTheDocument();
   });
 });

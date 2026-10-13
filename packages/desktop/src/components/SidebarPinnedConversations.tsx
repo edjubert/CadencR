@@ -15,6 +15,7 @@ import { NO_PORTS, useFeaturePorts } from "@/hooks/useFeaturePorts";
 import { usePinnedActivity } from "@/hooks/usePinnedActivity";
 import { useSidebarFilteredFeatures } from "@/hooks/useSidebarFilteredFeatures";
 import { useSidebarFilterQuery } from "@/stores/sidebar-filter-store";
+import { useSidebarBlockFold } from "@/stores/sidebar-surface-store";
 
 /**
  * Global "Pinned" section rendered above the project list. Pinning is a
@@ -48,6 +49,7 @@ export function SidebarPinnedConversations({
   const handleNavigate = useCrossProjectNavigate(activeFeatureId, onSelectFeature);
   const hideEmpty = useSidebarOption("hideEmptyBlocks");
   const filtering = useSidebarFilterQuery() !== "";
+  const fold = useSidebarBlockFold("pinned");
 
   const { mutate: updateFeaturePinned } = useUpdateFeaturePinned({
     mutation: {
@@ -76,8 +78,10 @@ export function SidebarPinnedConversations({
       label="Pinned"
       icon={PinIcon}
       count={pinnedFeatures.length}
+      fold={fold}
       empty="Pin a conversation to keep it here"
       isEmpty={isEmpty}
+      capped
     >
       {pinnedFeatures.map((feature) => (
         <PinnedConversationRow

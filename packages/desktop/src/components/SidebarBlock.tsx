@@ -15,7 +15,7 @@ export const EYEBROW_CLASS = `flex items-center gap-1.5 rounded-md px-2 py-1 ${E
 
 interface SidebarBlockProps {
   /** Names the block for the display options' highlight (`sidebar-rows.css`). */
-  block: SidebarFoldableBlock | "pinned";
+  block: SidebarFoldableBlock;
   label: string;
   icon: LucideIcon;
   /** Shown per the "Block counters" option; omit for blocks whose size is fixed. */

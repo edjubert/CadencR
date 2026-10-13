@@ -49,7 +49,7 @@ export function SidebarSampleBlocks(): ReactElement {
           showCount={false}
         />
       )}
-      <SampleBlock
+      <FoldableSampleBlock
         label="Pinned"
         icon={PinIcon}
         block="pinned"
@@ -87,7 +87,7 @@ function SampleBlock({
   strongCount,
   fold,
 }: SampleBlockProps & {
-  block: SidebarFoldableBlock | "pinned";
+  block: SidebarFoldableBlock;
   fold?: { expanded: boolean; toggle: () => void };
 }): ReactElement | null {
   const preview = useSamplePreview();
