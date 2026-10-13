@@ -14,6 +14,11 @@ import { useTerminalWebSocket } from "@/hooks/useTerminalWebSocket";
 import { useCelerittyTransport } from "./useCelerittyTransport";
 import { useCelerittyTerminal } from "./useCelerittyTerminal";
 import { toControlChar } from "@/lib/terminal-keys";
+import {
+  getFocusedLeaf,
+  selectFeatureLayout,
+  useFeatureLayoutStore,
+} from "@/stores/feature-layout-store";
 import { useLinkRouting } from "@/components/links/LinkRoutingContext";
 import { attachTouchScroll } from "./terminal-touch-scroll";
 import { attachNavigationKeys } from "./terminal-navigation-keys";
@@ -260,19 +265,53 @@ function useInitialNoticeAndCommand(
  * `undefined` for the first few hundred milliseconds — and callers like the
  * Cmd+Shift+T terminal-tab activation only try once. Remember the intent and
  * flush it as soon as the engine instance exists.
+ *
+ * The pending request is also dropped when the feature layout moves focus to
+ * a different pane (e.g. the user clicks the editor while the terminal engine
+ * is still initializing). `TabPane` updates `focusedPaneId` on pointer/focus
+ * without calling this pane's `blur()`, so without this guard the flush
+ * below would steal keyboard focus from the editor once the engine is ready.
  */
-function useDeferredEngineFocus(terminal: Terminal | undefined) {
+function useDeferredEngineFocus(terminal: Terminal | undefined, featureId: number) {
   const pendingFocusRef = useRef(false);
+  /** Focus the engine immediately, or remember the request until it exists. */
   const focusTerminal = useCallback((t: Terminal | undefined): void => {
     if (t) t.focus();
     else pendingFocusRef.current = true;
   }, []);
-  // `setActivePane` blurs every non-active pane on focus change. A pane whose
-  // engine is still loading must drop its pending focus there, otherwise the
-  // flush below would steal focus back from the pane the user is typing in.
+  /** Drop a pending focus request — called when the pane loses focus. `setActivePane`
+   *  blurs every non-active pane on focus change; a pane whose engine is still
+   *  loading must drop its pending focus there, otherwise the flush below would
+   *  steal focus back from the pane the user is typing in. */
   const cancelPendingFocus = useCallback((): void => {
     pendingFocusRef.current = false;
   }, []);
+  // Cancel a pending focus when the layout's focused pane moves away from the
+  // pane hosting this terminal. Subscribing (rather than selecting) keeps this
+  // hook free of re-renders — the subscription only flips a ref.
+  useEffect(() => {
+    const isTerminalPaneFocused = (): boolean => {
+      const state = selectFeatureLayout(featureId)(useFeatureLayoutStore.getState());
+      const focusedLeaf = getFocusedLeaf(state);
+      if (!focusedLeaf) return false;
+      return focusedLeaf.activeTabId === "terminal";
+    };
+    // If focus already moved elsewhere before the subscription attached,
+    // drop any pending request immediately.
+    if (pendingFocusRef.current && !isTerminalPaneFocused()) {
+      pendingFocusRef.current = false;
+    }
+    return useFeatureLayoutStore.subscribe((state, prev) => {
+      if (!pendingFocusRef.current) return;
+      const prevFocused = getFocusedLeaf(selectFeatureLayout(featureId)(prev));
+      const nextFocused = getFocusedLeaf(selectFeatureLayout(featureId)(state));
+      const wasTerminal = prevFocused?.activeTabId === "terminal";
+      const isTerminal = nextFocused?.activeTabId === "terminal";
+      // Only cancel when focus moved *away* from a terminal pane. A change
+      // between two terminal panes is handled by `blur()` via `setActivePane`.
+      if (wasTerminal && !isTerminal) pendingFocusRef.current = false;
+    });
+  }, [featureId]);
   useEffect(() => {
     if (!terminal || !pendingFocusRef.current) return;
     pendingFocusRef.current = false;
@@ -359,7 +398,7 @@ export function useTerminalCoreInstanceController(
 
   useInitialNoticeAndCommand(terminal, ptyReady, connection, refs);
 
-  const { focusTerminal, cancelPendingFocus } = useDeferredEngineFocus(terminal);
+  const { focusTerminal, cancelPendingFocus } = useDeferredEngineFocus(terminal, props.featureId);
 
   const handleRef = useRef<TerminalCoreInstanceHandle | null>(null);
   /** Rebuilds the imperative handle whenever the engine instance changes. */

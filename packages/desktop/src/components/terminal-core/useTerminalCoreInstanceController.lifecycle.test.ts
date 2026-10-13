@@ -51,6 +51,14 @@ vi.mock("@/components/links/LinkRoutingContext", () => ({ useLinkRouting: () => 
 
 import { useTerminalCoreInstanceController } from "./useTerminalCoreInstanceController";
 import type { TerminalCoreInstanceHandle } from "./TerminalCoreInstance.types";
+import {
+  getLeaves,
+  selectFeatureLayout,
+  useFeatureLayoutStore,
+} from "@/stores/feature-layout-store";
+import { ROOT_LEAF_ID } from "@/stores/feature-layout-schema";
+
+const FEATURE = 1;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -59,6 +67,7 @@ beforeEach(() => {
   mocks.engineReady = false;
   mocks.optionsError = null;
   mocks.transport = undefined;
+  useFeatureLayoutStore.setState({ features: {} });
 });
 afterEach(() => vi.useRealTimers());
 
@@ -239,5 +248,64 @@ describe("focus deferral while the engine loads", () => {
     renderHook(() => useTerminalCoreInstanceController({ featureId: 1, projectId: 2 }, ref));
     act(() => ref.current?.blur());
     expect(mocks.terminal.blur).toHaveBeenCalledOnce();
+  });
+
+  it("cancels a pending focus when the layout moves focus to another pane before the engine is ready", () => {
+    // Split the terminal into its own pane so the editor pane is a separate
+    // layout leaf — the split-layout case the reviewer flagged.
+    useFeatureLayoutStore.getState().splitTabAt(FEATURE, "terminal", ROOT_LEAF_ID, "right");
+    const ref = createRef<TerminalCoreInstanceHandle>();
+    const { rerender } = renderHook(() =>
+      useTerminalCoreInstanceController({ featureId: FEATURE, projectId: 2 }, ref),
+    );
+    // Terminal tab is active and focused: a focus request is deferred.
+    act(() => ref.current?.focus());
+    expect(mocks.terminal.focus).not.toHaveBeenCalled();
+    // User clicks the editor pane while the terminal engine is still loading.
+    act(() => {
+      useFeatureLayoutStore.getState().setFocusedPane(FEATURE, ROOT_LEAF_ID);
+      useFeatureLayoutStore.getState().setPaneActiveTab(FEATURE, ROOT_LEAF_ID, "editor");
+    });
+    // Engine becomes ready — the pending focus must not fire.
+    mocks.engineReady = true;
+    rerender();
+    expect(mocks.terminal.focus).not.toHaveBeenCalled();
+  });
+
+  it("still flushes a pending focus when the layout has no state for the feature", () => {
+    // No layout state for FEATURE: `getFocusedLeaf` returns null on the empty
+    // fallback, so the subscription must not cancel the pending request.
+    const ref = createRef<TerminalCoreInstanceHandle>();
+    const { rerender } = renderHook(() =>
+      useTerminalCoreInstanceController({ featureId: FEATURE, projectId: 2 }, ref),
+    );
+    act(() => ref.current?.focus());
+    mocks.engineReady = true;
+    rerender();
+    expect(mocks.terminal.focus).toHaveBeenCalledOnce();
+  });
+
+  it("does not cancel a pending focus when layout focus stays on a terminal pane", () => {
+    // The subscription only cancels when focus leaves the terminal entirely
+    // (`wasTerminal && !isTerminal`). Re-asserting focus on the same terminal
+    // pane must not cancel the pending request.
+    const store = useFeatureLayoutStore.getState();
+    store.splitTabAt(FEATURE, "terminal", ROOT_LEAF_ID, "right");
+    const terminalPane = getLeaves(
+      selectFeatureLayout(FEATURE)(useFeatureLayoutStore.getState()).splitRoot,
+    ).find((l) => l.id !== ROOT_LEAF_ID)!;
+    const ref = createRef<TerminalCoreInstanceHandle>();
+    const { rerender } = renderHook(() =>
+      useTerminalCoreInstanceController({ featureId: FEATURE, projectId: 2 }, ref),
+    );
+    act(() => ref.current?.focus());
+    // Re-assert focus on the same terminal pane (no-op in the store, but
+    // exercises the subscription path with wasTerminal && isTerminal).
+    act(() => {
+      useFeatureLayoutStore.getState().setFocusedPane(FEATURE, terminalPane.id);
+    });
+    mocks.engineReady = true;
+    rerender();
+    expect(mocks.terminal.focus).toHaveBeenCalledOnce();
   });
 });
