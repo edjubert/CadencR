@@ -101,6 +101,10 @@ export function resolveTerminalOptions(
       blink: response.found ? cursorBlink(config.cursor?.style?.blinking) : true,
     },
     scrollback: config.scrolling?.history ?? 10_000,
+    // CadencR routes link activations itself (internal domains, default
+    // browser, Electron shell.openExternal). celeritty must not also open a
+    // window — in Electron window.open does not reach the system browser.
+    links: { open: false },
   };
 }
 

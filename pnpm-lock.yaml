@@ -83,8 +83,8 @@ importers:
         specifier: ^5.2.10
         version: 5.2.10
       celeritty:
-        specifier: 1.2.2
-        version: 1.2.2
+        specifier: file:../../../../edjubert/celeritty
+        version: file:../../edjubert/celeritty
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2
@@ -4748,8 +4748,8 @@ packages:
   ccount@2.0.1:
     resolution: {integrity: sha512-eyrF0jiFpY+3drT6383f1qhkbGsLSifNAjA61IUjZjmLCWjItY6LB9ft9YhoDgwfmclB2zhu51Lc7+95b8NRAg==}
 
-  celeritty@1.2.2:
-    resolution: {integrity: sha512-jSoyA8lPDJYM/fBaC9aa5CpPKrBwulscPi2pTC1CLeFR2zDKlOt3gGxxAPME0ZiOjPCkfc5T2ozcFgne+bEUmg==}
+  celeritty@file:../../edjubert/celeritty:
+    resolution: {directory: ../../edjubert/celeritty, type: directory}
     engines: {node: '>=22.18.0 <25.0.0'}
 
   chai@6.2.2:
@@ -12473,7 +12473,7 @@ snapshots:
 
   ccount@2.0.1: {}
 
-  celeritty@1.2.2: {}
+  celeritty@file:../../edjubert/celeritty: {}
 
   chai@6.2.2: {}
 

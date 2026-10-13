@@ -193,7 +193,8 @@ function useShellSocket(props: TerminalCoreInstanceProps, refs: CoreRefs): Shell
  * Routes `link-activate`/`link-hover` through `LinkRoutingContext` — the
  * same policy (internal vs. default browser, native context-menu hover
  * state) `XTermInstance` fed via `@xterm/addon-web-links`. `celeritty`
- * only detects and reports; it never opens a link itself.
+ * only detects and reports; it never opens a link itself (the terminal is
+ * created with `links: { open: false }`).
  *
  * Split out to stay under the 100-line function budget.
  */
@@ -204,10 +205,10 @@ function useLinkRoutingWiring(terminal: Terminal | undefined): void {
 
   useEffect(() => {
     if (!terminal) return;
-    const offActivate = terminal.on("link-activate", ({ url, modifiers }) => {
-      // Matches XTermInstance's WebLinksAddon gating: a plain click is a
-      // click, not an "open this" — only Cmd/Ctrl+Click activates.
-      if (modifiers.meta || modifiers.ctrl) linkRoutingRef.current?.activate(url);
+    // A plain click activates, like a browser. Cmd/Ctrl+Click activates too,
+    // matching what long-time users of the WebLinksAddon gating expect.
+    const offActivate = terminal.on("link-activate", ({ url }) => {
+      linkRoutingRef.current?.activate(url);
     });
     const offHover = terminal.on("link-hover", (url) => {
       linkRoutingRef.current?.setHoverLink(url);

@@ -5,8 +5,8 @@ import { createContext, useContext } from "react";
  * The value is stable for the provider's lifetime so consumers (including
  * markdown links inside cached subtrees) never re-render when it changes.
  *
- * Click activation lives here (Cmd/Ctrl+Click in the terminal, a plain click
- * or tap in agent chat); the right-click menu is rendered by the native
+ * Click activation lives here (a plain click or tap in the terminal and
+ * agent chat); the right-click menu is rendered by the native
  * (main-process) context menu, fed by `setHoverLink`.
  */
 export interface LinkRouting {

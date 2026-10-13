@@ -68,6 +68,11 @@ describe("terminal options", () => {
     expect(resolveTerminalOptions(response).font.family).toBe("config-font");
   });
 
+  it("disables celeritty's own link opening — CadencR routes link-activate itself", () => {
+    const options = resolveTerminalOptions({ found: false, config: {} });
+    expect(options.links).toEqual({ open: false });
+  });
+
   it("keeps loading and configuration errors explicit", () => {
     query.data = undefined;
     query.isLoading = true;
