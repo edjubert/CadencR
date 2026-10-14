@@ -7,6 +7,8 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use super::links::watch_paths;
+
 /// Which files trigger a refetch (exact paths, not bare file names) and
 /// which directories are subscribed to get events for them.
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -34,6 +36,10 @@ impl WatchState {
     /// too: the link's own directory (its deletion event arrives there) and
     /// the resolved target's directory (edits to the target file arrive
     /// there, and that directory is often outside every other watched path).
+    /// Links in intermediate directories are reload triggers too: switching
+    /// one changes the import graph even without editing a chain file.
+    /// Dangling links retain their target paths and target directories so
+    /// recreating the target can recover live reload.
     ///
     /// A wanted directory that doesn't exist yet can't be subscribed, and
     /// nothing below it can produce events either — unless one of its
@@ -45,18 +51,19 @@ impl WatchState {
     /// `unwatchable` and reported through [`Self::degraded_reload_error`]
     /// instead of failing silently.
     pub(super) fn from_touched(config_path: &Path, touched: Vec<PathBuf>) -> Self {
-        let mut files = HashSet::from([config_path.to_path_buf(), normalize(config_path)]);
-        let mut dirs = HashSet::from([config_path.parent().map(normalize).unwrap_or_default()]);
-        for path in touched {
+        let mut files = HashSet::new();
+        let mut dirs = HashSet::new();
+        for path in std::iter::once(config_path.to_path_buf()).chain(touched) {
             if let Some(dir) = path.parent() {
                 dirs.insert(normalize(dir));
             }
-            let canonical = normalize(&path);
-            if let Some(target_dir) = canonical.parent() {
-                dirs.insert(normalize(target_dir));
+            for watched_path in watch_paths(&path) {
+                if let Some(dir) = watched_path.parent() {
+                    dirs.insert(normalize(dir));
+                }
+                files.insert(watched_path);
             }
-            files.insert(path.clone());
-            files.insert(canonical);
+            files.insert(path);
         }
         let wanted: Vec<PathBuf> = dirs.iter().cloned().collect();
         let mut unwatchable = Vec::new();
@@ -234,6 +241,45 @@ mod tests {
         let state = WatchState::from_touched(&root, vec![link]);
         assert!(state.dirs.contains(&normalize(&config_dir)));
         assert!(state.dirs.contains(&normalize(&dotfiles)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn watch_state_keeps_a_dangling_symlinks_target_and_existing_ancestor() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("alacritty");
+        std::fs::create_dir(&config_dir).unwrap();
+        let target = dir.path().join("dotfiles/new/font.toml");
+        let link = config_dir.join("font.toml");
+        std::os::unix::fs::symlink("../dotfiles/new/font.toml", &link).unwrap();
+
+        let state = WatchState::from_touched(&config_dir.join("alacritty.toml"), vec![link]);
+        assert!(state.files.contains(&normalize(&target)));
+        assert!(state.dirs.contains(&normalize(target.parent().unwrap())));
+        assert!(state.dirs.contains(&normalize(dir.path())));
+        assert!(state.degraded_reload_error().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn watch_state_observes_directory_symlink_replacements() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("alacritty");
+        let external = dir.path().join("external");
+        let target_dir = dir.path().join("themes/a");
+        for path in [&config_dir, &external, &target_dir] {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        let link = external.join("current");
+        std::os::unix::fs::symlink(&target_dir, &link).unwrap();
+
+        let state = WatchState::from_touched(
+            &config_dir.join("alacritty.toml"),
+            vec![link.join("font.toml")],
+        );
+        assert!(state.files.contains(&normalize(&external).join("current")));
+        assert!(state.dirs.contains(&normalize(&external)));
+        assert!(state.dirs.contains(&normalize(&target_dir)));
     }
 
     #[test]

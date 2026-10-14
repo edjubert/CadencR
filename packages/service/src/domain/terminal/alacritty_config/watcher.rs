@@ -28,6 +28,7 @@ use tracing::{debug, warn};
 use super::default_config_path;
 use super::resolve::resolve_chain_paths;
 
+mod links;
 mod state;
 
 use state::{normalize, WatchState};
@@ -72,9 +73,9 @@ fn recompute_state(config_path: &Path) -> WatchState {
     WatchState::from_touched(config_path, resolve_chain_paths(config_path))
 }
 
-/// Whether `path` is exactly one of the chain's own files — the root or one
-/// of its imports, not some unrelated file that merely shares a name with
-/// one of them (e.g. a `font.toml` in another watched directory). Both the
+/// Whether `path` is one of the chain's own files or a symlink whose
+/// replacement changes where they resolve, not some unrelated file that
+/// merely shares a name (e.g. `font.toml` in another watched directory). Both the
 /// raw form and the canonical form are accepted: a deleted file can't be
 /// canonicalized anymore, but the deletion event still deserves a reload.
 fn is_watched_config_file(path: &Path, files: &HashSet<PathBuf>) -> bool {
@@ -86,8 +87,8 @@ fn is_watched_config_file(path: &Path, files: &HashSet<PathBuf>) -> bool {
 /// tree being created level by level under a watched ancestor. Also matches
 /// events that touch a watched directory itself (e.g. its own deletion).
 ///
-/// Neither is a config change for clients, but the watch set must be
-/// recomputed so the new directories get subscribed. Only subdirectory
+/// Recompute the watch set so new directories get subscribed and clients
+/// refetch imports affected by invalidated subscriptions. Only subdirectory
 /// creations count: a plain file created in a watched directory (the common
 /// case in a broad ancestor like the home directory) changes no
 /// subscription, so it must not trigger a recompute.
@@ -275,21 +276,18 @@ fn event_handler(
             }
         };
         let watched = shared.lock().expect("watch state poisoned").clone();
-        if events
+        let config_changed = events
             .iter()
-            .any(|e| is_watched_config_file(&e.path, &watched.files))
-        {
+            .any(|e| is_watched_config_file(&e.path, &watched.files));
+        let created = created_subdirs_of_watched_dirs(&events, &watched.dirs);
+        if config_changed {
             debug!("alacritty.toml change detected");
             let _ = tx.send(AlacrittyConfigChangedEvent {});
-            // The edit may also have changed the import graph itself (a
-            // `general.import` added or removed) — recompute it so the new
-            // files become watched too.
-            let _ = recompute_tx.send(Vec::new());
-        } else {
-            let created = created_subdirs_of_watched_dirs(&events, &watched.dirs);
-            if !created.is_empty() {
-                let _ = recompute_tx.send(created);
-            }
+        }
+        if config_changed || !created.is_empty() {
+            // A batch can contain both a chain-file edit and a recreated
+            // directory: recompute the graph without losing invalidations.
+            let _ = recompute_tx.send(created);
         }
     }
 }
@@ -332,16 +330,19 @@ impl Resubscriber {
         // deleted and recreated before the debounce expired keeps its entry
         // in `subscribed` even though the OS watch is gone. Removing it here
         // lets `apply_subscriptions` reinstall the watch.
+        let mut invalidated = false;
         for dir in invalidate {
-            self.subscribed.remove(dir);
-            self.subscribed.remove(&normalize(dir));
+            invalidated |= self.subscribed.remove(dir);
+            invalidated |= self.subscribed.remove(&normalize(dir));
         }
         let next = recompute_state(&self.config_path);
         let alignment = apply_subscriptions(&mut self.debouncer, &self.subscribed, &next.dirs);
         let status_changed =
             set_watch_error(alignment.error().or_else(|| next.degraded_reload_error()));
-        let changed =
-            status_changed || next != self.watched || alignment.subscribed != self.subscribed;
+        let changed = invalidated
+            || status_changed
+            || next != self.watched
+            || alignment.subscribed != self.subscribed;
         *self.shared.lock().expect("watch state poisoned") = next.clone();
         debug!(files = ?next.files, "alacritty config watch set recomputed");
         self.watched = next;
@@ -487,6 +488,32 @@ mod tests {
         assert!(created_subdirs_of_watched_dirs(&[event(outside)], &dirs).is_empty());
     }
 
+    #[test]
+    fn a_mixed_batch_reloads_and_invalidates_the_recreated_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let themes = dir.path().join("themes");
+        std::fs::create_dir(&themes).unwrap();
+        let import = themes.join("font.toml");
+        let shared = Arc::new(Mutex::new(WatchState::from_touched(
+            &dir.path().join("alacritty.toml"),
+            vec![import.clone()],
+        )));
+        let (tx, mut reload_rx) = broadcast::channel(16);
+        let (recompute_tx, recompute_rx) = mpsc::channel();
+        let mut handler = event_handler(shared, tx, recompute_tx);
+        let event = |path| DebouncedEvent {
+            path,
+            kind: notify_debouncer_mini::DebouncedEventKind::Any,
+        };
+
+        // Both paths reach the real callback in a single debounced batch.
+        handler(Ok(vec![event(import), event(themes.clone())]));
+
+        assert_eq!(recompute_rx.try_recv().unwrap(), vec![themes]);
+        assert!(reload_rx.try_recv().is_ok(), "the file edit still reloads");
+        assert!(recompute_rx.try_recv().is_err(), "one recompute per batch");
+    }
+
     fn test_debouncer() -> Debouncer<RecommendedWatcher> {
         new_debouncer(Duration::from_millis(50), |_: DebounceEventResult| {}).unwrap()
     }
@@ -552,6 +579,36 @@ mod tests {
         let third = apply_subscriptions(&mut debouncer, &second.subscribed, &wanted);
         assert_eq!(third.subscribed, wanted);
         assert_eq!(third.error(), None);
+    }
+
+    #[test]
+    fn a_directory_only_deletion_reloads_after_invalidating_its_subscription() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = normalize(dir.path()).join("alacritty.toml");
+        let themes = root.parent().unwrap().join("themes");
+        std::fs::create_dir(&themes).unwrap();
+        std::fs::write(&root, "general.import = [\"themes/font.toml\"]\n").unwrap();
+        std::fs::write(themes.join("font.toml"), "[font]\nsize = 14\n").unwrap();
+        let watched = recompute_state(&root);
+        let mut debouncer = test_debouncer();
+        let alignment = apply_subscriptions(&mut debouncer, &HashSet::new(), &watched.dirs);
+        let (reload_tx, mut reload_rx) = broadcast::channel(16);
+        let mut resubscriber = Resubscriber {
+            config_path: root,
+            debouncer,
+            shared: Arc::new(Mutex::new(watched.clone())),
+            watched,
+            subscribed: alignment.subscribed,
+            reload_tx,
+        };
+
+        std::fs::remove_dir_all(&themes).unwrap();
+        // No chain-file event accompanied the directory deletion. The watch
+        // set is unchanged, but invalidating its subscription must refetch
+        // the now-missing imported configuration.
+        resubscriber.recompute(&[themes]);
+
+        assert!(reload_rx.try_recv().is_ok());
     }
 
     #[test]
@@ -858,6 +915,105 @@ mod tests {
         assert!(
             write_and_expect_reload(&mut rx, &target, "[font]\nsize = 18\n"),
             "editing a symlink target in a separate directory must trigger a reload event"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn creating_a_dangling_symlinks_missing_target_tree_triggers_live_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("alacritty");
+        std::fs::create_dir(&config_dir).unwrap();
+        let target_dir = dir.path().join("external");
+        let target = target_dir.join("font.toml");
+        std::os::unix::fs::symlink("../external/font.toml", config_dir.join("font.toml")).unwrap();
+        let root = config_dir.join("alacritty.toml");
+        std::fs::write(&root, "general.import = [\"font.toml\"]\n").unwrap();
+        let (tx, _keep) = broadcast::channel(16);
+        spawn_watcher(root, tx.clone());
+        let mut rx = tx.subscribe();
+        std::thread::sleep(Duration::from_millis(500));
+
+        std::fs::create_dir(&target_dir).unwrap();
+        std::fs::write(&target, "[font]\nsize = 16\n").unwrap();
+        assert!(wait_for_event(&mut rx), "creating the target tree reloads");
+        drain_and_settle(&mut rx);
+        assert!(
+            write_and_expect_reload(&mut rx, &target, "[font]\nsize = 18\n"),
+            "edits to the newly created target remain watched"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_deleted_symlink_target_stays_watched_until_recreated() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("alacritty");
+        let dotfiles = dir.path().join("dotfiles");
+        std::fs::create_dir(&config_dir).unwrap();
+        std::fs::create_dir(&dotfiles).unwrap();
+        let target = dotfiles.join("font.toml");
+        std::fs::write(&target, "[font]\nsize = 14\n").unwrap();
+        std::os::unix::fs::symlink(&target, config_dir.join("font.toml")).unwrap();
+        let root = config_dir.join("alacritty.toml");
+        std::fs::write(&root, "general.import = [\"font.toml\"]\n").unwrap();
+        let (tx, _keep) = broadcast::channel(16);
+        spawn_watcher(root, tx.clone());
+        let mut rx = tx.subscribe();
+        std::thread::sleep(Duration::from_millis(500));
+
+        std::fs::remove_file(&target).unwrap();
+        assert!(wait_for_event(&mut rx), "deleting the target reloads");
+        drain_and_settle(&mut rx);
+        assert!(
+            write_and_expect_reload(&mut rx, &target, "[font]\nsize = 16\n"),
+            "recreating the target reloads without another config edit"
+        );
+        drain_and_settle(&mut rx);
+        assert!(
+            write_and_expect_reload(&mut rx, &target, "[font]\nsize = 18\n"),
+            "edits to the recreated target remain watched"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn switching_a_directory_symlink_reloads_and_watches_the_new_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("alacritty");
+        let external = dir.path().join("external");
+        let themes_a = dir.path().join("themes/a");
+        let themes_b = dir.path().join("themes/b");
+        for path in [&config_dir, &external, &themes_a, &themes_b] {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        std::fs::write(themes_a.join("font.toml"), "[font]\nsize = 14\n").unwrap();
+        let target = themes_b.join("font.toml");
+        std::fs::write(&target, "[font]\nsize = 16\n").unwrap();
+        let link = external.join("current");
+        std::os::unix::fs::symlink(&themes_a, &link).unwrap();
+        let root = config_dir.join("alacritty.toml");
+        std::fs::write(
+            &root,
+            "general.import = [\"../external/current/font.toml\"]\n",
+        )
+        .unwrap();
+        let (tx, _keep) = broadcast::channel(16);
+        spawn_watcher(root, tx.clone());
+        let mut rx = tx.subscribe();
+        std::thread::sleep(Duration::from_millis(500));
+
+        let replacement = external.join("replacement");
+        std::os::unix::fs::symlink(&themes_b, &replacement).unwrap();
+        std::fs::rename(&replacement, &link).unwrap();
+        assert!(
+            wait_for_event(&mut rx),
+            "switching the directory link reloads"
+        );
+        drain_and_settle(&mut rx);
+        assert!(
+            write_and_expect_reload(&mut rx, &target, "[font]\nsize = 18\n"),
+            "the new target directory becomes watched"
         );
     }
 
