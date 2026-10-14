@@ -11,6 +11,10 @@ vi.mock("@/api/generated", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   useSetWorkspaceSetting: () => ({
     mutate: ({ data }: { data: { value: string } }) => mocks.writes.push(data.value),
+    mutateAsync: ({ data }: { data: { value: string } }) => {
+      mocks.writes.push(data.value);
+      return Promise.resolve({ value: data.value });
+    },
     isPending: false,
   }),
 }));

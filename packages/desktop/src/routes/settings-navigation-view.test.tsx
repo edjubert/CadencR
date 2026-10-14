@@ -35,7 +35,14 @@ vi.mock("@/api/generated", async () => {
         initialData: { value: "old" },
         staleTime: Infinity,
       }),
-    useSetWorkspaceSetting: () => ({ mutate: mocks.persist, isPending: false }),
+    useSetWorkspaceSetting: () => ({
+      mutate: mocks.persist,
+      mutateAsync: (args: { data: { value: string } }) => {
+        mocks.persist(args);
+        return Promise.resolve({ value: args.data.value });
+      },
+      isPending: false,
+    }),
   };
 });
 vi.mock("@/components/settings/GeneralSettingsSections", async () => {
@@ -153,10 +160,10 @@ describe("Settings views", () => {
       await vi.advanceTimersByTimeAsync(300);
     });
     expect(mocks.persist).toHaveBeenCalledTimes(1);
-    expect(mocks.persist).toHaveBeenCalledWith(
-      { key: "regression_setting", data: { value: "new" } },
-      expect.objectContaining({ onSuccess: expect.any(Function), onError: expect.any(Function) }),
-    );
+    expect(mocks.persist).toHaveBeenCalledWith({
+      key: "regression_setting",
+      data: { value: "new" },
+    });
     mocks.search = { tab: "general" };
     rerender(view());
     expect(screen.getByRole("textbox", { name: "Setting regression" })).toHaveValue("new");

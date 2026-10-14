@@ -28,10 +28,17 @@ pub fn resolve_system_prompt() -> String {
 
 /// The delimiter instruction lives here, not in the system prompt, so a custom
 /// system prompt can never break name extraction.
-pub fn build_prompt(user_input: &str) -> String {
+///
+/// The naming instructions ride inside the user prompt: ACP-installed
+/// providers drop `RuntimeSpawnConfig::system_prompt` on the floor (the ACP
+/// `session/new` request has no field for it), so relying on the system slot
+/// would silently run the naming with no instructions on those providers. The
+/// importer marker stays first so `codex_rollout` keeps recognising naming
+/// sessions.
+pub fn build_prompt(user_input: &str, system_prompt: &str) -> String {
     let escaped_input = user_input.replace('"', "\\\"");
     format!(
-        "{AUTO_NAME_USER_PROMPT_PREFIX} \"{escaped_input}\". Reply with ONLY: {NAME_START}<name>{NAME_END}"
+        "{AUTO_NAME_USER_PROMPT_PREFIX} \"{escaped_input}\". {system_prompt} Reply with ONLY: {NAME_START}<name>{NAME_END}"
     )
 }
 
@@ -41,7 +48,7 @@ mod tests {
 
     #[test]
     fn build_prompt_escapes_quotes() {
-        let prompt = build_prompt("say \"hi\"");
+        let prompt = build_prompt("say \"hi\"", DEFAULT_AUTO_NAME_SYSTEM_PROMPT);
         assert!(prompt.contains("\\\"hi\\\""));
         assert!(prompt.contains(NAME_START));
     }
@@ -65,6 +72,14 @@ mod tests {
 
     #[test]
     fn build_prompt_opens_with_the_importer_marker() {
-        assert!(build_prompt("fix it").starts_with(AUTO_NAME_USER_PROMPT_PREFIX));
+        assert!(build_prompt("fix it", DEFAULT_AUTO_NAME_SYSTEM_PROMPT)
+            .starts_with(AUTO_NAME_USER_PROMPT_PREFIX));
+    }
+
+    #[test]
+    fn build_prompt_inlines_the_system_prompt() {
+        let prompt = build_prompt("fix it", "Name in French.");
+        assert!(prompt.contains("Name in French."));
+        assert!(prompt.starts_with(AUTO_NAME_USER_PROMPT_PREFIX));
     }
 }

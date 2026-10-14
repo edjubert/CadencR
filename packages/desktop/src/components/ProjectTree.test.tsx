@@ -5,6 +5,7 @@ import { act, fireEvent, render as renderWithProviders, screen } from "@/test-ut
 import userEvent from "@testing-library/user-event";
 import { ProjectTree } from "./ProjectTree";
 import { resetMockIds } from "@/test-fixtures";
+import { clearProjectAutoExpandSkip, skipProjectAutoExpand } from "@/lib/project-auto-expand";
 import { resetPersistedIdSets } from "@/test/persisted-id-set-mock";
 import { DEFAULT_SIDEBAR_CONFIG } from "@/lib/sidebar-config";
 import { useSidebarConfigStore } from "@/stores/sidebar-config-store";
@@ -185,6 +186,7 @@ describe("ProjectTree", () => {
     resetMockIds();
     mockNavigate.mockClear();
     mockCreateFeature.mockClear();
+    clearProjectAutoExpandSkip();
     mockProjectSettingsDialog.mockClear();
     mockArchiveProjectSessions.mockReset();
     mockArchiveProjectSessions.mockResolvedValue({
@@ -223,6 +225,55 @@ describe("ProjectTree", () => {
 
   it("expands active project to show features", () => {
     render(<ProjectTree activeProjectId={1} activeFeatureId={null} onSelectFeature={vi.fn()} />);
+    expect(screen.getByText("Feature One")).toBeInTheDocument();
+  });
+
+  it("does not auto-expand the active project when navigation came from a pinned row", () => {
+    skipProjectAutoExpand(1);
+    render(<ProjectTree activeProjectId={1} activeFeatureId={null} onSelectFeature={vi.fn()} />);
+    expect(screen.queryByText("Feature One")).not.toBeInTheDocument();
+  });
+
+  it("ignores the skip marker when it targets a different project", () => {
+    skipProjectAutoExpand(2);
+    render(<ProjectTree activeProjectId={1} activeFeatureId={null} onSelectFeature={vi.fn()} />);
+    expect(screen.getByText("Feature One")).toBeInTheDocument();
+  });
+
+  it("auto-expands again once the active project changes away from the skipped one", () => {
+    skipProjectAutoExpand(1);
+    const { rerender } = render(
+      <ProjectTree activeProjectId={1} activeFeatureId={null} onSelectFeature={vi.fn()} />,
+    );
+    expect(screen.queryByText("Feature One")).not.toBeInTheDocument();
+    // The useListFeatures mock returns the same feature for every project, so
+    // "Feature One" reappearing means the second project expanded.
+    rerender(
+      <ShortcutHintsProvider enabled>
+        <ProjectTree activeProjectId={2} activeFeatureId={null} onSelectFeature={vi.fn()} />
+      </ShortcutHintsProvider>,
+    );
+    expect(screen.getByText("Feature One")).toBeInTheDocument();
+  });
+
+  it("clears the skip marker when the active project becomes null, so returning expands it", () => {
+    skipProjectAutoExpand(1);
+    const { rerender } = render(
+      <ProjectTree activeProjectId={1} activeFeatureId={null} onSelectFeature={vi.fn()} />,
+    );
+    expect(screen.queryByText("Feature One")).not.toBeInTheDocument();
+    // Leaving the project list (e.g. opening Settings) clears the marker.
+    rerender(
+      <ShortcutHintsProvider enabled>
+        <ProjectTree activeProjectId={null} activeFeatureId={null} onSelectFeature={vi.fn()} />
+      </ShortcutHintsProvider>,
+    );
+    // Returning to the project is an ordinary navigation: it expands again.
+    rerender(
+      <ShortcutHintsProvider enabled>
+        <ProjectTree activeProjectId={1} activeFeatureId={null} onSelectFeature={vi.fn()} />
+      </ShortcutHintsProvider>,
+    );
     expect(screen.getByText("Feature One")).toBeInTheDocument();
   });
 

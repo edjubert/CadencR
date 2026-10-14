@@ -1,14 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useGetWorkspaceSetting,
   useSetWorkspaceSetting,
   getGetWorkspaceSettingQueryKey,
-  type SettingValueResponse,
 } from "../api/generated";
 import { getWorkspaceSettingsQueryKey, type SettingEntry } from "@/api/settings";
 import { apiErrorMessage } from "@/lib/api-errors";
+import { prepareSettingWrite } from "./setting-persistence";
 
 interface DebouncedSettingResult {
   value: string | null;
@@ -32,49 +32,38 @@ export function useDebouncedSetting(
   { immediateCache = true } = {},
 ): DebouncedSettingResult {
   const query = useGetWorkspaceSetting(key);
-  const { mutate, isPending: isSaving } = useSetWorkspaceSetting();
+  const { mutateAsync, isPending } = useSetWorkspaceSetting();
+  const [pendingWrites, setPendingWrites] = useState(0);
   const queryClient = useQueryClient();
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushRef = useRef<(() => void) | null>(null);
 
   useEffect((): (() => void) => {
     return (): void => {
       if (timerRef.current) clearTimeout(timerRef.current);
+      // A pending debounced write must not be dropped on unmount: leaving the
+      // settings page within the debounce window still persists the edit.
+      flushRef.current?.();
+      flushRef.current = null;
     };
   }, []);
 
   const setValue = useCallback(
     (value: string) => {
-      const queryKey = getGetWorkspaceSettingQueryKey(key);
-      const previousValue = queryClient.getQueryData<SettingValueResponse>(queryKey);
-
-      // Update cache immediately so UI responds instantly (skip for continuous
-      // updates like drag-resize where re-renders disrupt the interaction)
-      if (immediateCache) {
-        queryClient.setQueryData(queryKey, { value });
-      }
-
+      const write = prepareSettingWrite({
+        queryClient,
+        key,
+        value,
+        immediateCache,
+        persist: mutateAsync,
+      });
       if (timerRef.current) clearTimeout(timerRef.current);
 
       const persistValue = (): void => {
-        mutate(
-          { key, data: { value } },
-          {
-            onSuccess: () => {
-              if (!immediateCache) queryClient.setQueryData(queryKey, { value });
-            },
-            onError: (err: unknown) => {
-              if (immediateCache) {
-                if (previousValue === undefined) {
-                  void queryClient.invalidateQueries({ queryKey });
-                } else {
-                  queryClient.setQueryData(queryKey, previousValue);
-                }
-              }
-              const message = apiErrorMessage(err, "Unknown error");
-              toast.error(`Could not save setting "${key}": ${message}`);
-            },
-          },
-        );
+        flushRef.current = null;
+        timerRef.current = null;
+        setPendingWrites((count) => count + 1);
+        void write().finally(() => setPendingWrites((count) => count - 1));
       };
 
       if (debounceMs <= 0) {
@@ -82,14 +71,16 @@ export function useDebouncedSetting(
         return;
       }
 
+      flushRef.current = persistValue;
       timerRef.current = setTimeout(persistValue, debounceMs);
     },
-    [key, debounceMs, immediateCache, mutate, queryClient],
+    [key, debounceMs, immediateCache, mutateAsync, queryClient],
   );
 
   const value = query.data?.value ?? null;
   const isLoading = query.isLoading;
   const isFetched = query.isFetched;
+  const isSaving = isPending || pendingWrites > 0;
   return useMemo(
     () => ({ value, setValue, isLoading, isFetched, isSaving }),
     [value, setValue, isLoading, isFetched, isSaving],

@@ -7,6 +7,7 @@ import { PinnedConversationRow } from "@/components/PinnedConversationRow";
 import { SidebarBlock } from "@/components/SidebarBlock";
 import { useSidebarOption } from "@/stores/sidebar-config-store";
 import { useCrossProjectNavigate } from "@/hooks/useCrossProjectNavigate";
+import { skipProjectAutoExpand } from "@/lib/project-auto-expand";
 import { invalidateByUrlPrefix } from "@/lib/queryClient";
 import { apiErrorMessage } from "@/lib/api-errors";
 import { useReorderAnimation } from "@/hooks/useReorderAnimation";
@@ -46,7 +47,15 @@ export function SidebarPinnedConversations({
   const pinnedIds = useMemo(() => pinnedFeatures.map((feature) => feature.id), [pinnedFeatures]);
   useReorderAnimation(listRef, pinnedIds);
   const portsByFeatureId = useFeaturePorts();
-  const handleNavigate = useCrossProjectNavigate(activeFeatureId, onSelectFeature);
+  const crossProjectNavigate = useCrossProjectNavigate(activeFeatureId, onSelectFeature);
+  // Opening from the pinned section must not unfold the parent project.
+  const handleNavigate = useCallback(
+    (feature: Feature): void => {
+      skipProjectAutoExpand(feature.project_id);
+      crossProjectNavigate(feature);
+    },
+    [crossProjectNavigate],
+  );
   const hideEmpty = useSidebarOption("hideEmptyBlocks");
   const filtering = useSidebarFilterQuery() !== "";
   const fold = useSidebarBlockFold("pinned");

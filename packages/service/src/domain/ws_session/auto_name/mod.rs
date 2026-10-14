@@ -196,14 +196,10 @@ async fn run_auto_name(
         }
     };
 
-    let prompt = build_prompt(&user_input);
-    let config = match build_spawn_config(
-        adapter.as_adapter(),
-        &model_id,
-        &cwd,
-        resolve_system_prompt(),
-    )
-    .await
+    let system_prompt = resolve_system_prompt();
+    let prompt = build_prompt(&user_input, &system_prompt);
+    let config = match build_spawn_config(adapter.as_adapter(), &model_id, &cwd, system_prompt)
+        .await
     {
         Ok(config) => config,
         Err(error) => {
