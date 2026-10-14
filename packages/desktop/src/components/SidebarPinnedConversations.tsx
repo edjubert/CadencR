@@ -15,6 +15,7 @@ import { NO_PORTS, useFeaturePorts } from "@/hooks/useFeaturePorts";
 import { usePinnedActivity } from "@/hooks/usePinnedActivity";
 import { useSidebarFilteredFeatures } from "@/hooks/useSidebarFilteredFeatures";
 import { useSidebarFilterQuery } from "@/stores/sidebar-filter-store";
+import { useSidebarBlockFold } from "@/stores/sidebar-surface-store";
 
 /**
  * Global "Pinned" section rendered above the project list. Pinning is a
@@ -48,6 +49,7 @@ export function SidebarPinnedConversations({
   const handleNavigate = useCrossProjectNavigate(activeFeatureId, onSelectFeature);
   const hideEmpty = useSidebarOption("hideEmptyBlocks");
   const filtering = useSidebarFilterQuery() !== "";
+  const fold = useSidebarBlockFold("pinned");
 
   const { mutate: updateFeaturePinned } = useUpdateFeaturePinned({
     mutation: {
@@ -69,6 +71,13 @@ export function SidebarPinnedConversations({
   // An empty Pinned block only shows when empty blocks are kept and nothing is filtered out.
   if (isEmpty && (hideEmpty || filtering)) return null;
 
+  // While filtering, hold the block open so a matching pinned conversation
+  // stays reachable — pinned rows are excluded from the project tree, so a
+  // folded Pinned would hide the only place the match renders. The stored
+  // fold state is left untouched (the toggle is disabled) and resumes once
+  // the filter clears.
+  const foldWhileFiltering = filtering ? { expanded: true, toggle: () => {} } : fold;
+
   return (
     <SidebarBlock
       ref={listRef}
@@ -76,8 +85,10 @@ export function SidebarPinnedConversations({
       label="Pinned"
       icon={PinIcon}
       count={pinnedFeatures.length}
+      fold={foldWhileFiltering}
       empty="Pin a conversation to keep it here"
       isEmpty={isEmpty}
+      capped
     >
       {pinnedFeatures.map((feature) => (
         <PinnedConversationRow
