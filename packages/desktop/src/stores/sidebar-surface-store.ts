@@ -13,7 +13,10 @@ import { useSidebarFilterQuery } from "@/stores/sidebar-filter-store";
 export type SidebarSurface = "tree" | "for-me" | "working" | "recent" | "rail";
 
 /** The foldable blocks above the project list, named after their surface. */
-export type SidebarFoldableBlock = Extract<SidebarSurface, "for-me" | "working" | "recent">;
+export type SidebarFoldableBlock = SidebarSurfaceBlock | "pinned";
+
+/** Foldable blocks whose rows live on a sidebar surface (not the tree's). */
+export type SidebarSurfaceBlock = Extract<SidebarSurface, "for-me" | "working" | "recent">;
 
 interface SidebarSurfaceState {
   /** Which blocks are unfolded (each folds from its header); all start open. */
@@ -22,7 +25,7 @@ interface SidebarSurfaceState {
 }
 
 export const useSidebarSurfaceStore = create<SidebarSurfaceState>((set) => ({
-  expanded: { "for-me": true, working: true, recent: true },
+  expanded: { "for-me": true, working: true, recent: true, pinned: true },
   toggleBlock: (block) =>
     set((state) => ({ expanded: { ...state.expanded, [block]: !state.expanded[block] } })),
 }));

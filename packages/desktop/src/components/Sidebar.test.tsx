@@ -301,6 +301,19 @@ describe("collectSidebarNavItems", () => {
       "after",
     ]);
   });
+
+  it("excludes rows inside an aria-hidden ancestor (closing CollapsibleSection)", () => {
+    const sidebar = document.createElement("aside");
+    sidebar.innerHTML = `
+      <button data-nav-item id="before"></button>
+      <div aria-hidden="true"><button data-nav-item id="closing"></button></div>
+      <button data-nav-item id="after"></button>
+    `;
+    expect(collectSidebarNavItems(sidebar).map((element) => element.id)).toEqual([
+      "before",
+      "after",
+    ]);
+  });
 });
 
 describe("shared sidebar number navigation", () => {
