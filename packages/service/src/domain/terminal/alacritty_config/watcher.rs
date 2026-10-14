@@ -81,19 +81,40 @@ fn is_watched_config_file(path: &Path, files: &HashSet<PathBuf>) -> bool {
     files.contains(path) || files.contains(&normalize(path))
 }
 
-/// Whether the event batch touches one of the chain's directories itself or
-/// creates a subdirectory directly inside one — typically a missing import's
-/// directory tree being created level by level under a watched ancestor.
+/// Collect the subdirectories the event batch creates directly inside one of
+/// the chain's watched directories — typically a missing import's directory
+/// tree being created level by level under a watched ancestor. Also matches
+/// events that touch a watched directory itself (e.g. its own deletion).
+///
 /// Neither is a config change for clients, but the watch set must be
 /// recomputed so the new directories get subscribed. Only subdirectory
 /// creations count: a plain file created in a watched directory (the common
 /// case in a broad ancestor like the home directory) changes no
 /// subscription, so it must not trigger a recompute.
-fn touches_watched_dir(events: &[DebouncedEvent], dirs: &HashSet<PathBuf>) -> bool {
+///
+/// The returned paths are the subdirectories that appeared. The caller
+/// invalidates their stale subscriptions: on Linux the backend removes the
+/// OS watch when a directory is deleted (DELETE/DELETE_SELF), so a directory
+/// that is deleted and recreated before the debounce expires keeps a stale
+/// `subscribed` entry even though its watch is gone. Dropping the entry
+/// forces `apply_subscriptions` to reinstall the watch.
+fn created_subdirs_of_watched_dirs(
+    events: &[DebouncedEvent],
+    dirs: &HashSet<PathBuf>,
+) -> Vec<PathBuf> {
     let watched = |path: &Path| dirs.contains(path) || dirs.contains(&normalize(path));
-    events
-        .iter()
-        .any(|e| watched(&e.path) || (e.path.is_dir() && e.path.parent().is_some_and(watched)))
+    let mut created = Vec::new();
+    for e in events {
+        if watched(&e.path) {
+            // The watched directory itself was touched (created, deleted, or
+            // renamed): its own subscription may be stale.
+            created.push(e.path.clone());
+        } else if e.path.is_dir() && e.path.parent().is_some_and(watched) {
+            // A subdirectory appeared inside a watched directory.
+            created.push(e.path.clone());
+        }
+    }
+    created
 }
 
 /// Result of aligning the OS subscriptions with a wanted set of directories.
@@ -185,8 +206,11 @@ fn spawn_watcher(config_path: PathBuf, tx: broadcast::Sender<AlacrittyConfigChan
     // event context, but watcher methods may not be called from there
     // safely. Instead, each relevant event also signals this channel, and
     // the subscription thread below owns the debouncer and re-aligns the
-    // watch set off the event path.
-    let (recompute_tx, recompute_rx) = mpsc::channel::<()>();
+    // watch set off the event path. The payload carries directories whose
+    // subscription must be invalidated before the next alignment: a
+    // directory deleted and recreated before the debounce expires keeps a
+    // stale `subscribed` entry even though the OS watch is gone.
+    let (recompute_tx, recompute_rx) = mpsc::channel::<Vec<PathBuf>>();
     let shared = Arc::new(Mutex::new(recompute_state(&config_path)));
     let handler = event_handler(Arc::clone(&shared), tx.clone(), recompute_tx);
     let mut debouncer = match new_debouncer(Duration::from_millis(500), handler) {
@@ -230,11 +254,13 @@ fn spawn_watcher(config_path: PathBuf, tx: broadcast::Sender<AlacrittyConfigChan
 
 /// The debouncer callback: pings clients when a chain file changes, and asks
 /// the subscription thread to recompute whenever the chain (or a directory
-/// it needs) may have changed.
+/// it needs) may have changed. The recompute request carries the directories
+/// whose subscription must be invalidated first — subdirectories that
+/// appeared inside a watched directory, or the watched directory itself.
 fn event_handler(
     shared: Arc<Mutex<WatchState>>,
     tx: broadcast::Sender<AlacrittyConfigChangedEvent>,
-    recompute_tx: mpsc::Sender<()>,
+    recompute_tx: mpsc::Sender<Vec<PathBuf>>,
 ) -> impl FnMut(DebounceEventResult) + Send + 'static {
     move |result| {
         let events = match result {
@@ -244,7 +270,7 @@ fn event_handler(
                 // than leave the terminal on a stale config.
                 warn!("alacritty config watcher error: {e:?}");
                 let _ = tx.send(AlacrittyConfigChangedEvent {});
-                let _ = recompute_tx.send(());
+                let _ = recompute_tx.send(Vec::new());
                 return;
             }
         };
@@ -258,9 +284,12 @@ fn event_handler(
             // The edit may also have changed the import graph itself (a
             // `general.import` added or removed) — recompute it so the new
             // files become watched too.
-            let _ = recompute_tx.send(());
-        } else if touches_watched_dir(&events, &watched.dirs) {
-            let _ = recompute_tx.send(());
+            let _ = recompute_tx.send(Vec::new());
+        } else {
+            let created = created_subdirs_of_watched_dirs(&events, &watched.dirs);
+            if !created.is_empty() {
+                let _ = recompute_tx.send(created);
+            }
         }
     }
 }
@@ -286,15 +315,27 @@ struct Resubscriber {
 }
 
 impl Resubscriber {
-    fn run(mut self, recompute_rx: mpsc::Receiver<()>) {
-        while recompute_rx.recv() == Ok(()) {
-            // One recompute covers every request queued meanwhile.
-            while recompute_rx.try_recv().is_ok() {}
-            self.recompute();
+    fn run(mut self, recompute_rx: mpsc::Receiver<Vec<PathBuf>>) {
+        while let Ok(invalidate) = recompute_rx.recv() {
+            // One recompute covers every request queued meanwhile, merging
+            // all invalidation lists.
+            let mut merged = invalidate;
+            while let Ok(more) = recompute_rx.try_recv() {
+                merged.extend(more);
+            }
+            self.recompute(&merged);
         }
     }
 
-    fn recompute(&mut self) {
+    fn recompute(&mut self, invalidate: &[PathBuf]) {
+        // Drop subscriptions the event callback flagged as stale: a directory
+        // deleted and recreated before the debounce expired keeps its entry
+        // in `subscribed` even though the OS watch is gone. Removing it here
+        // lets `apply_subscriptions` reinstall the watch.
+        for dir in invalidate {
+            self.subscribed.remove(dir);
+            self.subscribed.remove(&normalize(dir));
+        }
         let next = recompute_state(&self.config_path);
         let alignment = apply_subscriptions(&mut self.debouncer, &self.subscribed, &next.dirs);
         let status_changed =
@@ -394,24 +435,29 @@ mod tests {
     }
 
     #[test]
-    fn creating_a_watched_directory_asks_for_a_recompute() {
+    fn a_watched_directory_event_is_reported_for_invalidation() {
         let dirs = files_of(&["/nonexistent/user/.config/alacritty/themes"]);
         let event = |path: &str| DebouncedEvent {
             path: PathBuf::from(path),
             kind: notify_debouncer_mini::DebouncedEventKind::Any,
         };
-        assert!(touches_watched_dir(
+        let created = created_subdirs_of_watched_dirs(
             &[event("/nonexistent/user/.config/alacritty/themes")],
-            &dirs
-        ));
-        assert!(!touches_watched_dir(
+            &dirs,
+        );
+        assert_eq!(
+            created,
+            vec![PathBuf::from("/nonexistent/user/.config/alacritty/themes")]
+        );
+        assert!(created_subdirs_of_watched_dirs(
             &[event("/nonexistent/user/.config/alacritty/other")],
             &dirs
-        ));
+        )
+        .is_empty());
     }
 
     #[test]
-    fn creating_a_subdirectory_of_a_watched_directory_asks_for_a_recompute() {
+    fn a_subdirectory_of_a_watched_directory_is_reported_for_invalidation() {
         let dir = tempfile::tempdir().unwrap();
         let dirs = HashSet::from([normalize(dir.path())]);
         let event = |path: PathBuf| DebouncedEvent {
@@ -419,22 +465,26 @@ mod tests {
             kind: notify_debouncer_mini::DebouncedEventKind::Any,
         };
         // A new subdirectory inside a watched directory: its parent is
-        // watched, so the event must trigger a recompute — the new directory
-        // may be the next level of a missing import's path.
+        // watched, so the event must report it — the new directory may be
+        // the next level of a missing import's path, and if it was deleted
+        // and recreated quickly its stale subscription must be invalidated.
         let subdir = dir.path().join("external");
         std::fs::create_dir(&subdir).unwrap();
-        assert!(touches_watched_dir(&[event(subdir)], &dirs));
+        assert_eq!(
+            created_subdirs_of_watched_dirs(&[event(subdir.clone())], &dirs),
+            vec![subdir]
+        );
         // A plain file created in a watched directory changes no
-        // subscription: no recompute. This keeps a broad ancestor (e.g. the
-        // home directory) from recomputing the chain on every file event.
+        // subscription: no invalidation. This keeps a broad ancestor (e.g.
+        // the home directory) from recomputing the chain on every file event.
         let file = dir.path().join("notes.txt");
         std::fs::write(&file, "hi").unwrap();
-        assert!(!touches_watched_dir(&[event(file)], &dirs));
+        assert!(created_subdirs_of_watched_dirs(&[event(file)], &dirs).is_empty());
         // Something created outside the watched directory matches neither.
         let other = tempfile::tempdir().unwrap();
         let outside = other.path().join("external");
         std::fs::create_dir(&outside).unwrap();
-        assert!(!touches_watched_dir(&[event(outside)], &dirs));
+        assert!(created_subdirs_of_watched_dirs(&[event(outside)], &dirs).is_empty());
     }
 
     fn test_debouncer() -> Debouncer<RecommendedWatcher> {
@@ -683,6 +733,47 @@ mod tests {
         assert!(
             write_and_expect_reload(&mut rx, &import, "[font]\nsize = 16\n"),
             "editing the recreated import must trigger a reload event"
+        );
+    }
+
+    #[test]
+    fn a_fast_deleted_and_recreated_import_directory_keeps_live_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("alacritty");
+        let themes = config_dir.join("themes");
+        std::fs::create_dir_all(&themes).unwrap();
+        let root = config_dir.join("alacritty.toml");
+        std::fs::write(&root, "general.import = [\"themes/font.toml\"]\n").unwrap();
+        let import = themes.join("font.toml");
+        std::fs::write(&import, "[font]\nsize = 14\n").unwrap();
+
+        let (tx, _keep) = broadcast::channel(16);
+        spawn_watcher(root.clone(), tx.clone());
+        let mut rx = tx.subscribe();
+        std::thread::sleep(Duration::from_millis(500));
+
+        // The reviewer's fast-replacement case: delete the whole import
+        // directory and recreate it (with the import file) before the
+        // watcher's 500 ms debounce expires. On Linux the backend removes
+        // the OS watch on DELETE/DELETE_SELF, so the recreated directory
+        // must get a fresh subscription — the stale `subscribed` entry must
+        // not survive.
+        std::fs::remove_dir_all(&themes).unwrap();
+        std::fs::create_dir(&themes).unwrap();
+        std::fs::write(&import, "[font]\nsize = 15\n").unwrap();
+        // Wait for the debounce + recompute to settle.
+        assert!(
+            wait_for_event(&mut rx),
+            "the fast delete+recreate must ping clients"
+        );
+        drain_and_settle(&mut rx);
+
+        // Editing the recreated import must trigger a reload event. Without
+        // invalidation, the stale subscription would leave the directory
+        // unwatched and this edit would produce no event.
+        assert!(
+            write_and_expect_reload(&mut rx, &import, "[font]\nsize = 16\n"),
+            "editing the fast-recreated import must trigger a reload event"
         );
     }
 
