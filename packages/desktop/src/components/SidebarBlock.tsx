@@ -1,5 +1,6 @@
 import type { ReactElement, ReactNode, Ref } from "react";
 import { ChevronDown, ChevronRight, type LucideIcon } from "lucide-react";
+import { CollapsibleSection } from "@/components/ui/collapsible-section";
 import { useSidebarOption } from "@/stores/sidebar-config-store";
 import { cn } from "@/lib/utils";
 import type { SidebarFoldableBlock } from "@/stores/sidebar-surface-store";
@@ -15,7 +16,7 @@ export const EYEBROW_CLASS = `flex items-center gap-1.5 rounded-md px-2 py-1 ${E
 
 interface SidebarBlockProps {
   /** Names the block for the display options' highlight (`sidebar-rows.css`). */
-  block: SidebarFoldableBlock | "pinned";
+  block: SidebarFoldableBlock;
   label: string;
   icon: LucideIcon;
   /** Shown per the "Block counters" option; omit for blocks whose size is fixed. */
@@ -59,10 +60,24 @@ export function SidebarBlock({
       {count !== undefined && <BlockCounter count={count} strongCount={strongCount} />}
       {fold &&
         (open ? (
-          <ChevronDown className="ml-auto size-3 shrink-0" />
+          <ChevronDown className="ml-auto size-3 shrink-0 transition-transform duration-200 ease-[var(--ease-fluid)]" />
         ) : (
-          <ChevronRight className="ml-auto size-3 shrink-0" />
+          <ChevronRight className="ml-auto size-3 shrink-0 transition-transform duration-200 ease-[var(--ease-fluid)]" />
         ))}
+    </>
+  );
+  const body = (
+    <>
+      {isEmpty && (
+        <p data-sidebar-block-empty className="px-2 py-1 text-[11px] text-muted-foreground/80">
+          {empty}
+        </p>
+      )}
+      {!isEmpty && (
+        <div className={cn("flex flex-col gap-0.5", capped && "max-h-[40vh] overflow-y-auto")}>
+          {children}
+        </div>
+      )}
     </>
   );
   return (
@@ -88,16 +103,7 @@ export function SidebarBlock({
       ) : (
         <div className={EYEBROW_CLASS}>{content}</div>
       )}
-      {open && isEmpty && (
-        <p data-sidebar-block-empty className="px-2 py-1 text-[11px] text-muted-foreground/80">
-          {empty}
-        </p>
-      )}
-      {open && !isEmpty && (
-        <div className={cn("flex flex-col gap-0.5", capped && "max-h-[40vh] overflow-y-auto")}>
-          {children}
-        </div>
-      )}
+      {fold ? <CollapsibleSection open={open}>{body}</CollapsibleSection> : body}
     </section>
   );
 }
