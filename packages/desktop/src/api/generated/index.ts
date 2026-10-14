@@ -343,14 +343,27 @@ export interface AgentSessionRow {
 }
 
 export interface AnsiPalette {
-  black: string;
-  blue: string;
-  cyan: string;
-  green: string;
-  magenta: string;
-  red: string;
-  white: string;
-  yellow: string;
+  /**
+   * Per-color: Alacritty lets a file override a single ANSI color
+   * (e.g. only `[colors.normal] red`), so `None` means "not overridden
+   * anywhere in the chain" and the consumer fills it from its own theme.
+   * @nullable
+   */
+  black?: string | null;
+  /** @nullable */
+  blue?: string | null;
+  /** @nullable */
+  cyan?: string | null;
+  /** @nullable */
+  green?: string | null;
+  /** @nullable */
+  magenta?: string | null;
+  /** @nullable */
+  red?: string | null;
+  /** @nullable */
+  white?: string | null;
+  /** @nullable */
+  yellow?: string | null;
 }
 
 export interface CursorColors {
@@ -372,14 +385,10 @@ export interface PrimaryColors {
   foreground?: string | null;
 }
 
-export type ColorsConfigBright = null | AnsiPalette;
-
-export type ColorsConfigNormal = null | AnsiPalette;
-
 export interface ColorsConfig {
-  bright?: ColorsConfigBright;
+  bright?: AnsiPalette;
   cursor?: CursorColors;
-  normal?: ColorsConfigNormal;
+  normal?: AnsiPalette;
   primary?: PrimaryColors;
 }
 
@@ -439,6 +448,15 @@ export interface AlacrittyConfigResponse {
    * @nullable
    */
   parse_error?: string | null;
+  /**
+   * Set while live reload is unavailable (the file watcher failed to
+   * start or to watch part of the import chain): `config` is still
+   * accurate, but external edits won't show up until a restart. Unlike
+   * `parse_error` this is not fatal — the frontend warns and keeps
+   * rendering.
+   * @nullable
+   */
+  watch_error?: string | null;
 }
 
 /**
