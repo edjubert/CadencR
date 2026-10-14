@@ -87,6 +87,10 @@ function activateSidebarItem(
     void navigate({ to: "/agents" });
   } else if (type === "schedules") {
     void navigate({ to: "/schedules" });
+  } else if (type === null && focused instanceof HTMLButtonElement) {
+    // Fold headers have no route type; dispatch their click because the
+    // shortcut prevents Enter's native button activation.
+    focused.click();
   }
 }
 

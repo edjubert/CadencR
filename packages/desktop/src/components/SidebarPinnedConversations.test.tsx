@@ -101,7 +101,10 @@ vi.mock("@/components/PinnedConversationRow", () => ({
 import { SidebarPinnedConversations } from "./SidebarPinnedConversations";
 import { useSidebarFilterStore } from "@/stores/sidebar-filter-store";
 import { useSidebarSurfaceStore } from "@/stores/sidebar-surface-store";
-import { collectSidebarNavItems } from "@/hooks/useSidebarKeyboardNavigation";
+import {
+  collectSidebarNavItems,
+  useSidebarKeyboardNavigation,
+} from "@/hooks/useSidebarKeyboardNavigation";
 
 function feature(id: number, projectId: number): Feature {
   return {
@@ -115,11 +118,24 @@ function feature(id: number, projectId: number): Feature {
   } as unknown as Feature;
 }
 
-function renderSection(activeFeatureId: number | null = null) {
+function KeyboardSidebar({ children }: { children: React.ReactNode }): React.ReactElement {
+  const sidebarRef = React.useRef<HTMLElement>(null);
+  useSidebarKeyboardNavigation(sidebarRef, mocks.navigate, null);
+  return (
+    <aside ref={sidebarRef} data-focus-zone="left-sidebar">
+      {children}
+    </aside>
+  );
+}
+
+function renderSection(activeFeatureId: number | null = null, withKeyboard = false) {
   const client = new QueryClient();
+  const section = (
+    <SidebarPinnedConversations activeFeatureId={activeFeatureId} onSelectFeature={vi.fn()} />
+  );
   return render(
     <QueryClientProvider client={client}>
-      <SidebarPinnedConversations activeFeatureId={activeFeatureId} onSelectFeature={vi.fn()} />
+      {withKeyboard ? <KeyboardSidebar>{section}</KeyboardSidebar> : section}
     </QueryClientProvider>,
   );
 }
@@ -140,6 +156,50 @@ describe("SidebarPinnedConversations", () => {
 
   afterEach(() => {
     delete document.documentElement.dataset.animations;
+  });
+
+  it("folds and unfolds the focused header with Enter through sidebar shortcuts", async () => {
+    const user = userEvent.setup();
+    mocks.setPinned([feature(1, 5)]);
+    renderSection(null, true);
+    const header = screen.getByRole("button", { name: /Pinned/ });
+    const click = vi.fn();
+    header.addEventListener("click", click);
+    header.focus();
+
+    await user.keyboard("{Enter}");
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("open-1")).not.toBeInTheDocument();
+    expect(header).toHaveFocus();
+    expect(click).toHaveBeenCalledTimes(1);
+
+    await user.keyboard("{Enter}");
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("open-1")).toBeInTheDocument();
+    expect(click).toHaveBeenCalledTimes(2);
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  it("preserves the folded choice after Enter on a filtered header and clearing the filter", async () => {
+    const user = userEvent.setup();
+    mocks.setPinned([{ ...feature(1, 5), title: "Login bug" }]);
+    useSidebarSurfaceStore.getState().toggleBlock("pinned");
+    useSidebarFilterStore.getState().start("login");
+    renderSection(null, true);
+    const header = screen.getByRole("button", { name: /Pinned/ });
+    const click = vi.fn();
+    header.addEventListener("click", click);
+    header.focus();
+
+    await user.keyboard("{Enter}");
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("open-1")).toBeInTheDocument();
+    expect(useSidebarSurfaceStore.getState().expanded.pinned).toBe(false);
+
+    act(() => useSidebarFilterStore.getState().close());
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("open-1")).not.toBeInTheDocument();
   });
 
   it("keeps only the pinned rows the sidebar filter matches", () => {
