@@ -4,6 +4,9 @@
 //! fork can never surface. Kept separate from the WS handler so the handler
 //! stays a thin orchestration layer.
 
+mod copy;
+use copy::{copy_worktree_settings, record_fork_lineage};
+
 /// What a fork produced: the new feature + session, plus the project they live
 /// under (the originating client navigates to `project_id`/`new_feature_id`).
 pub(super) struct ForkResult {
@@ -64,9 +67,9 @@ pub(super) async fn create_forked_feature(
     let new_session_id = sqlx::query(
         "INSERT INTO agent_sessions \
             (feature_id, agent_type, runtime_provider, runtime_session_id, status, \
-             model, profile, permission_mode, codex_permission_mode, draft_prompt, started_at) \
+             model, profile, runtime_overrides, thinking_effort, fast_mode, permission_mode, codex_permission_mode, draft_prompt, started_at) \
          SELECT ?, agent_type, runtime_provider, ?, 'paused', \
-             model, profile, permission_mode, codex_permission_mode, ?, datetime('now') \
+             model, profile, runtime_overrides, thinking_effort, fast_mode, permission_mode, codex_permission_mode, ?, datetime('now') \
          FROM agent_sessions WHERE id = ?",
     )
     .bind(new_feature_id)
@@ -109,66 +112,6 @@ pub(super) async fn create_forked_feature(
     })
 }
 
-/// Share the source worktree verbatim. Provisioning then short-circuits on the
-/// existing path instead of attempting a second `git worktree add`.
-///
-/// `feature_branch` travels with it for the same reason `worktree_branch` does:
-/// a fork works on the source's branch rather than getting its own, so without
-/// it a forked worktree-free feature falls back to whatever the shared project
-/// checkout has on HEAD.
-async fn copy_worktree_settings(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    new_feature_id: i64,
-    source_feature_id: i64,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO feature_settings (feature_id, key, value) \
-         SELECT ?, key, value FROM feature_settings \
-         WHERE feature_id = ? \
-         AND (key LIKE 'worktree%' OR key = 'skip_worktree' OR key = ?)",
-    )
-    .bind(new_feature_id)
-    .bind(source_feature_id)
-    .bind(crate::domain::git::service::SETTING_FEATURE_BRANCH)
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
-/// Mark the forked conversation's first message as session-generated from the
-/// source feature, so the existing provenance badge renders "forked from …".
-/// No-op when the fork keeps nothing (forking at the first message).
-async fn record_fork_lineage(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    new_session_id: i64,
-    source_session_id: i64,
-    source_feature_id: i64,
-    source_message_id: i64,
-) -> Result<(), sqlx::Error> {
-    let first_message_id: Option<i64> =
-        sqlx::query_scalar("SELECT MIN(id) FROM agent_messages WHERE session_id = ?")
-            .bind(new_session_id)
-            .fetch_one(&mut **tx)
-            .await?;
-    let Some(first_message_id) = first_message_id else {
-        return Ok(());
-    };
-
-    sqlx::query(
-        "INSERT INTO agent_message_origins \
-            (message_id, origin_kind, source_session_id, source_feature_id, source_message_id, note) \
-         VALUES (?, 'session_generated', ?, ?, ?, 'Forked conversation') \
-         ON CONFLICT(message_id) DO NOTHING",
-    )
-    .bind(first_message_id)
-    .bind(source_session_id)
-    .bind(source_feature_id)
-    .bind(source_message_id)
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,7 +135,7 @@ mod tests {
                 agent_type TEXT, runtime_provider TEXT, runtime_session_id TEXT,
                 status TEXT, model TEXT, profile TEXT, permission_mode TEXT,
                 codex_permission_mode TEXT DEFAULT 'default', draft_prompt TEXT,
-                started_at TEXT);
+                started_at TEXT, runtime_overrides TEXT, thinking_effort TEXT, fast_mode INTEGER DEFAULT 0);
              CREATE TABLE agent_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT NULL,
                 role TEXT, content TEXT, message_type TEXT, tool_name TEXT,
@@ -224,6 +167,25 @@ mod tests {
         .await
         .unwrap();
         pool
+    }
+
+    #[tokio::test]
+    async fn forks_preserve_inheritance_and_explicit_false() {
+        let pool = pool_with_source_feature().await;
+        for overrides in [
+            r#"{"model":null,"thinking_effort":null,"fast_mode":null}"#,
+            r#"{"model":"chosen","thinking_effort":"low","fast_mode":false}"#,
+        ] {
+            sqlx::query("UPDATE agent_sessions SET runtime_overrides = ?, thinking_effort = 'low', fast_mode = 1 WHERE id = 1")
+                .bind(overrides).execute(&pool).await.unwrap();
+            let fork = create_forked_feature(&pool, 1, 9, 3, "q2", Some("forked-sid"))
+                .await
+                .unwrap();
+            let copied: (String, String, bool) = sqlx::query_as(
+                "SELECT runtime_overrides, thinking_effort, fast_mode FROM agent_sessions WHERE id = ?",
+            ).bind(fork.new_session_id).fetch_one(&pool).await.unwrap();
+            assert_eq!(copied, (overrides.to_string(), "low".to_string(), true));
+        }
     }
 
     #[tokio::test]

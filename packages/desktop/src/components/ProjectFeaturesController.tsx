@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import {
   useDeleteFeature,
-  useIsFeatureEmpty,
   useListFeatures,
   useListFeatureWorktrees,
   useUpdateFeatureLabel,
@@ -14,24 +13,25 @@ import {
   type FeatureStatus,
   type FeatureWorktreeInfo,
 } from "@/api/generated";
-import { FeatureSubtree } from "@/components/FeatureSubtree";
+import { FeatureSubtree, type RenderFeature } from "@/components/FeatureSubtree";
 import { ProjectFeatureRow } from "@/components/ProjectFeatureRow";
 import {
   adjacentFeature,
-  archiveFeatureInCachedLists,
   closeFeatureSession,
   navigateToFeatureOrHome,
   removeFeatureFromCachedLists,
 } from "@/components/project-feature-navigation";
 import { apiErrorMessage } from "@/lib/api-errors";
-import { getArchiveCleanupAvailability } from "@/components/archive-cleanup-availability";
 import { getFocusedTabForFeature } from "@/lib/feature-focus-handoff";
 import { partitionActiveFeatures } from "@/lib/feature-grouping";
 import { invalidateFeatureQueries } from "@/lib/featureUpdated";
 import { buildFeatureForest } from "@/lib/feature-hierarchy";
 import { normalizeLabel, uniqueLabels } from "@/lib/feature-labels";
-import { getPendingFeatureArchiveAction } from "@/lib/feature-archive-decision";
+import { sortConversations } from "@/lib/sidebar-lens";
+import { useSidebarOption } from "@/stores/sidebar-config-store";
 import { invalidateByUrlPrefix } from "@/lib/queryClient";
+import { FEATURE_WORKTREES_STALE_MS } from "@/lib/sidebar-queries";
+import type { ProjectFilterMatch } from "@/hooks/useSidebarFilterMatches";
 import { isInCodeMirrorEditor } from "@/lib/shortcuts/dom-targets";
 import { wsSessionIdFromFeature } from "@/lib/ws-session-id";
 import { useCloseFeatureActivity } from "@/hooks/useCloseFeatureActivity";
@@ -39,6 +39,12 @@ import { useFeatureActivityCounts } from "@/hooks/useFeatureActivityCounts";
 import { NO_PORTS, useFeaturePorts } from "@/hooks/useFeaturePorts";
 import { useGlobalShortcutById } from "@/hooks/useShortcut";
 import { useLiveFeatureMeta } from "@/hooks/useLiveFeatureMeta";
+import { useArchiveFeatureAction } from "@/hooks/useArchiveFeatureAction";
+import { useArchivedSectionOpen } from "@/hooks/useArchivedSectionOpen";
+import { SIDEBAR_COLLAPSED_SUBTREES_KEY, usePersistedIdSet } from "@/hooks/usePersistedIdSet";
+import { useStableFeatureOrder } from "@/hooks/useStableFeatureOrder";
+import { useDormantSplit } from "@/hooks/useDormantSplit";
+import { useFeatureArchiveConfirmation } from "@/components/useFeatureArchiveConfirmation";
 
 export const ACTIVE_FEATURE_STATUS: FeatureStatus = "active";
 export const ARCHIVED_FEATURE_STATUS: FeatureStatus = "archived";
@@ -48,27 +54,52 @@ export interface ProjectFeaturesProps {
   projectPath: string;
   activeFeatureId: number | null;
   onSelectFeature: (featureId: number) => void;
+  /**
+   * Set while the sidebar filter is active: the matching conversation ids, or
+   * `null` when the project's name matched and everything shows.
+   */
+  filterMatch?: ProjectFilterMatch;
 }
 
-function useProjectFeaturesData({ projectId, projectPath, activeFeatureId }: ProjectFeaturesProps) {
+function useProjectFeaturesData({
+  projectId,
+  projectPath,
+  activeFeatureId,
+  filterMatch,
+}: ProjectFeaturesProps) {
   const { data: features = [] } = useListFeatures({
     project_id: projectId,
     include_archived: true,
   });
   const { data: featureWorktrees = [] } = useListFeatureWorktrees(
     { project_id: projectId },
-    { query: { staleTime: 5 * 60 * 1000 } },
+    { query: { staleTime: FEATURE_WORKTREES_STALE_MS } },
   );
-  const { shellCountsByFeatureId, browserCountsByFeatureId } = useFeatureActivityCounts(projectId);
+  const { shellCountsByFeatureId, browserCountsByFeatureId, downloadCountsByFeatureId } =
+    useFeatureActivityCounts(projectId);
   const portsByFeatureId = useFeaturePorts();
   const liveMeta = useLiveFeatureMeta();
-  const activeFeatures = useMemo(
-    () => features.filter((feature) => feature.status === ACTIVE_FEATURE_STATUS),
-    [features],
+  const activeFeatures = useStableFeatureOrder(
+    useMemo(
+      () => features.filter((feature) => feature.status === ACTIVE_FEATURE_STATUS),
+      [features],
+    ),
   );
+  // A quick filter leaves archives out: they are a click away once it clears.
+  const isFiltering = filterMatch !== undefined;
   const archivedFeatures = useMemo(
-    () => features.filter((feature) => feature.status === ARCHIVED_FEATURE_STATUS),
-    [features],
+    () =>
+      isFiltering ? [] : features.filter((feature) => feature.status === ARCHIVED_FEATURE_STATUS),
+    [features, isFiltering],
+  );
+  const sort = useSidebarOption("conversationSort");
+  const shownFeatures = useMemo(
+    () =>
+      sortConversations(
+        filterMatch ? activeFeatures.filter((f) => filterMatch.has(f.id)) : activeFeatures,
+        sort,
+      ),
+    [activeFeatures, filterMatch, sort],
   );
   const worktreeData = useMemo(() => {
     const worktreeFeatureIds = new Set<number>();
@@ -81,13 +112,16 @@ function useProjectFeaturesData({ projectId, projectPath, activeFeatureId }: Pro
     }
     return { worktreeFeatureIds, liveWorktreeFeatureIds, worktreeByFeatureId };
   }, [featureWorktrees]);
-  const activeForest = useMemo(
-    () => buildFeatureForest(activeFeatures.filter((feature) => !feature.is_pinned)),
-    [activeFeatures],
+  const forest = useMemo(
+    () => buildFeatureForest(shownFeatures.filter((feature) => !feature.is_pinned)),
+    [shownFeatures],
   );
+  const { awake: activeForest, dormant } = useDormantSplit(forest, activeFeatureId, isFiltering);
+  const dormantFeatures = useMemo(() => dormant.map((node) => node.feature), [dormant]);
+  const orderedIds = useMemo(() => forest.map((node) => node.feature.id), [forest]);
   const rootNodeByFeatureId = useMemo(
-    () => new Map(activeForest.map((node) => [node.feature.id, node])),
-    [activeForest],
+    () => new Map(forest.map((node) => [node.feature.id, node])),
+    [forest],
   );
   const groupedFeatures = useMemo(
     () =>
@@ -115,13 +149,17 @@ function useProjectFeaturesData({ projectId, projectPath, activeFeatureId }: Pro
     activeFeatures,
     archivedFeatures,
     browserCountsByFeatureId,
+    dormantFeatures,
+    downloadCountsByFeatureId,
     features,
     getLiveTitle,
     isAutoNaming,
     labelSuggestions,
+    orderedIds,
     portsByFeatureId,
     rootNodeByFeatureId,
     shellCountsByFeatureId,
+    shownFeatures,
   };
 }
 
@@ -182,23 +220,14 @@ function useProjectFeatureActions(props: ProjectFeaturesProps, data: ProjectFeat
     () => void invalidateByUrlPrefix(queryClient, "/api/features"),
     [queryClient],
   );
+  const archiveFeature = useArchiveFeatureAction({
+    activeFeatureId: props.activeFeatureId,
+    activeFeatures: data.activeFeatures,
+    projectId: props.projectId,
+  });
   const updateStatusMutation = useUpdateFeatureStatus({
     mutation: {
-      onSuccess: (_data, variables) => {
-        if (
-          variables.id === props.activeFeatureId &&
-          variables.data.status === ARCHIVED_FEATURE_STATUS
-        ) {
-          archiveFeatureInCachedLists(queryClient, variables.id);
-          closeFeatureSession(variables.id);
-          navigateToFeatureOrHome(
-            navigate,
-            props.projectId,
-            adjacentFeature(data.activeFeatures, variables.id),
-          );
-        }
-        invalidateFeatures();
-      },
+      onSuccess: invalidateFeatures,
       onError: (error) => toast.error(apiErrorMessage(error, "Failed to update feature status")),
     },
   });
@@ -224,11 +253,6 @@ function useProjectFeatureActions(props: ProjectFeaturesProps, data: ProjectFeat
       onError: (error) => toast.error(apiErrorMessage(error, "Failed to update pinned state")),
     },
   });
-  const updateStatus = useCallback(
-    (featureId: number, status: FeatureStatus): void =>
-      updateStatusMutation.mutate({ id: featureId, data: { status } }),
-    [updateStatusMutation],
-  );
   const navigateToFeature = useCallback(
     (feature: Feature): void => {
       props.onSelectFeature(feature.id);
@@ -248,50 +272,30 @@ function useProjectFeatureActions(props: ProjectFeaturesProps, data: ProjectFeat
     [navigate, props],
   );
   return {
-    closeActivity: (featureId: number, shellCount: number, browserCount: number): void =>
-      closeFeatureActivity({ projectId: props.projectId, featureId, shellCount, browserCount }),
+    closeActivity: (
+      featureId: number,
+      shellCount: number,
+      browserCount: number,
+      downloadCount: number,
+    ): void =>
+      closeFeatureActivity({
+        projectId: props.projectId,
+        featureId,
+        shellCount,
+        browserCount,
+        downloadCount,
+      }),
     deleteFeature: (featureId: number): void => deleteMutation.mutate({ id: featureId }),
     navigateToFeature,
     togglePin: (featureId: number, pinned: boolean): void =>
       pinnedMutation.mutate({ id: featureId, data: { pinned } }),
-    unarchive: (featureId: number): void => updateStatus(featureId, ACTIVE_FEATURE_STATUS),
-    updateStatus,
+    archiveFeature,
+    unarchive: (featureId: number): void =>
+      updateStatusMutation.mutate({ id: featureId, data: { status: ACTIVE_FEATURE_STATUS } }),
   };
 }
 
 type ProjectFeatureActions = ReturnType<typeof useProjectFeatureActions>;
-
-function useFeatureConfirmation(
-  confirmFeatureId: number | null,
-  data: ProjectFeaturesData,
-): {
-  action: ReturnType<typeof getPendingFeatureArchiveAction>;
-  cleanup: ReturnType<typeof getArchiveCleanupAvailability>;
-  feature: Feature | undefined;
-} {
-  const feature = data.features.find((candidate) => candidate.id === confirmFeatureId);
-  const isDelete = feature?.status === ARCHIVED_FEATURE_STATUS;
-  const emptyCheck = useIsFeatureEmpty(confirmFeatureId ?? 0, {
-    query: { enabled: confirmFeatureId != null && !isDelete, refetchOnMount: "always" },
-  });
-  const action = getPendingFeatureArchiveAction({
-    feature,
-    emptyResponse: emptyCheck.data,
-    isCheckingEmpty: emptyCheck.isLoading || emptyCheck.isFetching,
-    hasEmptyCheckError: emptyCheck.error != null,
-  });
-  useEffect(() => {
-    if (emptyCheck.error == null || confirmFeatureId == null || isDelete) return;
-    toast.error(apiErrorMessage(emptyCheck.error, "Failed to check whether session is empty"));
-  }, [confirmFeatureId, emptyCheck.error, isDelete]);
-  return {
-    action,
-    cleanup: getArchiveCleanupAvailability(
-      feature ? data.worktreeByFeatureId.get(feature.id) : null,
-    ),
-    feature,
-  };
-}
 
 function createFeatureRenderer(
   props: ProjectFeaturesProps,
@@ -299,8 +303,8 @@ function createFeatureRenderer(
   labels: ReturnType<typeof useProjectFeatureLabels>,
   actions: ProjectFeatureActions,
   setConfirmFeatureId: (featureId: number | null) => void,
-) {
-  return (feature: Feature, hierarchyControl?: ReactNode, hierarchyDepth = 0): ReactNode => (
+): RenderFeature {
+  return (feature, hierarchyControl, hierarchyDepth = 0, hiddenDescendantIds) => (
     <ProjectFeatureRow
       key={feature.id}
       feature={feature}
@@ -313,6 +317,7 @@ function createFeatureRenderer(
       worktree={data.worktreeByFeatureId.get(feature.id)}
       shellCount={data.shellCountsByFeatureId.get(feature.id) ?? 0}
       browserCount={data.browserCountsByFeatureId[feature.id] ?? 0}
+      downloadCount={data.downloadCountsByFeatureId[feature.id] ?? 0}
       ports={data.portsByFeatureId.get(feature.id) ?? NO_PORTS}
       isEditingLabel={labels.editingFeatureId === feature.id}
       labelDraft={labels.editingFeatureId === feature.id ? labels.draft : ""}
@@ -329,20 +334,26 @@ function createFeatureRenderer(
       onCloseActivity={actions.closeActivity}
       hierarchyControl={hierarchyControl}
       hierarchyDepth={hierarchyDepth}
+      hiddenDescendantIds={hiddenDescendantIds}
     />
   );
 }
 
 export function useProjectFeaturesController(props: ProjectFeaturesProps) {
-  const [showArchived, setShowArchived] = useState(false);
   const [confirmFeatureId, setConfirmFeatureId] = useState<number | null>(null);
   const data = useProjectFeaturesData(props);
+  const { showArchived, toggleArchived } = useArchivedSectionOpen(
+    props.projectId,
+    data.activeFeature?.status === ARCHIVED_FEATURE_STATUS,
+  );
+  const collapsedSubtrees = usePersistedIdSet(SIDEBAR_COLLAPSED_SUBTREES_KEY);
   const labels = useProjectFeatureLabels(data);
   const actions = useProjectFeatureActions(props, data);
-  const confirmation = useFeatureConfirmation(confirmFeatureId, data);
-  useEffect(() => {
-    if (data.activeFeature?.status === ARCHIVED_FEATURE_STATUS) setShowArchived(true);
-  }, [data.activeFeature?.status]);
+  const confirmation = useFeatureArchiveConfirmation(
+    confirmFeatureId,
+    data.features,
+    data.worktreeByFeatureId,
+  );
   const renderFeature = useMemo(
     () => createFeatureRenderer(props, data, labels, actions, setConfirmFeatureId),
     [actions, data, labels, props],
@@ -351,24 +362,34 @@ export function useProjectFeaturesController(props: ProjectFeaturesProps) {
     (feature: Feature): ReactNode => {
       const node = data.rootNodeByFeatureId.get(feature.id);
       return node ? (
-        <FeatureSubtree key={feature.id} node={node} renderFeature={renderFeature} />
+        <FeatureSubtree
+          key={feature.id}
+          node={node}
+          renderFeature={renderFeature}
+          collapsedIds={collapsedSubtrees.ids}
+          onSetCollapsed={collapsedSubtrees.setMember}
+        />
       ) : (
         renderFeature(feature)
       );
     },
-    [data.rootNodeByFeatureId, renderFeature],
+    [collapsedSubtrees, data.rootNodeByFeatureId, renderFeature],
   );
   return {
     actions,
+    orderedIds: data.orderedIds,
+    renderedActiveFeatureCount: data.shownFeatures.filter((feature) => !feature.is_pinned).length,
     archivedFeatures: data.archivedFeatures,
+    dormantFeatures: data.dormantFeatures,
     confirmFeatureId,
     confirmation,
     flatActiveFeatures: data.flatActiveFeatures,
+    rootNodeByFeatureId: data.rootNodeByFeatureId,
     renderFeature,
     renderSubtree,
     setConfirmFeatureId,
-    setShowArchived,
     showArchived,
+    toggleArchived,
     worktreeGroups: data.worktreeGroups,
   };
 }

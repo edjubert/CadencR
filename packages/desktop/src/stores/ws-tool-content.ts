@@ -3,6 +3,7 @@ import { parseToolArgsObject } from "@/lib/tool-args";
 import { isFileChangeTool } from "@/lib/tool-adapter";
 import {
   clampJsonText,
+  clampParsedJsonText,
   clampTailText,
   clampText,
   TRUNCATION_NOTICE,
@@ -69,6 +70,24 @@ export function mergeToolContent(
   return isToolBlock(existing) ? clampJsonText(combined) : clampText(combined);
 }
 
+/** Publish one scanner-delimited snapshot, parsing its potentially large JSON only once. */
+export function mergeCompletedToolSnapshot(
+  existing: AgentBlockData,
+  snapshot: string,
+): ClampedText | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(snapshot);
+  } catch {
+    return undefined;
+  }
+  if (shouldMergeObjectDeltas(existing.toolName)) {
+    const base = parseToolArgsObject(existing.toolArgs);
+    if (base && isJsonObject(parsed)) return mergeParsedJsonObjects(base, parsed);
+  }
+  return clampParsedJsonText(snapshot, parsed);
+}
+
 function isToolBlock(block: AgentBlockData): boolean {
   return block.type === "tool_call" || block.type === "tool_result";
 }
@@ -77,19 +96,31 @@ function mergeJsonObjects(baseJson: string, deltaJson: string): ClampedText | un
   const base = parseToolArgsObject(baseJson);
   const delta = parseToolArgsObject(deltaJson);
   if (!base || !delta) return undefined;
-  const outputDelta = delta[BASH_OUTPUT_DELTA_KEY];
-  delete delta[BASH_OUTPUT_DELTA_KEY];
+  return mergeParsedJsonObjects(base, delta);
+}
+
+function mergeParsedJsonObjects(
+  base: Record<string, unknown>,
+  delta: Record<string, unknown>,
+): ClampedText {
+  const nextDelta = { ...delta };
+  const outputDelta = nextDelta[BASH_OUTPUT_DELTA_KEY];
+  delete nextDelta[BASH_OUTPUT_DELTA_KEY];
   if (typeof outputDelta === "string") {
     const priorOutput = typeof base.output === "string" ? base.output : "";
     // Clamp the accumulated field, not the envelope, so the JSON stays parseable
     // for the renderers.
     const output = clampTailText(priorOutput + outputDelta, LIVE_BASH_OUTPUT_MAX_CHARS);
-    return {
-      text: JSON.stringify({ ...base, ...delta, output: output.text }),
-      truncated: output.truncated,
-    };
+    const merged = { ...base, ...nextDelta, output: output.text };
+    const clamped = clampParsedJsonText(JSON.stringify(merged), merged);
+    return { text: clamped.text, truncated: output.truncated || clamped.truncated };
   }
-  return clampJsonText(JSON.stringify({ ...base, ...delta }));
+  const merged = { ...base, ...nextDelta };
+  return clampParsedJsonText(JSON.stringify(merged), merged);
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function shouldMergeObjectDeltas(toolName: string | undefined): boolean {

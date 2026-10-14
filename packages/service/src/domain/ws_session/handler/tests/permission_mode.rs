@@ -102,7 +102,7 @@ fn default_permission_mode_wire_matches_frontend_catalog() {
     // These wire strings must match `defaultEditModeFor` in
     // packages/desktop/src/lib/provider-modes.ts. Drift between BE/FE here
     // would silently put the chip in a state the backend never wrote.
-    assert_eq!(default_permission_mode_wire("claude_code"), "acceptEdits");
+    assert_eq!(default_permission_mode_wire("claude_code"), "auto");
     assert_eq!(default_permission_mode_wire("opencode"), "acceptEdits");
     assert_eq!(default_permission_mode_wire("codex_cli"), "default");
     assert_eq!(default_permission_mode_wire("cursor"), "default");
@@ -240,6 +240,11 @@ async fn mode_set_rejection_keeps_accepted_mode_as_desired_mode() {
                 allow_bypass_permissions: false,
                 claude_profile: None,
                 env: None,
+                env_unset: Vec::new(),
+                overrides: Default::default(),
+                runtime_overrides_dirty: false,
+                profile_revision: None,
+                profile_state_identity: None,
             },
             manual_compact_cancel: Arc::new(AtomicBool::new(false)),
             manual_compact_spawn_pending: Arc::new(AtomicBool::new(false)),
@@ -341,6 +346,11 @@ async fn claude_bypass_mode_set_rearms_existing_session_before_next_prompt() {
                 allow_bypass_permissions: false,
                 claude_profile: None,
                 env: None,
+                env_unset: Vec::new(),
+                overrides: Default::default(),
+                runtime_overrides_dirty: false,
+                profile_revision: None,
+                profile_state_identity: None,
             },
             manual_compact_cancel: Arc::new(AtomicBool::new(false)),
             manual_compact_spawn_pending: Arc::new(AtomicBool::new(false)),
@@ -441,15 +451,16 @@ async fn provider_set_resets_permission_mode_and_broadcasts_mode_changed() {
         "expected mode.changed envelope after provider switch"
     );
 
-    // Internal state was scrubbed — next spawn will pick the Codex
-    // adapter's default rather than carry the stale Claude `Plan`.
+    // Internal state was reset to the Codex default the chip now shows,
+    // rather than carrying the stale Claude `Plan` into the next spawn.
     let sessions = sdk_sessions.lock().await;
     let db_id: i64 = session_id.parse().unwrap();
     let handle = sessions.get(&db_id).unwrap();
-    assert!(handle.desired_permission_mode.is_none());
-    assert!(handle.config.permission_mode.is_none());
+    let codex_default = Some(RuntimePermissionMode::Default);
+    assert_eq!(handle.desired_permission_mode, codex_default);
+    assert_eq!(handle.config.permission_mode, codex_default);
     if let QueryState::Pending(options) = &handle.state {
-        assert!(options.permission_mode.is_none());
+        assert_eq!(options.permission_mode, codex_default);
     } else {
         panic!("expected pending state");
     }
@@ -505,4 +516,74 @@ async fn provider_set_to_same_provider_is_a_noop_for_mode_state() {
         Some(RuntimePermissionMode::Plan),
         "permission mode preserved on same-provider re-set"
     );
+}
+
+#[tokio::test]
+async fn init_replaces_a_mode_the_provider_cannot_run_and_reports_it() {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let sdk_sessions: SdkSessions = Arc::new(Mutex::new(HashMap::new()));
+    let app_state = make_test_app_state().await;
+
+    // The frontend seeds new conversations with Claude's `auto`, even one
+    // that starts on another provider (Cursor here; Codex alike).
+    let response = init_session_and_get_response(
+        &tx,
+        &mut rx,
+        &sdk_sessions,
+        &app_state,
+        SessionInitPayload {
+            provider: Some("cursor".to_string()),
+            model: None,
+            thinking_effort: None,
+            permission_mode: Some("auto".to_string()),
+            system_prompt: None,
+            cwd: Some("/tmp/test".to_string()),
+            feature_id: Some(1),
+        },
+    )
+    .await;
+
+    assert_eq!(response.permission_mode.as_deref(), Some("default"));
+    let db_id: i64 = response.session_id.parse().unwrap();
+    let handle_mode = sdk_sessions
+        .lock()
+        .await
+        .get(&db_id)
+        .unwrap()
+        .desired_permission_mode
+        .clone();
+    assert_eq!(handle_mode, Some(RuntimePermissionMode::Default));
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT permission_mode FROM agent_sessions WHERE id = ?")
+            .bind(db_id)
+            .fetch_one(&app_state.read_pool)
+            .await
+            .unwrap();
+    assert_eq!(stored.as_deref(), Some("default"));
+}
+
+#[tokio::test]
+async fn init_reports_a_supported_requested_mode_unchanged() {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let sdk_sessions: SdkSessions = Arc::new(Mutex::new(HashMap::new()));
+    let app_state = make_test_app_state().await;
+
+    let response = init_session_and_get_response(
+        &tx,
+        &mut rx,
+        &sdk_sessions,
+        &app_state,
+        SessionInitPayload {
+            provider: Some("cursor".to_string()),
+            model: None,
+            thinking_effort: None,
+            permission_mode: Some("plan".to_string()),
+            system_prompt: None,
+            cwd: Some("/tmp/test".to_string()),
+            feature_id: Some(1),
+        },
+    )
+    .await;
+
+    assert_eq!(response.permission_mode.as_deref(), Some("plan"));
 }

@@ -163,6 +163,10 @@ function clampJsonStructurally(text: string, max: number): JsonClamp {
   } catch {
     return { status: "incomplete" };
   }
+  return clampParsedJsonStructurally(parsed, max);
+}
+
+function clampParsedJsonStructurally(parsed: unknown, max: number): JsonClamp {
   if (!parsed || typeof parsed !== "object") return { status: "unshrinkable" };
 
   let leafBudget = Math.max(MIN_LEAF_BUDGET, Math.floor(max / 2));
@@ -207,6 +211,17 @@ export function clampJsonText(text: string, max: number = BLOCK_CONTENT_MAX_CHAR
   if (attempt.status === "clamped") return attempt.result;
   if (attempt.status === "incomplete" && looksLikeJson(text)) return { text, truncated: false };
   return clampText(text, max);
+}
+
+/** Clamp JSON that the caller has already parsed without parsing the large value again. */
+export function clampParsedJsonText(
+  text: string,
+  parsed: unknown,
+  max: number = BLOCK_CONTENT_MAX_CHARS,
+): ClampedText {
+  if (text.length <= max) return { text, truncated: false };
+  const attempt = clampParsedJsonStructurally(parsed, max);
+  return attempt.status === "clamped" ? attempt.result : clampText(text, max);
 }
 
 /** Move attachment payloads to the blob cache, keeping the block reference when there are none. */

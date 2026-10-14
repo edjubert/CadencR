@@ -17,6 +17,9 @@ pub(super) fn subagent_activity_events(
     item: &CodexItem,
     index_state: &mut IndexState,
 ) -> Vec<RuntimeEvent> {
+    // Interaction is messaging, not ancestry: a child can target its parent
+    // or a sibling. Unknown interaction targets are recovered from thread
+    // metadata by the event loop, never from the sender/call id here.
     if item.fields.get("kind").and_then(Value::as_str) != Some("started") {
         return Vec::new();
     }
@@ -33,8 +36,19 @@ pub(super) fn subagent_activity_events(
     // This direct id-to-id join works both with and without the raw spawn
     // event. If rawResponseItem arrived first, `has_index` deduplicates the
     // Agent block while the child route is still refreshed authoritatively.
+    if index_state
+        .subagent_parent_tool_use_id(child_thread_id)
+        .is_some()
+    {
+        return Vec::new();
+    }
     let parent_tool_use_id = index_state.canonical_id(activity_id);
-    index_state.record_subagent_thread(child_thread_id, &parent_tool_use_id);
+    if parent_thread_id == child_thread_id
+        || index_state.is_untracked_thread(parent_thread_id)
+        || !index_state.record_subagent_thread(child_thread_id, &parent_tool_use_id)
+    {
+        return Vec::new();
+    }
     if index_state.has_index(&parent_tool_use_id) {
         return Vec::new();
     }
@@ -161,5 +175,34 @@ mod tests {
             &mut indexes,
         );
         assert_eq!(child[0].parent_tool_use_id(), Some("call_spawn"));
+    }
+    #[test]
+    fn interactions_never_create_ancestry_or_replace_known_routes() {
+        let mut indexes = IndexState::for_root_thread("root");
+        indexes.record_subagent_thread("child", "spawn");
+        for target in ["root", "child", "unknown-sibling"] {
+            let events = notification_events(
+                "item/started",
+                json!({
+                    "threadId":"child", "item": {"id":"message","type":"subAgentActivity",
+                    "kind":"interacted","agentThreadId":target}
+                }),
+                None,
+                &mut indexes,
+            );
+            assert!(events.is_empty());
+        }
+        assert_eq!(indexes.subagent_parent_tool_use_id("child"), Some("spawn"));
+        assert_eq!(indexes.subagent_parent_tool_use_id("root"), None);
+        assert_eq!(indexes.subagent_parent_tool_use_id("unknown-sibling"), None);
+        let events = notification_events(
+            "item/agentMessage/delta",
+            json!({
+                "threadId":"child","itemId":"text","delta":"working"
+            }),
+            None,
+            &mut indexes,
+        );
+        assert_eq!(events[0].parent_tool_use_id(), Some("spawn"));
     }
 }

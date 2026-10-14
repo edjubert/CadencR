@@ -117,10 +117,10 @@ function splitSegments(blocks: AgentBlockData[]): Segment[] {
   return segments;
 }
 
-/** The turn's closing message — its last text block, ignoring earlier preamble. */
+/** Ignore empty stream placeholders, notably the one preceding compaction. */
 function findFinalText(body: AgentBlockData[]): AgentBlockData | null {
   for (let i = body.length - 1; i >= 0; i--) {
-    if (body[i].type === "text") return body[i];
+    if (body[i].type === "text" && body[i].content.trim()) return body[i];
   }
   return null;
 }

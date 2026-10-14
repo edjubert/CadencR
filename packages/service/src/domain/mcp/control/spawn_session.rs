@@ -26,6 +26,7 @@ pub(super) struct SpawnSessionRequest {
     pub(super) provider: Option<String>,
     pub(super) model: Option<String>,
     pub(super) thinking_level: Option<String>,
+    pub(super) profile: Option<String>,
     pub(super) permission_mode: Option<String>,
     pub(super) codex_permission_mode: Option<String>,
     pub(super) source_note: Option<String>,

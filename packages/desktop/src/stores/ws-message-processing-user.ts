@@ -1,5 +1,6 @@
 import type { BlockMutation, ParserSignals, StreamingState } from "./ws-message-processing-core";
 import { nextSyntheticBlockId } from "./ws-message-processing-utils";
+import { messageDbId } from "./ws-message-identity";
 
 /**
  * Claude's harness may run a Task/Agent subagent asynchronously. Instead of the
@@ -23,6 +24,7 @@ export function processUserMessage(
   if (!contentArr || !Array.isArray(contentArr)) return [];
 
   const parentToolUseId = (msg.parent_tool_use_id as string) ?? null;
+  const singleResult = contentArr.filter((item) => item.type === "tool_result").length === 1;
   const results: BlockMutation[] = [];
 
   for (const item of contentArr) {
@@ -69,7 +71,7 @@ export function processUserMessage(
     results.push({
       action: "append",
       block: {
-        id: nextSyntheticBlockId(state),
+        id: resultBlockId(item, singleResult ? msg : undefined, state),
         type: "tool_result",
         content: rawContent,
         isError: item.is_error === true,
@@ -83,4 +85,13 @@ export function processUserMessage(
     });
   }
   return results;
+}
+
+function resultBlockId(
+  item: Record<string, unknown>,
+  envelope: Record<string, unknown> | undefined,
+  state: StreamingState,
+): string {
+  const id = messageDbId(item.agent_message_id) ?? messageDbId(envelope?.agent_message_id);
+  return id === undefined ? nextSyntheticBlockId(state) : `msg-${id}`;
 }

@@ -1,7 +1,6 @@
 //! Backend-only bridge for negotiated live session configuration.
 //!
-//! The desktop does not consume these actions yet. Keeping the contract on the
-//! authenticated session WebSocket lets a later UI remain a thin renderer over
+//! The desktop consumes these actions as a thin provider-neutral renderer over
 //! opaque option ids and authoritative runtime snapshots.
 
 use axum::extract::ws::Message;
@@ -217,7 +216,9 @@ mod tests {
             Ok(())
         }
 
-        async fn close(&mut self) {}
+        async fn close(&mut self) -> Result<(), RuntimeError> {
+            Ok(())
+        }
 
         async fn set_model(&self, _model: &str) -> Result<(), RuntimeError> {
             Ok(())

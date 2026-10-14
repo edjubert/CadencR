@@ -175,6 +175,25 @@ describe("ipc validators", () => {
     expect(electronState.openExternal).not.toHaveBeenCalled();
   });
 
+  it("opens bare absolute paths like file:// links", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cadencr-link-"));
+    const file = path.join(dir, "crm prototype é.html");
+    await fs.writeFile(file, "<html></html>", "utf8");
+
+    // Markdown hrefs arrive percent-encoded (`crm%20prototype%20%C3%A9.html`).
+    await openExternalLink(pathToFileURL(file).pathname);
+    expect(electronState.openPath).toHaveBeenCalledWith(await fs.realpath(file));
+
+    const script = path.join(dir, "run.command");
+    await fs.writeFile(script, "content", "utf8");
+    await expect(openExternalLink(script)).rejects.toThrow(/cannot be opened from links/);
+    await expect(openExternalLink("relative/spec.html")).rejects.toThrow(/Invalid URL/);
+    await expect(openExternalLink("//intranet-host/share/spec.html")).rejects.toThrow(
+      /remote host/,
+    );
+    expect(electronState.openPath).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects executable, shortcut, and unknown local file types", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cadencr-link-"));
     for (const name of ["run.command", "run.exe", "launch.desktop", "unknown.custom", "README"]) {

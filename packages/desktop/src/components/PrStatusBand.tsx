@@ -289,12 +289,14 @@ function ChecksDisclosure({
           lands on empty padding and nothing looks any different.
         */}
         <div
+          // Keep native check scrolling out of the band's timeline forwarding.
+          onWheel={(event) => event.stopPropagation()}
           className={cn(
             // Shorter cap in a narrow pane: auto-opening a failing run was
             // taking the pinned band to 54% of the pane before one review
             // thread was reachable. Wide, the list is worth the room.
             "max-h-40 @max-[24rem]:max-h-24",
-            "overflow-y-auto border-t border-border/70 px-2 pb-4 pt-1.5",
+            "overflow-y-auto overscroll-y-contain border-t border-border/70 px-2 pb-4 pt-1.5",
             "[mask-image:linear-gradient(to_bottom,black_calc(100%-1rem),transparent)]",
           )}
         >

@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import { renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import {
@@ -13,6 +14,7 @@ const catalog: AgentCatalog = {
       id: "claude_code",
       label: "Claude",
       status: "available",
+      origin: "built_in",
       default_model: "opus",
       models: [{ id: "opus", label: "Opus" }],
     },
@@ -20,6 +22,7 @@ const catalog: AgentCatalog = {
       id: "opencode",
       label: "OpenCode",
       status: "available",
+      origin: "built_in",
       default_model: "lmstudio/qwen-3.6:35b-a3b",
       models: [{ id: "lmstudio/qwen-3.6:35b-a3b", label: "Qwen 3.6" }],
     },
@@ -27,6 +30,7 @@ const catalog: AgentCatalog = {
       id: "codex_cli",
       label: "Codex",
       status: "available",
+      origin: "built_in",
       default_model: "gpt-5.6-sol",
       models: [
         { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", supports_fast_mode: true },

@@ -4,7 +4,9 @@
     "electron.vite.config.ts",
     "electron/main/index.ts",
     "electron/preload/index.ts",
+    "electron/preload/notch.ts",
     "src/App.tsx",
+    "src/notch/main.tsx",
     "src/routes/**/*.tsx"
   ],
   "project": [
@@ -12,14 +14,7 @@
     "src/**/*.{ts,tsx}"
   ],
   "ignoreBinaries": [
-    "oxlint",
     "oxfmt",
-    "vitest",
-    "tsc",
-    "knip",
-    "orval",
-    "electron-vite",
-    "electron-builder",
     "security",
     "spctl",
     "xcrun"
@@ -27,12 +22,9 @@
   "ignoreDependencies": [
     "autoprefixer",
     "postcss",
-    "oxlint",
     "tailwindcss",
-    "@vitest/coverage-v8",
-    "orval",
     "@fontsource-variable/inter",
-    "electron-builder",
+    "streamdown",
     "tw-animate-css"
   ],
   "tags": [

@@ -10,8 +10,9 @@
  * macOS or Ctrl/Alt/Shift on other platforms.
  *
  * Order within a scope is the order rendered. Editor + editor-buffer
- * entries live in {@link ./entries-editor} to keep this file under the
- * 400-line limit; they are concatenated below.
+ * entries live in {@link ./entries-editor}, sidebar entries in
+ * {@link ./entries-sidebar}, to keep this file under the 400-line limit;
+ * they are concatenated below.
  *
  * `as const satisfies` keeps the literal `id` of every entry so the
  * `ShortcutId` union below is derived from this single source — typos in
@@ -22,6 +23,7 @@ import { BROWSER_SHORTCUTS } from "./entries-browser";
 import { EDITOR_SHORTCUTS } from "./entries-editor";
 import { GIT_SHORTCUTS } from "./entries-git";
 import { MODEL_PICKER_SHORTCUTS } from "./entries-model-picker";
+import { SIDEBAR_SHORTCUTS } from "./entries-sidebar";
 import { TERMINAL_SHORTCUTS } from "./entries-terminal";
 
 const APP_SHORTCUTS = [
@@ -118,26 +120,6 @@ const APP_SHORTCUTS = [
   // ─── Settings ────────────────────────────────────────────────────────
   { id: "settings-back", keys: ["escape"], description: "Back to workspace", scope: "settings" },
 
-  // ─── Sidebar ─────────────────────────────────────────────────────────
-  {
-    id: "sidebar-focus-down",
-    keys: ["mod", "alt", "down"],
-    description: "Move focus down",
-    scope: "sidebar",
-  },
-  {
-    id: "sidebar-focus-up",
-    keys: ["mod", "alt", "up"],
-    description: "Move focus up",
-    scope: "sidebar",
-  },
-  {
-    id: "sidebar-activate",
-    keys: ["enter"],
-    description: "Open focused item",
-    scope: "sidebar",
-  },
-
   // ─── Unified Agents ──────────────────────────────────────────────────
   {
     id: "agents-search",
@@ -219,6 +201,17 @@ const APP_SHORTCUTS = [
     keys: ["mod", "shift", "e"],
     description: "Editor tab",
     scope: "feature-panes",
+  },
+  {
+    // ⌘⌥B: every free ⌘⇧ letter is taken, and B sits beside the Browser tab's
+    // ⌘⇧B — auto layout's headline move is splitting the Browser in. Off macOS
+    // this is Ctrl+Alt+B (an AltGr chord), and no common layout composes a
+    // character on AltGr+B. Cmd suppresses Option's composition on macOS.
+    id: "layout-auto-toggle",
+    keys: ["mod", "alt", "b"],
+    description: "Toggle auto layout",
+    scope: "feature-panes",
+    aliases: ["auto layout", "split"],
   },
 
   // ─── Feature actions ─────────────────────────────────────────────────
@@ -305,6 +298,20 @@ const APP_SHORTCUTS = [
     scope: "agent",
   },
   {
+    id: "agent-previous-message",
+    keys: ["alt", "up"],
+    description: "Jump to your previous message",
+    scope: "agent",
+    aliases: ["navigator", "prompt"],
+  },
+  {
+    id: "agent-next-message",
+    keys: ["alt", "down"],
+    description: "Jump to your next message",
+    scope: "agent",
+    aliases: ["navigator", "prompt"],
+  },
+  {
     id: "agent-use-referenced-worktree",
     keys: ["mod", "shift", "w"],
     description: "Reuse referenced conversation worktree",
@@ -372,6 +379,7 @@ const APP_SHORTCUTS = [
 
 export const SHORTCUTS = [
   ...APP_SHORTCUTS,
+  ...SIDEBAR_SHORTCUTS,
   ...GIT_SHORTCUTS,
   ...TERMINAL_SHORTCUTS,
   ...EDITOR_SHORTCUTS,

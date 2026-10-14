@@ -40,7 +40,14 @@ vi.mock("@tanstack/react-router", () => ({
   }),
   useNavigate: () => vi.fn(),
   Navigate: () => null,
-  useRouterState: () => ({ location: { pathname: "/" } }),
+  useRouterState: (options?: {
+    select?: (state: {
+      location: { pathname: string; search?: Record<string, unknown> };
+    }) => unknown;
+  }) => {
+    const state = { location: { pathname: "/" } };
+    return options?.select ? options.select(state) : state;
+  },
   Link: ({ children, to }: { children: unknown; to: string }) => {
     const React = require("react");
     return React.createElement("a", { href: to }, children);
@@ -215,10 +222,6 @@ vi.mock("@/hooks/useResolvedModel", () => ({
   useResolvedModel: vi.fn(() => ({
     resolveProvider: vi.fn(() => "claude_code"),
     resolveModel: vi.fn(() => "claude-opus-4-5"),
-    resolveModelThinkingEffort: vi.fn(() => undefined),
-    setModelThinkingEffort: vi.fn(),
-    handleProviderChange: vi.fn(),
-    handleModelChange: vi.fn(),
   })),
 }));
 
@@ -227,10 +230,6 @@ vi.mock("@/contexts/ResolvedModelContext", () => ({
   useResolvedModelContext: vi.fn(() => ({
     resolveProvider: vi.fn(() => "claude_code"),
     resolveModel: vi.fn(() => "claude-opus-4-5"),
-    resolveModelThinkingEffort: vi.fn(() => undefined),
-    setModelThinkingEffort: vi.fn(),
-    handleProviderChange: vi.fn(),
-    handleModelChange: vi.fn(),
   })),
 }));
 
@@ -256,6 +255,15 @@ vi.mock("@/api/agentRuntime", () => ({
     isLoading: false,
     isError: false,
   })),
+  useAgentProfiles: vi.fn(() => ({
+    data: {
+      active_profile: "default",
+      default_profile: "default",
+      profiles: [{ id: "bedrock", label: "Bedrock", is_default: false }],
+    },
+    isLoading: false,
+    isError: false,
+  })),
 }));
 
 vi.mock("@/api/generated", () => ({
@@ -277,6 +285,8 @@ vi.mock("@/api/generated", () => ({
     mutateAsync: vi.fn().mockResolvedValue({ success: true }),
     isPending: false,
   })),
+  useStartRoute: vi.fn(() => ({ mutateAsync: vi.fn().mockResolvedValue(undefined as never) })),
+  useOpenFileRoute: vi.fn(() => ({ mutateAsync: vi.fn().mockResolvedValue(undefined as never) })),
   getListBranchesQueryKey: vi.fn((params: { project_id: number }) => [
     "listBranches",
     params.project_id,

@@ -6,6 +6,7 @@ type FollowOutputCallback = (isAtBottom: boolean) => FollowOutputScalar;
 type FollowOutputProp = FollowOutputCallback | FollowOutputScalar;
 
 interface VirtuosoHandleMock {
+  scrollTo: (options: ScrollToOptions) => void;
   scrollToIndex: (location: { index: "LAST" | number } | number) => void;
 }
 
@@ -25,6 +26,11 @@ interface VirtuosoProps {
   totalListHeightChanged?: (height: number) => void;
   style?: React.CSSProperties;
   className?: string;
+  role?: React.AriaRole;
+  "aria-label"?: string;
+  tabIndex?: number;
+  onKeyDown?: React.KeyboardEventHandler<HTMLDivElement>;
+  onWheel?: React.WheelEventHandler<HTMLDivElement>;
   "data-testid"?: string;
 }
 
@@ -131,6 +137,11 @@ export const Virtuoso = React.forwardRef<VirtuosoHandleMock, VirtuosoProps>(func
     totalListHeightChanged,
     style,
     className,
+    role,
+    "aria-label": ariaLabel,
+    tabIndex,
+    onKeyDown,
+    onWheel,
     "data-testid": testId,
   },
   ref,
@@ -152,6 +163,10 @@ export const Virtuoso = React.forwardRef<VirtuosoHandleMock, VirtuosoProps>(func
   React.useImperativeHandle(
     ref,
     () => ({
+      scrollTo: ({ top }) => {
+        const root = rootRef.current;
+        if (root && top != null) root.scrollTop = top;
+      },
       scrollToIndex: (location) => {
         const index = typeof location === "number" ? location : location.index;
         if (index === "LAST") pinToBottom();
@@ -179,7 +194,17 @@ export const Virtuoso = React.forwardRef<VirtuosoHandleMock, VirtuosoProps>(func
     : null;
   return React.createElement(
     "div",
-    { ref: rootRef, "data-testid": testId ?? "virtuoso-mock", className, style },
+    {
+      ref: rootRef,
+      "data-testid": testId ?? "virtuoso-mock",
+      className,
+      style,
+      role,
+      "aria-label": ariaLabel,
+      tabIndex,
+      onKeyDown,
+      onWheel,
+    },
     header,
     ...renderRows(count, itemContent, data, context),
     footer,

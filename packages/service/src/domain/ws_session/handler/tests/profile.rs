@@ -80,10 +80,29 @@ async fn claude_custom_gpt_model_keeps_provider_and_profile_env() {
 }
 
 #[tokio::test]
-async fn explicitly_selected_codex_keeps_same_bare_gpt_model() {
+async fn explicitly_selected_provider_preserves_custom_model() {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let sdk_sessions: SdkSessions = Arc::new(Mutex::new(HashMap::new()));
     let app_state = make_test_app_state().await;
+    sqlx::query(
+        "CREATE TABLE claude_code_custom_models (\
+            id INTEGER PRIMARY KEY, model_id TEXT NOT NULL UNIQUE, label TEXT NOT NULL, \
+            description TEXT, supports_effort BOOLEAN, supported_effort_levels_json TEXT, \
+            default_effort_level TEXT, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP\
+        )",
+    )
+    .execute(&app_state.write_pool)
+    .await
+    .unwrap();
+    crate::domain::agents::claude_code::custom_models::upsert_custom_model(
+        &app_state.write_pool,
+        "gpt-5.6-sol",
+        "GPT-5.6 (CLIProxyAPI)",
+        None,
+        crate::domain::agents::claude_code::custom_models::CustomModelEffort::default(),
+    )
+    .await
+    .unwrap();
 
     let session_id = init_session_with_payload(
         &tx,
@@ -91,7 +110,7 @@ async fn explicitly_selected_codex_keeps_same_bare_gpt_model() {
         &sdk_sessions,
         &app_state,
         SessionInitPayload {
-            provider: Some("codex_cli".to_string()),
+            provider: Some("claude_code".to_string()),
             model: Some("gpt-5.6-sol".to_string()),
             thinking_effort: None,
             permission_mode: None,
@@ -104,9 +123,8 @@ async fn explicitly_selected_codex_keeps_same_bare_gpt_model() {
 
     let sessions = sdk_sessions.lock().await;
     let handle = sessions.get(&session_id.parse::<i64>().unwrap()).unwrap();
-    assert_eq!(handle.runtime_provider, "codex_cli");
+    assert_eq!(handle.runtime_provider, "claude_code");
     assert_eq!(handle.desired_model.as_deref(), Some("gpt-5.6-sol"));
-    assert!(handle.config.env.is_none());
 }
 
 #[tokio::test]
@@ -114,12 +132,17 @@ async fn init_reuses_existing_session_profile_instead_of_global_profile() {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let sdk_sessions: SdkSessions = Arc::new(Mutex::new(HashMap::new()));
     let app_state = make_test_app_state().await;
+    let profile_name = "test-init-pinned-profile";
+    crate::domain::agents::claude_code::profiles::upsert_profile(profile_name, &HashMap::new())
+        .await
+        .unwrap();
 
     sqlx::query(
         "INSERT INTO agent_sessions \
          (feature_id, agent_type, status, runtime_provider, profile) \
-         VALUES (1, 'session', 'paused', 'claude_code', 'bedrock')",
+         VALUES (1, 'session', 'paused', 'claude_code', ?)",
     )
+    .bind(profile_name)
     .execute(&app_state.write_pool)
     .await
     .unwrap();
@@ -149,13 +172,17 @@ async fn init_reuses_existing_session_profile_instead_of_global_profile() {
     assert_eq!(env.action, "initialized");
     let payload: SessionInitializedPayload = serde_json::from_value(env.payload).unwrap();
     assert_eq!(payload.provider.as_deref(), Some("claude_code"));
-    assert_eq!(payload.profile.as_deref(), Some("bedrock"));
+    assert_eq!(payload.profile.as_deref(), Some(profile_name));
 
     let sessions = sdk_sessions.lock().await;
     let handle = sessions
         .get(&payload.session_id.parse::<i64>().unwrap())
         .unwrap();
-    assert_eq!(handle.desired_claude_profile.as_deref(), Some("bedrock"));
+    assert_eq!(handle.desired_claude_profile.as_deref(), Some(profile_name));
+    drop(sessions);
+    crate::domain::agents::claude_code::profiles::delete_profile(profile_name)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -205,6 +232,7 @@ async fn profile_set_updates_only_the_session_profile_column() {
     assert_eq!(env.payload["provider"], "claude_code");
     assert_eq!(env.payload["profile"], "bedrock");
     assert_eq!(env.payload["model"], "claude-sonnet-4-5");
+    assert!(env.payload.get("effective").is_none());
 
     let persisted: Option<String> =
         sqlx::query_scalar("SELECT profile FROM agent_sessions WHERE id = ?")
@@ -216,8 +244,8 @@ async fn profile_set_updates_only_the_session_profile_column() {
 }
 
 #[tokio::test]
-async fn prompt_profile_is_provider_neutral_for_non_claude_sessions() {
-    let (tx, _rx) = mpsc::unbounded_channel();
+async fn prompt_profile_rejects_provider_without_profile_support() {
+    let (tx, mut rx) = mpsc::unbounded_channel();
     let sdk_sessions: SdkSessions = Arc::new(Mutex::new(HashMap::new()));
     let app_state = make_test_app_state().await;
     let db_session_id: i64 = sqlx::query_scalar(
@@ -246,11 +274,18 @@ async fn prompt_profile_is_provider_neutral_for_non_claude_sessions() {
     );
     dispatch_envelope(envelope, &tx, &sdk_sessions, &app_state).await;
 
+    let Message::Text(text) = rx.recv().await.unwrap() else {
+        panic!("expected profile error text message");
+    };
+    let response: WsEnvelope = serde_json::from_str(&text).unwrap();
+    assert_eq!(response.action, "error");
+    assert_eq!(response.payload["code"], "PROFILE_ERROR");
+
     let persisted: Option<String> =
         sqlx::query_scalar("SELECT profile FROM agent_sessions WHERE id = ?")
             .bind(db_session_id)
             .fetch_one(&app_state.read_pool)
             .await
             .unwrap();
-    assert_eq!(persisted.as_deref(), Some("opencode-profile"));
+    assert_eq!(persisted, None);
 }

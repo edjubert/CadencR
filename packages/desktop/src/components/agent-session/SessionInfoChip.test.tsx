@@ -11,7 +11,7 @@ beforeAll(() => {
 });
 
 describe("SessionInfoChip", () => {
-  it("renders MCP servers above the Claude profile row", async () => {
+  it("renders MCP servers above the profile row", async () => {
     const user = userEvent.setup();
 
     render(
@@ -29,6 +29,7 @@ describe("SessionInfoChip", () => {
           isRunning={false}
           onPause={vi.fn()}
           chipClass="chip"
+          showProfileSelector
         />
       </SessionInfoMcpServersProvider>,
     );
@@ -36,7 +37,7 @@ describe("SessionInfoChip", () => {
     await user.click(screen.getByRole("button", { name: /session info/i }));
 
     const mcpHeading = screen.getByText("MCP servers");
-    const profileHeading = screen.getByText("Claude profile");
+    const profileHeading = screen.getByText("Profile");
     expect(mcpHeading.compareDocumentPosition(profileHeading)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
@@ -129,7 +130,7 @@ describe("SessionInfoChip", () => {
     expect(screen.queryByText("cadencr-browser")).not.toBeInTheDocument();
   });
 
-  it("renders an editable Claude profile combobox in the info popover", async () => {
+  it("renders an editable provider profile combobox in the info popover", async () => {
     const user = userEvent.setup();
     const onProfileChange = vi.fn();
 
@@ -144,11 +145,12 @@ describe("SessionInfoChip", () => {
         claudeProfile="default"
         claudeProfiles={[{ name: "bedrock", env: {} }]}
         onClaudeProfileChange={onProfileChange}
+        showProfileSelector
       />,
     );
 
     await user.click(screen.getByRole("button", { name: /session info/i }));
-    await user.click(screen.getByRole("combobox", { name: /Claude profile/i }));
+    await user.click(screen.getByRole("combobox", { name: "Profile" }));
     await user.click(await screen.findByRole("option", { name: "bedrock" }));
 
     expect(onProfileChange).toHaveBeenCalledWith("bedrock");
@@ -165,16 +167,21 @@ describe("SessionInfoChip", () => {
         isRunning={false}
         onPause={vi.fn()}
         chipClass="chip"
-        claudeProfile="bedrock"
-        claudeProfiles={[{ name: "bedrock", env: {} }]}
-        activeClaudeProfile="default"
+        claudeProfile="profile-selected-id"
+        claudeProfiles={[
+          { name: "profile-selected-id", label: "QA profile", env: {} },
+          { name: "profile-active-id", label: "Usual Codex profile", env: {} },
+        ]}
+        activeClaudeProfile="profile-active-id"
         onClaudeProfileChange={vi.fn()}
+        showProfileSelector
       />,
     );
 
     await user.click(screen.getByRole("button", { name: /session info/i }));
 
-    expect(screen.getByText(/“Default” stays the active profile/)).toBeInTheDocument();
+    expect(screen.getByText(/“Usual Codex profile” stays the active profile/)).toBeInTheDocument();
+    expect(screen.queryByText(/profile-active-id/)).not.toBeInTheDocument();
   });
 
   it("omits the override sentence when the session runs the active profile", async () => {
@@ -193,11 +200,81 @@ describe("SessionInfoChip", () => {
         // Spelled differently on purpose: the alias must not read as an override.
         activeClaudeProfile="default (recommended)"
         onClaudeProfileChange={vi.fn()}
+        showProfileSelector
       />,
     );
 
     await user.click(screen.getByRole("button", { name: /session info/i }));
 
     expect(screen.queryByText(/stays the active profile/)).not.toBeInTheDocument();
+  });
+
+  it("shows a human-labelled profile before a runtime session exists", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <SessionInfoChip
+        runtimeProvider={PROVIDER_IDS.CODEX_CLI}
+        projectPath="/tmp/project"
+        isRunning={false}
+        chipClass="chip"
+        claudeProfile="profile-uuid"
+        claudeProfiles={[{ name: "profile-uuid", label: "QA profile", env: {} }]}
+        onClaudeProfileChange={vi.fn()}
+        showProfileSelector
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /session info/i }));
+
+    expect(screen.getByRole("combobox", { name: "Profile" })).toHaveTextContent("QA profile");
+    expect(screen.queryByText("Session ID")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /copy launch command/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/MCPs not reported yet/i)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { loading: true, error: false, message: "Loading profiles…" },
+    { loading: false, error: true, message: "Failed to load profiles" },
+  ])("surfaces profile query state in Info: $message", async ({ loading, error, message }) => {
+    const user = userEvent.setup();
+    render(
+      <SessionInfoChip
+        runtimeProvider={PROVIDER_IDS.CODEX_CLI}
+        projectPath="/tmp/project"
+        isRunning={false}
+        chipClass="chip"
+        claudeProfile="default"
+        claudeProfilesLoading={loading}
+        claudeProfilesError={error}
+        onClaudeProfileChange={vi.fn()}
+        showProfileSelector
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /session info/i }));
+    expect(screen.getByText(message)).toBeInTheDocument();
+  });
+
+  it("shows the human label when profile selection is read-only", async () => {
+    const user = userEvent.setup();
+    render(
+      <SessionInfoChip
+        runtimeProvider={PROVIDER_IDS.CODEX_CLI}
+        runtimeSessionId="thread-123"
+        projectPath="/tmp/project"
+        isRunning={false}
+        onPause={vi.fn()}
+        chipClass="chip"
+        claudeProfile="profile-uuid"
+        claudeProfiles={[{ name: "profile-uuid", label: "QA profile", env: {} }]}
+        showProfileSelector
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /session info/i }));
+
+    expect(screen.queryByRole("combobox", { name: "Profile" })).not.toBeInTheDocument();
+    expect(screen.getByText("QA profile")).toBeInTheDocument();
   });
 });

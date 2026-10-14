@@ -5,8 +5,10 @@ import { CLAUDE_BYPASS_PERMISSIONS_SETTING_KEY } from "@/shared/permission-mode-
 import { BinaryDiscoverySection } from "./BinaryDiscoverySection";
 import { ProviderAccessModeSetting } from "./ProviderAccessModeSetting";
 import { CustomModelsSection } from "./CustomModelsSection";
+import { CodexProfilesSection } from "./CodexProfilesSection";
 import { DangerousModeToggle } from "./DangerousModeToggle";
 import { ProfilesSection } from "./ProfilesSection";
+import { ProviderDevelopmentCard } from "./ProviderDevelopmentCard";
 import { SettingsCard } from "./SettingsCard";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSubsection } from "./SettingsSubsection";
@@ -20,11 +22,8 @@ const PROVIDER_TABS: ProviderId[] = [
 
 export function ProvidersSection(): React.JSX.Element {
   return (
-    <SettingsSection
-      id="providers"
-      title="CLI Providers"
-      subtitle="Binaries · Profiles · Permission modes"
-    >
+    <SettingsSection id="providers" title="Providers" subtitle="Built-ins · Developer connectors">
+      <ProviderDevelopmentCard />
       <SettingsCard padded={false}>
         <Tabs defaultValue={PROVIDER_IDS.CLAUDE_CODE}>
           <TabsList aria-label="Provider" className="px-2">
@@ -133,6 +132,9 @@ function CodexProviderPanel(): React.JSX.Element {
             </>
           }
         />
+      </SettingsSubsection>
+      <SettingsSubsection>
+        <CodexProfilesSection />
       </SettingsSubsection>
       <SettingsSubsection>
         <ProviderAccessModeSetting providerId={PROVIDER_IDS.CODEX_CLI} />

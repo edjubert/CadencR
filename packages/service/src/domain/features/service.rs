@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use sqlx::SqlitePool;
 
 use super::models::{
+    ArchivePreview, ArchiveProjectSessionsResponse, ArchiveRequest, ArchiveResponse,
     CreateFeatureResponse, Feature, FeatureActivity, FeatureModelSettings, FeatureProviderSettings,
     FeatureSetting, FeatureStatus, IsEmptyResponse, WorkingDirResponse,
 };
@@ -19,6 +20,14 @@ pub async fn list_by_project(
 
 pub async fn list_pinned(pool: &SqlitePool) -> Result<Vec<Feature>, AppError> {
     repository::list_pinned(pool).await
+}
+
+pub async fn list_recent(pool: &SqlitePool, limit: i64) -> Result<Vec<Feature>, AppError> {
+    repository::list_recent(pool, limit).await
+}
+
+pub async fn list_active(pool: &SqlitePool) -> Result<Vec<Feature>, AppError> {
+    repository::list_active(pool).await
 }
 
 pub async fn get_by_id(pool: &SqlitePool, id: i64) -> Result<Option<Feature>, AppError> {
@@ -138,6 +147,25 @@ pub async fn update_status(
     status: FeatureStatus,
 ) -> Result<(), AppError> {
     repository::update_status(pool, id, status).await
+}
+
+pub async fn archive_preview(pool: &SqlitePool, id: i64) -> Result<ArchivePreview, AppError> {
+    super::archive::preview(pool, id).await
+}
+
+pub async fn archive(
+    pool: &SqlitePool,
+    id: i64,
+    request: ArchiveRequest,
+) -> Result<ArchiveResponse, AppError> {
+    super::archive::archive(pool, id, request).await
+}
+
+pub async fn archive_project_sessions(
+    pool: &SqlitePool,
+    project_id: i64,
+) -> Result<ArchiveProjectSessionsResponse, AppError> {
+    super::archive::archive_project_sessions(pool, project_id).await
 }
 
 pub async fn update_label(pool: &SqlitePool, id: i64, label: Option<&str>) -> Result<(), AppError> {

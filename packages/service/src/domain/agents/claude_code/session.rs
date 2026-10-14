@@ -218,8 +218,9 @@ impl AgentRuntimeSession for ClaudeCodeSession {
         self.query.interrupt().await.map_err(RuntimeError::from)
     }
 
-    async fn close(&mut self) {
+    async fn close(&mut self) -> Result<(), RuntimeError> {
         self.query.close().await;
+        Ok(())
     }
 
     async fn set_model(&self, model: &str) -> Result<(), RuntimeError> {

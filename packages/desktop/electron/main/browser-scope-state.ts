@@ -8,11 +8,13 @@ import type { BrowserBounds, BrowserStateSnapshot } from "./browser-types";
  * Tabs are isolated by scope (see `BrowserTabMetadata.scopeId`) so a tab opened
  * in one feature's Browser never leaks into another's. A scope enters these
  * maps once its workspace opens a tab or reports non-empty viewport bounds.
- * Scopeless (`null`) tabs are agent/MCP automation targets with no UI workspace.
+ * Agent/MCP tabs carry their feature's scope; scopeless (`null`) tabs only come
+ * from automation calls without a feature and have no UI workspace.
  */
 export class BrowserScopeState {
   readonly active = new Map<number | null, string>();
   readonly bounds = new Map<number | null, BrowserBounds>();
+  readonly rendererZoom = new Map<number | null, number>();
   // Most-recently activated tab across every scope — drives the unscoped
   // snapshot consumed by agent/MCP automation.
   globalActiveTabId: string | null = null;
@@ -30,9 +32,19 @@ export class BrowserScopeState {
    * A zero-size viewport means the workspace is hidden/unmounted: drop the scope
    * so its tabs detach and it stops receiving state broadcasts.
    */
-  setBounds(scope: number | null, bounds: BrowserBounds): void {
-    if (bounds.width > 0 && bounds.height > 0) this.bounds.set(scope, bounds);
-    else this.bounds.delete(scope);
+  setBounds(scope: number | null, bounds: BrowserBounds, zoomFactor = 1): void {
+    if (bounds.width > 0 && bounds.height > 0) {
+      this.bounds.set(scope, bounds);
+      this.rendererZoom.set(scope, zoomFactor > 0 ? zoomFactor : 1);
+    } else {
+      this.bounds.delete(scope);
+      this.rendererZoom.delete(scope);
+    }
+  }
+
+  clearBounds(): void {
+    this.bounds.clear();
+    this.rendererZoom.clear();
   }
 
   /**
@@ -75,6 +87,7 @@ export class BrowserScopeState {
     tabs: Map<string, ManagedTab>,
     knownOrigins: string[],
     error: string | null,
+    orderedMetadata?: BrowserStateSnapshot["tabs"],
   ): BrowserStateSnapshot {
     const scoped = scopeId !== undefined;
     const visible = scoped
@@ -84,7 +97,7 @@ export class BrowserScopeState {
     const activeTab = activeTabId ? tabs.get(activeTabId) : null;
     return {
       scopeId: scoped ? scopeId : null,
-      tabs: visible.map((tab) => tab.metadata),
+      tabs: orderedMetadata ?? visible.map((tab) => tab.metadata),
       activeTabId,
       consoleEntries: activeTab?.consoleEntries ?? [],
       networkEntries: activeTab?.networkEntries ?? [],

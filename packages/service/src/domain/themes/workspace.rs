@@ -17,8 +17,9 @@
 //!    default). A worktree would hand the agent a *copy* of the theme somewhere
 //!    else, and the live app would go on painting from a file nobody edits.
 //!
-//! `projects.kind = 'theme'` hides none of this — it is how the theme finds its
-//! project again, to open it, rename it and delete it.
+//! New authoring projects remain ordinary `kind = 'user'` projects and carry a
+//! typed theme identity. Legacy `kind = 'theme'` rows remain readable without
+//! being reclassified or backfilled.
 
 use std::path::Path;
 
@@ -72,13 +73,14 @@ pub async fn ensure(pool: &SqlitePool, theme_id: &str) -> Result<ThemeWorkspace,
     let cwd = dir.to_string_lossy().to_string();
     let label = theme_label(&theme).unwrap_or_else(|| theme_id.to_string());
 
+    let existing_project = find_project(pool, theme_id, &cwd).await?;
     ensure_repository(&dir).await?;
     // After the repository, so the first commit is the theme alone. The agent
     // that is about to work here has only this folder to go on, and `theme.json`
     // does not explain itself — see `scaffold`.
     scaffold::refresh(&dir).await?;
     let name = project_name(Some(&label), theme_id);
-    let project_id = ensure_project(pool, &name, &cwd).await?;
+    let project_id = ensure_project(pool, existing_project, &name, &cwd, theme_id).await?;
     // Not only at creation: the theme may have been renamed while nothing was
     // watching — by the user's own editor, or before this ran at all.
     rename_project(pool, project_id, &name).await?;
@@ -142,7 +144,7 @@ pub async fn sync_project_name(pool: &SqlitePool, theme_id: &str) -> Result<bool
         return Ok(false);
     };
     let cwd = dir.to_string_lossy().to_string();
-    let Some(project_id) = find_project(pool, &cwd).await? else {
+    let Some(project_id) = find_project(pool, theme_id, &cwd).await? else {
         return Ok(false);
     };
     let theme = super::store::get(theme_id).await?;
@@ -183,7 +185,7 @@ async fn rename_project(pool: &SqlitePool, project_id: i64, name: &str) -> Resul
 pub async fn remove(pool: &SqlitePool, theme_id: &str) -> Result<(), AppError> {
     let dir = paths::theme_dir(theme_id)?;
     let cwd = dir.to_string_lossy().to_string();
-    let Some(project_id) = find_project(pool, &cwd).await? else {
+    let Some(project_id) = find_project(pool, theme_id, &cwd).await? else {
         return Ok(());
     };
     crate::domain::projects::repository::delete_project(pool, project_id).await
@@ -237,27 +239,90 @@ async fn ensure_repository(dir: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
-async fn find_project(pool: &SqlitePool, cwd: &str) -> Result<Option<i64>, AppError> {
-    Ok(
-        sqlx::query_scalar("SELECT id FROM projects WHERE path = ? AND kind = ?")
-            .bind(cwd)
-            .bind(THEME_PROJECT_KIND)
-            .fetch_optional(pool)
-            .await?,
+async fn find_project(
+    pool: &SqlitePool,
+    theme_id: &str,
+    cwd: &str,
+) -> Result<Option<i64>, AppError> {
+    let canonical_cwd = std::fs::canonicalize(cwd)
+        .map_err(|error| AppError::Internal(format!("canonicalize theme project path: {error}")))?
+        .to_string_lossy()
+        .to_string();
+    let rows: Vec<(i64, String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT id, path, kind, authoring_target, plugin_id FROM projects \
+         WHERE (authoring_target = 'theme' AND plugin_id = ?) OR path IN (?, ?) ORDER BY id",
     )
+    .bind(theme_id)
+    .bind(cwd)
+    .bind(&canonical_cwd)
+    .fetch_all(pool)
+    .await?;
+    let mut owned = None;
+    for (id, path, kind, target, plugin_id) in rows {
+        let marked_theme =
+            target.as_deref() == Some("theme") && plugin_id.as_deref() == Some(theme_id);
+        let expected_path = path == cwd || path == canonical_cwd;
+        let legacy_theme =
+            expected_path && kind == THEME_PROJECT_KIND && target.is_none() && plugin_id.is_none();
+        if marked_theme {
+            if path != cwd && path != canonical_cwd {
+                return Err(project_conflict(
+                    theme_id,
+                    "its marked project points at another path",
+                ));
+            }
+            if owned.replace(id).is_some() {
+                return Err(project_conflict(
+                    theme_id,
+                    "more than one project claims this theme",
+                ));
+            }
+        } else if legacy_theme {
+            if owned.replace(id).is_some() {
+                return Err(project_conflict(
+                    theme_id,
+                    "more than one project claims this theme",
+                ));
+            }
+        } else if expected_path {
+            return Err(project_conflict(
+                theme_id,
+                "its folder belongs to another project",
+            ));
+        }
+    }
+    Ok(owned)
 }
 
-async fn ensure_project(pool: &SqlitePool, name: &str, cwd: &str) -> Result<i64, AppError> {
-    if let Some(id) = find_project(pool, cwd).await? {
+async fn ensure_project(
+    pool: &SqlitePool,
+    existing: Option<i64>,
+    name: &str,
+    cwd: &str,
+    theme_id: &str,
+) -> Result<i64, AppError> {
+    if let Some(id) = existing {
         return Ok(id);
     }
-    Ok(
-        sqlx::query_scalar("INSERT INTO projects (name, path, kind) VALUES (?, ?, ?) RETURNING id")
-            .bind(name)
-            .bind(cwd)
-            .bind(THEME_PROJECT_KIND)
-            .fetch_one(pool)
-            .await?,
+    let created = crate::domain::projects::service::create_author_project()
+        .pool(pool)
+        .name(name)
+        .path(cwd)
+        .authoring_target(crate::domain::projects::models::ProjectAuthoringTarget::Theme)
+        .plugin_id(theme_id)
+        .call()
+        .await;
+    match created {
+        Ok(project) => Ok(project.id),
+        Err(error) => find_project(pool, theme_id, cwd).await?.ok_or(error),
+    }
+}
+
+fn project_conflict(theme_id: &str, reason: &str) -> AppError {
+    AppError::coded(
+        axum::http::StatusCode::CONFLICT,
+        "THEME_PROJECT_OWNERSHIP_CONFLICT",
+        format!("cannot open theme `{theme_id}` because {reason}"),
     )
 }
 
@@ -371,6 +436,17 @@ mod tests {
             .expect("name")
     }
 
+    async fn project_identity_of(
+        pool: &SqlitePool,
+        project_id: i64,
+    ) -> (String, Option<String>, Option<String>) {
+        sqlx::query_as("SELECT kind, authoring_target, plugin_id FROM projects WHERE id = ?")
+            .bind(project_id)
+            .fetch_one(pool)
+            .await
+            .expect("identity")
+    }
+
     #[tokio::test]
     async fn creates_a_project_rooted_in_the_theme_folder() {
         let pool = pool().await;
@@ -384,6 +460,14 @@ mod tests {
         assert_eq!(
             project_name_of(&pool, workspace.project_id).await,
             "Theme: My Theme"
+        );
+        assert_eq!(
+            project_identity_of(&pool, workspace.project_id).await,
+            (
+                "user".to_string(),
+                Some("theme".to_string()),
+                Some("my-theme".to_string())
+            )
         );
 
         // Both, not either: the feature setting governs this conversation, and
@@ -406,6 +490,23 @@ mod tests {
             (feature_mode.as_str(), project_mode.as_deref()),
             ("skip", Some("skip")),
             "a worktree would hide the edits from the running app"
+        );
+    }
+
+    #[tokio::test]
+    async fn numeric_leading_theme_ids_are_valid_authoring_identity() {
+        let pool = pool().await;
+        let id = create_theme("2026 Theme").await;
+        let workspace = ensure(&pool, &id).await.expect("ensures numeric id");
+
+        assert_eq!(id, "2026-theme");
+        assert_eq!(
+            project_identity_of(&pool, workspace.project_id).await,
+            (
+                "user".to_string(),
+                Some("theme".to_string()),
+                Some("2026-theme".to_string())
+            )
         );
     }
 
@@ -476,6 +577,55 @@ mod tests {
         let second = ensure(&pool, &id).await.expect("ensures again");
         assert_eq!(first.feature_id, second.feature_id);
         assert_eq!(first.project_id, second.project_id);
+    }
+
+    #[tokio::test]
+    async fn legacy_theme_projects_remain_legacy_when_reopened() {
+        let pool = pool().await;
+        let id = create_theme("My Theme").await;
+        let cwd = paths::theme_dir(&id).unwrap().to_string_lossy().to_string();
+        let project_id: i64 = sqlx::query_scalar(
+            "INSERT INTO projects (name, path, kind) VALUES ('Legacy', ?, 'theme') RETURNING id",
+        )
+        .bind(&cwd)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let workspace = ensure(&pool, &id).await.expect("opens legacy project");
+
+        assert_eq!(workspace.project_id, project_id);
+        assert_eq!(
+            project_identity_of(&pool, project_id).await,
+            ("theme".to_string(), None, None)
+        );
+    }
+
+    #[tokio::test]
+    async fn another_projects_marker_cannot_adopt_the_theme_folder() {
+        let pool = pool().await;
+        let id = create_theme("My Theme").await;
+        let cwd = paths::theme_dir(&id).unwrap().to_string_lossy().to_string();
+        crate::domain::projects::service::create_author_project()
+            .pool(&pool)
+            .name("Other")
+            .path(&cwd)
+            .authoring_target(crate::domain::projects::models::ProjectAuthoringTarget::Provider)
+            .plugin_id("other-provider")
+            .call()
+            .await
+            .unwrap();
+
+        let error = ensure(&pool, &id)
+            .await
+            .expect_err("ownership must conflict");
+        assert!(matches!(
+            error,
+            AppError::Coded {
+                code: "THEME_PROJECT_OWNERSHIP_CONFLICT",
+                ..
+            }
+        ));
     }
 
     #[tokio::test]

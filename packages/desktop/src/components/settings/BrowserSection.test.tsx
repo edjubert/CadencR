@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import userEvent from "@testing-library/user-event";
 import { render, screen } from "@/test-utils";
 import { useDebouncedSetting } from "@/hooks/useDebouncedSetting";
 import { BrowserSection } from "./BrowserSection";
@@ -27,6 +28,7 @@ describe("BrowserSection", () => {
       value: key === "browser_default_mode" ? "normal" : null,
       setValue: settingSetter(key),
       isLoading: false,
+      isFetched: true,
       isSaving: false,
     }));
   });
@@ -44,5 +46,17 @@ describe("BrowserSection", () => {
     expect(
       screen.queryByRole("switch", { name: /workspace memory for agents/i }),
     ).not.toBeInTheDocument();
+  });
+
+  it("persists a selected search engine through the non-optimistic settings writer", async () => {
+    const user = userEvent.setup();
+    render(<BrowserSection />);
+
+    await user.click(screen.getByRole("radio", { name: "DuckDuckGo" }));
+
+    expect(settingSetter("browser_search_engine")).toHaveBeenCalledWith("duckduckgo");
+    expect(vi.mocked(useDebouncedSetting)).toHaveBeenCalledWith("browser_search_engine", 0, {
+      immediateCache: false,
+    });
   });
 });

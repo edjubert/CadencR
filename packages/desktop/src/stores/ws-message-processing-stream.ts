@@ -91,7 +91,12 @@ export function processStreamEvent(
         blockIdFromAgentMessage(msg),
       );
     // Envelope markers with no renderable content — intentionally ignored.
-    case "content_block_stop":
+    case "content_block_stop": {
+      const blockId = stream.contentBlockIds.get(event.index as number);
+      return blockId && hasToolBlockId(state, blockId)
+        ? [{ action: "finalize", block: { id: blockId, type: "tool_call", content: "" } }]
+        : [];
+    }
     case "message_delta":
     case "message_stop":
       return [];
@@ -99,6 +104,13 @@ export function processStreamEvent(
       console.warn("[agent-stream] dropping unknown stream event type", event.type);
       return [];
   }
+}
+
+function hasToolBlockId(state: StreamingState, blockId: string): boolean {
+  for (const block of state.toolUseIdToBlock.values()) {
+    if (block.id === blockId) return true;
+  }
+  return false;
 }
 
 function processContentBlockStart(

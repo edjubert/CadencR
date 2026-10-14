@@ -1,10 +1,9 @@
-use super::models::{Project, ProjectModelSettings, ProjectProviderSettings, ProjectSetting};
-use crate::domain::agents::runtime::{runtime_setting_key, validate_agent_type};
+use super::models::{Project, ProjectAuthoringTarget, ProjectSetting};
 use crate::error::AppError;
 use sqlx::{AssertSqlSafe, SqlitePool};
 
 pub async fn list_projects(pool: &SqlitePool) -> Result<Vec<Project>, AppError> {
-    let rows = sqlx::query_as::<_, (i64, String, String, Option<String>, String)>(
+    let rows = sqlx::query_as::<_, ProjectRow>(
         // Order projects by the most recent *user* message across all their
         // features, falling back to the feature creation time when a project
         // has no user messages yet.
@@ -17,7 +16,8 @@ pub async fn list_projects(pool: &SqlitePool) -> Result<Vec<Project>, AppError> 
                LEFT JOIN agent_messages um ON um.session_id = s.id AND um.role = 'user'
                GROUP BY f.project_id
            )
-           SELECT p.id, p.name, p.path, p.branch_prefix, p.created_at
+           SELECT p.id, p.name, p.path, p.branch_prefix, p.created_at,
+                  p.authoring_target, p.plugin_id
            FROM projects p
            LEFT JOIN latest_project_activity activity ON activity.project_id = p.id
            ORDER BY COALESCE(activity.activity_at, datetime(p.created_at)) DESC, p.id DESC"#,
@@ -25,16 +25,9 @@ pub async fn list_projects(pool: &SqlitePool) -> Result<Vec<Project>, AppError> 
     .fetch_all(pool)
     .await?;
 
-    Ok(rows
-        .into_iter()
-        .map(|(id, name, path, branch_prefix, created_at)| Project {
-            id,
-            name,
-            path,
-            branch_prefix,
-            created_at,
-        })
-        .collect())
+    rows.into_iter()
+        .map(project_from_row)
+        .collect::<Result<Vec<_>, _>>()
 }
 
 pub async fn create_project(
@@ -49,19 +42,68 @@ pub async fn create_project(
         .await?
         .last_insert_rowid();
 
-    let row = sqlx::query_as::<_, (i64, String, String, Option<String>, String)>(
-        "SELECT id, name, path, branch_prefix, created_at FROM projects WHERE id = ?",
+    project_by_id(pool, id).await
+}
+
+#[bon::builder]
+pub async fn create_author_project(
+    pool: &SqlitePool,
+    name: &str,
+    path: &str,
+    authoring_target: ProjectAuthoringTarget,
+    plugin_id: &str,
+) -> Result<Project, AppError> {
+    let id = sqlx::query(
+        "INSERT INTO projects (name, path, kind, authoring_target, plugin_id) \
+         VALUES (?, ?, 'user', ?, ?)",
+    )
+    .bind(name)
+    .bind(path)
+    .bind(authoring_target.as_str())
+    .bind(plugin_id)
+    .execute(pool)
+    .await?
+    .last_insert_rowid();
+    project_by_id(pool, id).await
+}
+
+type ProjectRow = (
+    i64,
+    String,
+    String,
+    Option<String>,
+    String,
+    Option<String>,
+    Option<String>,
+);
+
+async fn project_by_id(pool: &SqlitePool, id: i64) -> Result<Project, AppError> {
+    let row = sqlx::query_as::<_, ProjectRow>(
+        "SELECT id, name, path, branch_prefix, created_at, authoring_target, plugin_id \
+         FROM projects WHERE id = ?",
     )
     .bind(id)
     .fetch_one(pool)
     .await?;
 
+    project_from_row(row)
+}
+
+fn project_from_row(row: ProjectRow) -> Result<Project, AppError> {
+    let authoring_target = row
+        .5
+        .as_deref()
+        .map(ProjectAuthoringTarget::try_from)
+        .transpose()
+        .map_err(AppError::Internal)?;
     Ok(Project {
         id: row.0,
         name: row.1,
         path: row.2,
         branch_prefix: row.3,
         created_at: row.4,
+        authoring_target,
+        plugin_id: row.6,
     })
 }
 
@@ -201,64 +243,6 @@ pub async fn set_project_setting(
     crate::domain::settings_store::project_set(pool, project_id, key, value).await
 }
 
-pub async fn get_project_model_settings(
-    pool: &SqlitePool,
-    project_id: i64,
-) -> Result<ProjectModelSettings, AppError> {
-    let session = crate::domain::settings_store::project_get(pool, project_id, "model_session")
-        .await?
-        .unwrap_or_default();
-    Ok(ProjectModelSettings { session })
-}
-
-pub async fn set_project_model_setting(
-    pool: &SqlitePool,
-    project_id: i64,
-    model_type: &str,
-    model: &str,
-) -> Result<(), AppError> {
-    if !validate_agent_type(model_type) {
-        return Err(AppError::BadRequest(format!(
-            "Invalid model type: {}",
-            model_type
-        )));
-    }
-    crate::domain::agents::runtime::reject_workspace_only(model_type, "project")?;
-    let key = format!("model_{}", model_type);
-    crate::domain::settings_store::project_set(pool, project_id, &key, model).await
-}
-
-pub async fn get_project_provider_settings(
-    pool: &SqlitePool,
-    project_id: i64,
-) -> Result<ProjectProviderSettings, AppError> {
-    let session =
-        crate::domain::settings_store::project_get(pool, project_id, "agent_runtime_session")
-            .await?
-            .unwrap_or_default();
-    Ok(ProjectProviderSettings {
-        session,
-        auto_name: String::new(),
-    })
-}
-
-pub async fn set_project_provider_setting(
-    pool: &SqlitePool,
-    project_id: i64,
-    provider_type: &str,
-    provider: &str,
-) -> Result<(), AppError> {
-    if !validate_agent_type(provider_type) {
-        return Err(AppError::BadRequest(format!(
-            "Invalid provider type: {}",
-            provider_type
-        )));
-    }
-    crate::domain::agents::runtime::reject_workspace_only(provider_type, "project")?;
-    let key = runtime_setting_key(provider_type);
-    crate::domain::settings_store::project_set(pool, project_id, &key, provider).await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,7 +264,9 @@ mod tests {
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 model_session TEXT,
                 agent_runtime_session TEXT,
-                kind TEXT NOT NULL DEFAULT 'user'
+                kind TEXT NOT NULL DEFAULT 'user',
+                authoring_target TEXT CHECK (authoring_target IN ('theme', 'provider')),
+                plugin_id TEXT CHECK ((authoring_target IS NULL) = (plugin_id IS NULL))
             )"#,
         )
         .execute(&pool)
@@ -428,17 +414,5 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(count.0, 0);
-    }
-
-    #[tokio::test]
-    async fn test_set_project_setting_rejects_workspace_only_agent() {
-        let pool = setup_test_db().await;
-        let project = create_project(&pool, "WsOnly", "/tmp/wsonly")
-            .await
-            .unwrap();
-        let err = set_project_model_setting(&pool, project.id, "auto_name", "haiku")
-            .await
-            .unwrap_err();
-        assert!(matches!(err, AppError::BadRequest(_)));
     }
 }

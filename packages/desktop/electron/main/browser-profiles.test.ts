@@ -20,6 +20,12 @@ describe("browser profiles", () => {
     expect(browserPartitionForProfile(profile)).toBe("persist:browser:dev-login");
   });
 
+  it("keeps the normal profile on the established default partition", () => {
+    expect(browserPartitionForProfile(createBrowserProfile("persistent", "default"))).toBe(
+      "persist:browser:default",
+    );
+  });
+
   it("rejects unsafe persistent profile ids", () => {
     expect(isPersistentProfileId("dev-login_1")).toBe(true);
     expect(isPersistentProfileId("../secret")).toBe(false);

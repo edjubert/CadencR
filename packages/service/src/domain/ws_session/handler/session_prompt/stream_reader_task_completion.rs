@@ -7,7 +7,7 @@ use tracing::{error, info};
 use crate::domain::agents::adapter::{RuntimeError, RuntimeEvent};
 use crate::domain::session_status::AgentStatus;
 use crate::domain::ws_session::persistence::{
-    raw_event_with_agent_message_id, PersistedMessageRef, WsSessionPersistence,
+    raw_event_with_agent_message_id, PersistedEventRef, WsSessionPersistence,
 };
 use crate::domain::ws_session::protocol::{
     SessionEndedPayload, SessionErrorPayload, SessionMessagePayload, SessionUsageUpdatePayload,
@@ -42,12 +42,15 @@ impl StreamReaderTask {
         &self,
         state: &mut StreamReaderState,
         runtime_event: &RuntimeEvent,
-        persisted_message: Option<PersistedMessageRef>,
+        persisted_message: Option<PersistedEventRef>,
         current_model: Option<&str>,
         interrupted_generation: Option<u64>,
     ) -> Option<WsEnvelope> {
         if runtime_event.is_result() {
-            return self.result_envelope(state, interrupted_generation).await;
+            let failed = runtime_event.result_error().is_some();
+            return self
+                .result_envelope(state, interrupted_generation, failed)
+                .await;
         }
         // Phase 3 migration seam: v1 index-based events are assigned stable
         // canonical ids and materialized before the legacy desktop projection.
@@ -55,6 +58,14 @@ impl StreamReaderTask {
         state
             .canonical_projection
             .apply_runtime_event(runtime_event);
+        // Init and Other are operational signals, not transcript blocks. Their
+        // meaningful state has already been consumed by the stream reader
+        // (runtime id, MCP servers, usage, permissions, and provider-specific
+        // observers), so forwarding their provider-native raw JSON only makes
+        // the desktop parser warn about an unknown message type.
+        if runtime_event.is_operational_only() {
+            return None;
+        }
         let projected_model = state
             .canonical_projection
             .model_for_event(runtime_event)
@@ -88,6 +99,7 @@ impl StreamReaderTask {
         &self,
         state: &mut StreamReaderState,
         interrupted_generation: Option<u64>,
+        failed: bool,
     ) -> Option<WsEnvelope> {
         state.canonical_projection.finish_turn();
         state.turn_state.mark_result();
@@ -129,13 +141,15 @@ impl StreamReaderTask {
                 .await
                 .is_some_and(|row| row.has_pending_user_input());
         if !has_pending_user_input {
-            WsSessionPersistence::broadcast_session_status(
-                &self.session_status_tx,
-                self.db_session_id,
-                self.feature_id,
-                AgentStatus::Idle,
-                None,
-            );
+            // A result reporting failure ends the turn as failed. A surfaced
+            // error alone does not: an unrecognized message or a retried
+            // provider error still lets the turn complete.
+            let status_tx = &self.session_status_tx;
+            if failed {
+                status_tx.broadcast_turn_failed(self.db_session_id, self.feature_id);
+            } else {
+                status_tx.broadcast(self.db_session_id, self.feature_id, AgentStatus::Idle, None);
+            }
             state.turn_state.record_signal_status(AgentStatus::Idle);
         }
         Some(WsEnvelope::new(
@@ -236,13 +250,8 @@ impl StreamReaderTask {
             error!(self.db_session_id, error = %error, "failed to resolve pending prompt receipts after stream error");
         }
         WsSessionPersistence::mark_paused_static(&self.write_pool, self.db_session_id).await;
-        WsSessionPersistence::broadcast_session_status(
-            &self.session_status_tx,
-            self.db_session_id,
-            self.feature_id,
-            AgentStatus::Idle,
-            None,
-        );
+        self.session_status_tx
+            .broadcast_turn_failed(self.db_session_id, self.feature_id);
         self.persist_and_emit_error_with_receipts(
             code,
             message.clone(),

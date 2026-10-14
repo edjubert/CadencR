@@ -2,12 +2,12 @@ import { createPermissionRespond, createPromptSend, type WsEnvelope } from "@/li
 import { getFeatureAgentState } from "@/api/generated";
 import { AGENT_STATE_OLDER_MESSAGE_LIMIT } from "@/lib/agent-state-limits";
 import { serverBlocksToAgentBlocks } from "@/hooks/useFeatureAgentState";
-import { countRenderableDisplayRows, type DisplayRowMode } from "@/components/agentStreamDisplay";
+import type { DisplayRowMode } from "@/components/agentStreamDisplay";
 import { blocksPatchWithDerived } from "./ws-message-processing";
 import type { StoreAccessors } from "./ws-envelope-handler";
 import { markLastPlanBlock, type PersistedStatePayload, updateSession } from "./ws-session-types";
 import { transitionTurn } from "./ws-turn-lifecycle";
-import { mergeCanonicalBlocks } from "./ws-user-message-reconciliation";
+import { prependHistoryBlocks } from "./ws-session-prepend";
 
 export type { PersistedStatePayload };
 
@@ -160,26 +160,13 @@ async function loadOlderSessionPage(
   }
 
   const olderBlocks = serverBlocksToAgentBlocks(serverSession.blocks as never[]);
-  const currentSession = ctx.get().sessions[sessionId];
-  if (!currentSession) return null;
-  const mergedBlocks = mergeCanonicalBlocks(currentSession.blocks, olderBlocks);
-  const addedBlocks = mergedBlocks.length - currentSession.blocks.length;
-  // Use the actual growth in rendered rows, not the older chunk's rows in
-  // isolation — under summary/compact mode a segment can span the chunk
-  // boundary, so the net delta is what keeps `firstItemIndex` aligned.
-  const addedDisplayRows =
-    countRenderableDisplayRows(mergedBlocks, displayMode) -
-    countRenderableDisplayRows(currentSession.blocks, displayMode);
   const hasMore = serverSession.hasMore ?? false;
-  ctx.set(
-    updateSession(ctx.get(), sessionId, {
-      ...blocksPatchWithDerived(currentSession.streamingState, mergedBlocks),
-      historyPrependDisplayOffset: currentSession.historyPrependDisplayOffset + addedDisplayRows,
-      hasMore,
-      oldestMessageId: serverSession.oldestMessageId ?? null,
-    }),
-  );
-  return { addedBlocks, addedDisplayRows, hasMore };
+  const added = prependHistoryBlocks(ctx, sessionId, olderBlocks, displayMode, {
+    hasMore,
+    oldestMessageId: serverSession.oldestMessageId ?? null,
+  });
+  if (!added) return null;
+  return { ...added, hasMore };
 }
 
 /**

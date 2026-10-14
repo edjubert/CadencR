@@ -1,4 +1,4 @@
-import { QueryClient, type Query } from "@tanstack/react-query";
+import { QueryClient, type InvalidateOptions, type Query } from "@tanstack/react-query";
 import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
 import { CACHE_VERSION } from "./persistedQueries";
 
@@ -53,14 +53,18 @@ export function invalidateByUrlPrefix(
 export function invalidateByExactUrl(
   client: QueryClient,
   url: string | readonly string[],
+  options?: InvalidateOptions,
 ): Promise<void> {
   const urls = typeof url === "string" ? new Set([url]) : new Set(url);
-  return client.invalidateQueries({
-    predicate: (query) => {
-      const head = query.queryKey[0];
-      return typeof head === "string" && urls.has(head);
+  return client.invalidateQueries(
+    {
+      predicate: (query) => {
+        const head = query.queryKey[0];
+        return typeof head === "string" && urls.has(head);
+      },
     },
-  });
+    options,
+  );
 }
 
 /**

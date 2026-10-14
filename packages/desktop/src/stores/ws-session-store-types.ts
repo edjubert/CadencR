@@ -8,6 +8,7 @@ import type {
   WsEnvelope,
 } from "@/lib/ws-envelope";
 import type { AccessMode } from "@/types/access-mode";
+import type { RuntimeSessionConfigValue } from "@/api/generated";
 import type {
   PermissionMode,
   PersistedStatePayload,
@@ -86,21 +87,36 @@ export interface WsSessionStore {
   consumeForkNavigation: (sessionId: string) => void;
   compactSession: (sessionId: string) => void;
   deleteSession: (sessionId: string) => void;
-  setProvider: (sessionId: string, providerId: string) => void;
+  setProvider: (sessionId: string, providerId: string, modelId?: string) => void;
   setModel: (sessionId: string, modelId: string, providerId: string) => void;
   setThinkingEffort: (sessionId: string, thinkingEffort?: string) => void;
   setFastMode: (sessionId: string, enabled: boolean) => Promise<void>;
   setProfile: (sessionId: string, profile: string) => void;
+  setRuntimeOverrides: (
+    sessionId: string,
+    patch: import("@/lib/ws-envelope").RuntimeConfigOverridePatch,
+  ) => Promise<void>;
   setPermissionMode: (sessionId: string, mode: PermissionMode) => void;
   setAccessMode: (sessionId: string, mode: AccessMode) => void;
   approvePlan: (sessionId: string) => void;
   requestPlanChanges: (sessionId: string, feedback: string) => void;
   closeGate: (sessionId: string, reason: GateCloseReason) => void;
+  requestSessionConfig: (sessionId: string) => Promise<void>;
+  setSessionConfigOption: (
+    sessionId: string,
+    configId: string,
+    value: RuntimeSessionConfigValue,
+  ) => Promise<void>;
 
   sendRequest: (sessionId: string, envelope: WsEnvelope) => Promise<unknown>;
 
   retryWorktreeSetup: (sessionId: string) => void;
-  requestSlashCommands: (sessionId: string, cwd: string, provider: string) => void;
+  requestSlashCommands: (
+    sessionId: string,
+    cwd: string,
+    provider: string,
+    profile?: string,
+  ) => void;
 
   markPersistedLoaded: (sessionId: string) => void;
   setPersistedState: (sessionId: string, options: PersistedStatePayload) => void;
@@ -110,6 +126,16 @@ export interface WsSessionStore {
    * `historyPrependDisplayOffset` by the rendered row count for Virtuoso.
    */
   loadOlderMessages: (sessionId: string, displayMode?: DisplayRowMode) => Promise<number>;
+  /**
+   * Loads one prompt sitting in unloaded history together with the start of
+   * its turn (message navigator). Resolves with whether the prompt is now in
+   * the transcript.
+   */
+  loadPromptTurn: (
+    sessionId: string,
+    messageDbId: number,
+    displayMode?: DisplayRowMode,
+  ) => Promise<boolean>;
   /**
    * Pull any messages persisted after the newest block we hold and merge them
    * in — the same catch-up path used on WS reconnect. Used after a manual

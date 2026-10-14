@@ -47,6 +47,7 @@ pub(super) struct BranchInputs {
     pub feature_id: i64,
     pub message_id: i64,
     pub provider_id: String,
+    pub profile: Option<String>,
     pub cwd: std::path::PathBuf,
     /// Text of the cut user message — restored into the composer as a draft.
     pub message_text: String,
@@ -138,12 +139,13 @@ pub(super) async fn load_inputs(
     db_session_id: i64,
     message_id: i64,
 ) -> Result<BranchInputs, BranchAbort> {
-    let session: Option<(i64, Option<String>)> =
-        sqlx::query_as("SELECT feature_id, runtime_provider FROM agent_sessions WHERE id = ?")
-            .bind(db_session_id)
-            .fetch_optional(pool)
-            .await?;
-    let (feature_id, provider_id) = session.ok_or(BranchAbort::SessionNotFound)?;
+    let session: Option<(i64, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT feature_id, runtime_provider, profile FROM agent_sessions WHERE id = ?",
+    )
+    .bind(db_session_id)
+    .fetch_optional(pool)
+    .await?;
+    let (feature_id, provider_id, profile) = session.ok_or(BranchAbort::SessionNotFound)?;
     let provider_id = provider_id.unwrap_or_default();
 
     // Pull the cut message's type, text and provider uuid in one read — the
@@ -185,6 +187,7 @@ pub(super) async fn load_inputs(
         feature_id,
         message_id,
         provider_id,
+        profile,
         cwd,
         message_text,
         cut_user_ordinal: cut_user_ordinal.max(0) as usize,
@@ -246,6 +249,7 @@ pub(super) async fn truncate_context(
     };
     let ctx = BranchContext {
         cwd: inputs.cwd.clone(),
+        profile: inputs.profile.clone(),
         source_runtime_session_id: source,
         cut_provider_uuid: inputs.cut_provider_uuid.clone(),
         cut_user_ordinal: inputs.cut_user_ordinal,
@@ -285,9 +289,10 @@ pub(super) async fn stop_live_turn(
         WsSessionPersistence::mark_completed_static(&app_state.write_pool, db_session_id).await;
         persist_and_close_query(
             query,
-            &app_state.write_pool,
+            app_state,
             db_session_id,
             &handle.runtime_provider,
+            handle.feature_id,
         )
         .await;
         let fresh = RuntimeSpawnConfig {
@@ -298,6 +303,11 @@ pub(super) async fn stop_live_turn(
             thinking_effort: handle.desired_thinking_effort.clone(),
             system_prompt: handle.config.system_prompt.clone(),
             env: handle.config.env.clone(),
+            env_unset: handle.config.env_unset.clone(),
+            profile: handle.config.claude_profile.clone(),
+            overrides: handle.config.overrides.clone(),
+            profile_revision: handle.config.profile_revision.clone(),
+            profile_state_identity: handle.config.profile_state_identity.clone(),
             ..RuntimeSpawnConfig::default()
         };
         handle.state = QueryState::Pending(fresh);

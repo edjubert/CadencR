@@ -2,13 +2,13 @@
 //! workspace. Per-session message-fetching is delegated to
 //! `feature_state_fetch`; block capping/trimming lives in `pagination`.
 use super::super::models::*;
-use super::blocks::build_blocks;
+use super::feature_state_build::build_session_state;
 use super::feature_state_fetch::{
-    fetch_full_messages, fetch_incremental_data, fetch_latest_todos, todo_fetch_session_ids,
-    todos_from_full_messages, FullMessagesResult, IncrementalData,
+    fetch_full_messages, fetch_latest_todos, todo_fetch_session_ids, todos_from_full_messages,
+    FullMessagesResult,
 };
+use super::incremental_fetch::{fetch_incremental_data, IncrementalData};
 use super::origins::attach_message_origins;
-use super::pagination::{block_message_id, trim_blocks_to_cap, BLOCK_SOFT_CAP};
 use crate::error::AppError;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
@@ -16,6 +16,7 @@ pub async fn get_feature_agent_state(
     pool: &SqlitePool,
     feature_id: i64,
     after_message_ids: Option<HashMap<i64, i64>>,
+    after_content_revisions: Option<HashMap<i64, i64>>,
     limit: Option<i64>,
     before_message_ids: Option<HashMap<i64, i64>>,
 ) -> Result<FeatureAgentStateResponse, AppError> {
@@ -23,7 +24,8 @@ pub async fn get_feature_agent_state(
         r#"SELECT id, feature_id, agent_type, runtime_provider, runtime_session_id, status, started_at, ended_at,
            subprocess_id, model, profile, pending_questions, has_file_changes,
            permission_mode, codex_permission_mode, pending_permission,
-           input_tokens, output_tokens, context_window, was_compacted, draft_prompt
+           input_tokens, output_tokens, context_window, was_compacted, draft_prompt,
+           message_revision
            FROM agent_sessions WHERE feature_id = ? ORDER BY id ASC"#,
     )
     .bind(feature_id)
@@ -33,6 +35,7 @@ pub async fn get_feature_agent_state(
         return Ok(FeatureAgentStateResponse { sessions: vec![] });
     }
     let after_map = after_message_ids.unwrap_or_default();
+    let after_revision_map = after_content_revisions.unwrap_or_default();
     let before_map = before_message_ids.unwrap_or_default();
     // Split sessions into full-fetch vs incremental
     let mut full_fetch_ids: Vec<i64> = Vec::new();
@@ -51,7 +54,7 @@ pub async fn get_feature_agent_state(
     // path here — do not bring back an HTTP fetch.
     let (full_result, incremental_result) = tokio::try_join!(
         fetch_full_messages(pool, &full_fetch_ids, limit, &before_map),
-        fetch_incremental_data(pool, &incremental_fetches)
+        fetch_incremental_data(pool, &incremental_fetches, &after_revision_map, &sessions)
     )?;
     let FullMessagesResult {
         messages: mut full_messages,
@@ -61,6 +64,10 @@ pub async fn get_feature_agent_state(
     let IncrementalData {
         messages: mut incremental_messages,
         updated_tool_calls,
+        revision_cursors,
+        revision_has_more,
+        message_has_more,
+        message_cursors,
     } = incremental_result;
     attach_message_origins(pool, &mut full_messages).await?;
     attach_message_origins(pool, &mut incremental_messages).await?;
@@ -86,115 +93,25 @@ pub async fn get_feature_agent_state(
                 Some(m) => (true, m),
                 None => (false, full_messages.remove(&s.id).unwrap_or_default()),
             };
-            build_session_state(
-                s,
-                msgs,
-                is_incremental,
-                &after_map,
-                &updated_tool_calls,
-                &mut todos_by_session,
-                &has_more_map,
-                &oldest_message_id_map,
-            )
+            build_session_state()
+                .s(s)
+                .msgs(msgs)
+                .is_incremental(is_incremental)
+                .revision_cursors(&revision_cursors)
+                .revision_has_more(&revision_has_more)
+                .message_has_more(&message_has_more)
+                .message_cursors(&message_cursors)
+                .after_map(&after_map)
+                .updated_tool_calls(&updated_tool_calls)
+                .todos_by_session(&mut todos_by_session)
+                .has_more_map(&has_more_map)
+                .oldest_message_id_map(&oldest_message_id_map)
+                .call()
         })
         .collect();
     Ok(FeatureAgentStateResponse {
         sessions: session_states,
     })
-}
-#[allow(clippy::too_many_arguments)]
-fn build_session_state(
-    s: AgentSessionRow,
-    msgs: Vec<AgentMessageRow>,
-    is_incremental: bool,
-    after_map: &HashMap<i64, i64>,
-    updated_tool_calls: &HashMap<i64, HashMap<i64, String>>,
-    todos_by_session: &mut HashMap<i64, Vec<serde_json::Value>>,
-    has_more_map: &HashMap<i64, bool>,
-    oldest_message_id_map: &HashMap<i64, i64>,
-) -> SessionState {
-    let max_message_id = if is_incremental {
-        let new_max = msgs.iter().map(|m| m.id).max().unwrap_or(0);
-        if new_max > 0 {
-            new_max
-        } else {
-            after_map.get(&s.id).copied().unwrap_or(0)
-        }
-    } else {
-        msgs.iter().map(|m| m.id).max().unwrap_or(0)
-    };
-    let mut blocks = build_blocks(&msgs);
-    // Block-level pagination soft cap (full-fetch only). The
-    // per-session message `limit` is on `agent_messages` rows, but
-    // payload size scales with BLOCKS (every Bash call expands to two
-    // blocks plus output). Drop the oldest root blocks until we are
-    // under the cap and report has_more so the client can paginate.
-    let mut trimmed_has_more = false;
-    let mut trimmed_oldest_id: Option<i64> = None;
-    if !is_incremental {
-        let dropped = trim_blocks_to_cap(&mut blocks, BLOCK_SOFT_CAP);
-        if dropped > 0 {
-            trimmed_has_more = true;
-            trimmed_oldest_id = blocks.iter().filter_map(block_message_id).min();
-        }
-    }
-    let tool_call_updates: Option<HashMap<String, String>> = if is_incremental {
-        updated_tool_calls.get(&s.id).map(|m| {
-            m.iter()
-                .map(|(id, content)| (format!("msg-{}", id), content.clone()))
-                .collect()
-        })
-    } else {
-        None
-    };
-    let pending_questions = s
-        .pending_questions
-        .as_deref()
-        .and_then(|pq| serde_json::from_str(pq).ok());
-    let pending_permission = s
-        .pending_permission
-        .as_deref()
-        .and_then(|p| serde_json::from_str(p).ok());
-    let resumable = (s.status == "paused" || s.status == "completed" || s.status == "error")
-        && s.runtime_session_id.is_some();
-
-    SessionState {
-        session_db_id: s.id,
-        agent_type: s.agent_type,
-        status: s.status,
-        subprocess_id: s.subprocess_id,
-        model: s.model,
-        profile: s.profile,
-        blocks,
-        max_message_id,
-        is_incremental,
-        tool_call_updates,
-        pending_questions,
-        has_file_changes: s.has_file_changes != 0,
-        resumable,
-        runtime_provider: s.runtime_provider,
-        runtime_session_id: s.runtime_session_id,
-        todos: todos_by_session.get(&s.id).cloned(),
-        permission_mode: s
-            .permission_mode
-            .unwrap_or_else(|| "acceptEdits".to_string()),
-        codex_permission_mode: s
-            .codex_permission_mode
-            .unwrap_or_else(|| "default".to_string()),
-        pending_permission,
-        input_tokens: s.input_tokens.unwrap_or(0),
-        output_tokens: s.output_tokens.unwrap_or(0),
-        context_window: s.context_window,
-        was_compacted: s.was_compacted != 0,
-        draft_prompt: s.draft_prompt,
-        has_more: *has_more_map.get(&s.id).unwrap_or(&false) || trimmed_has_more,
-        oldest_message_id: trimmed_oldest_id.or_else(|| {
-            oldest_message_id_map
-                .get(&s.id)
-                .copied()
-                .or_else(|| msgs.first().map(|m| m.id))
-        }),
-    }
 }
 
 #[cfg(test)]
@@ -214,7 +131,7 @@ mod tests {
         let session_id = insert_session(&pool, feature_id, "completed").await;
         insert_message(&pool, session_id, "text", "hello", None, None, None).await;
 
-        let state = get_feature_agent_state(&pool, feature_id, None, None, None)
+        let state = get_feature_agent_state(&pool, feature_id, None, None, None, None)
             .await
             .unwrap();
         assert_eq!(state.sessions.len(), 1);
@@ -222,6 +139,81 @@ mod tests {
         assert_eq!(s.session_db_id, session_id);
         assert_eq!(s.blocks.len(), 1);
         assert_eq!(s.blocks[0].content, "hello");
+    }
+
+    #[tokio::test]
+    async fn incremental_revision_returns_late_tool_edit_once() {
+        let pool = setup_test_db().await;
+        let fid: (i64,) = sqlx::query_as("INSERT INTO features (title) VALUES ('f') RETURNING id")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let session_id = insert_session(&pool, fid.0, "completed").await;
+        let call_id = insert_message(
+            &pool,
+            session_id,
+            "tool_call",
+            r#"{"path":"before"}"#,
+            Some("Read"),
+            Some("tool-1"),
+            None,
+        )
+        .await;
+        let result_id = insert_message(
+            &pool,
+            session_id,
+            "tool_result",
+            "done",
+            None,
+            Some("tool-1"),
+            None,
+        )
+        .await;
+
+        // A full assistant-message reconciliation can refine tool arguments
+        // after the result row already sits behind the message-id cursor.
+        sqlx::query("UPDATE agent_messages SET content = ? WHERE id = ?")
+            .bind(r#"{"path":"after"}"#)
+            .bind(call_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let after = HashMap::from([(session_id, result_id)]);
+        let revisions = HashMap::from([(session_id, 0)]);
+        let changed = get_feature_agent_state(
+            &pool,
+            fid.0,
+            Some(after.clone()),
+            Some(revisions),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let session = &changed.sessions[0];
+        assert!(session.blocks.is_empty());
+        assert_eq!(session.max_content_revision, Some(1));
+        assert_eq!(
+            session
+                .tool_call_updates
+                .as_ref()
+                .and_then(|updates| updates.get(&format!("msg-{call_id}")))
+                .map(String::as_str),
+            Some(r#"{"path":"after"}"#)
+        );
+
+        let unchanged = get_feature_agent_state(
+            &pool,
+            fid.0,
+            Some(after),
+            Some(HashMap::from([(session_id, 1)])),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(unchanged.sessions[0].tool_call_updates.is_none());
     }
 
     #[tokio::test]
@@ -256,7 +248,7 @@ mod tests {
         .await
         .unwrap();
 
-        let state = get_feature_agent_state(&pool, fid.0, None, None, None)
+        let state = get_feature_agent_state(&pool, fid.0, None, None, None, None)
             .await
             .unwrap();
 
@@ -283,7 +275,7 @@ mod tests {
         // Fetch with after_message_ids = {session_id: msg1}
         let mut after = HashMap::new();
         after.insert(session_id, msg1);
-        let state = get_feature_agent_state(&pool, feature_id, Some(after), None, None)
+        let state = get_feature_agent_state(&pool, feature_id, Some(after), None, None, None)
             .await
             .unwrap();
         assert_eq!(state.sessions.len(), 1);
@@ -298,7 +290,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_feature_agent_state_no_sessions() {
         let pool = setup_test_db().await;
-        let state = get_feature_agent_state(&pool, 9999, None, None, None)
+        let state = get_feature_agent_state(&pool, 9999, None, None, None, None)
             .await
             .unwrap();
         assert!(state.sessions.is_empty());
@@ -329,7 +321,7 @@ mod tests {
         }
 
         // Fetch with limit=3 — should get only the last 3 messages
-        let state = get_feature_agent_state(&pool, feature_id, None, Some(3), None)
+        let state = get_feature_agent_state(&pool, feature_id, None, None, Some(3), None)
             .await
             .unwrap();
         let s = &state.sessions[0];
@@ -368,9 +360,10 @@ mod tests {
         // Fetch messages before msg_ids[3] with limit=2
         let mut before_map = HashMap::new();
         before_map.insert(session_id, msg_ids[3]);
-        let state = get_feature_agent_state(&pool, feature_id, None, Some(2), Some(before_map))
-            .await
-            .unwrap();
+        let state =
+            get_feature_agent_state(&pool, feature_id, None, None, Some(2), Some(before_map))
+                .await
+                .unwrap();
         let s = &state.sessions[0];
         // Should get messages with id < msg_ids[3], limited to 2
         assert_eq!(s.blocks.len(), 2);
@@ -390,7 +383,7 @@ mod tests {
         insert_message(&pool, session_id, "text", "hello", None, None, None).await;
 
         // Fetch without limit — has_more should be false
-        let state = get_feature_agent_state(&pool, feature_id, None, None, None)
+        let state = get_feature_agent_state(&pool, feature_id, None, None, None, None)
             .await
             .unwrap();
         let s = &state.sessions[0];

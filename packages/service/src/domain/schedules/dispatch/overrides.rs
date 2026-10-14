@@ -14,9 +14,11 @@
 use crate::app_state::AppState;
 use crate::domain::agents::providers::{default_provider_id, resolve_effective_provider};
 use crate::domain::agents::runtime::runtime_setting_key;
+use crate::domain::agents::runtime_overrides::{self, RestoreOptions};
 use crate::domain::schedules::models::Schedule;
 use crate::domain::schedules::pins::{access_mode_for, model_for, permission_mode_for, trimmed};
 use crate::domain::settings;
+use crate::domain::ws_session::persistence::WsSessionPersistence;
 use crate::error::AppError;
 
 /// Every pin resolved against the provider the conversation already runs.
@@ -45,6 +47,8 @@ pub(super) async fn apply(
     if pins.is_empty() {
         return Ok(());
     }
+    validate_profile_state_transition(state, session_id, &pins).await?;
+    let runtime_overrides = merge_runtime_overrides(state, session_id, &pins).await?;
     // COALESCE, not a blind write: an unpinned option must leave the
     // conversation exactly as the user left it.
     sqlx::query(
@@ -53,7 +57,8 @@ pub(super) async fn apply(
             thinking_effort = COALESCE(?, thinking_effort),
             permission_mode = COALESCE(?, permission_mode),
             codex_permission_mode = COALESCE(?, codex_permission_mode),
-            profile = COALESCE(?, profile)
+            profile = COALESCE(?, profile),
+            runtime_overrides = COALESCE(?, runtime_overrides)
          WHERE id = ?",
     )
     .bind(pins.model.as_deref())
@@ -61,10 +66,97 @@ pub(super) async fn apply(
     .bind(pins.permission_mode.as_deref())
     .bind(pins.access_mode.as_deref())
     .bind(pins.profile.as_deref())
+    .bind(runtime_overrides)
     .bind(session_id)
     .execute(&state.write_pool)
     .await?;
     Ok(())
+}
+
+async fn validate_profile_state_transition(
+    state: &AppState,
+    session_id: i64,
+    pins: &SessionPins,
+) -> Result<(), AppError> {
+    let Some(next_profile) = pins.profile.as_deref() else {
+        return Ok(());
+    };
+    let row: (Option<String>, Option<String>, Option<String>, String) = sqlx::query_as(
+        "SELECT s.runtime_provider, s.profile, s.runtime_session_id, p.path
+         FROM agent_sessions s
+         JOIN features f ON f.id = s.feature_id
+         JOIN projects p ON p.id = f.project_id
+         WHERE s.id = ?",
+    )
+    .bind(session_id)
+    .fetch_one(&state.read_pool)
+    .await?;
+    if row.2.is_none() {
+        return Ok(());
+    }
+    let provider = row
+        .0
+        .ok_or_else(|| AppError::BadRequest("profile pin requires a resolved provider".into()))?;
+    let adapter = crate::domain::agents::providers::runtime_adapter(&provider)
+        .ok_or_else(|| AppError::BadRequest(format!("provider '{provider}' is unavailable")))?;
+    let cwd = std::path::Path::new(&row.3);
+    let previous_selection = match row.1 {
+        Some(profile) => Some(profile),
+        None => adapter
+            .profile_catalog(Some(cwd))
+            .await
+            .map_err(|error| AppError::BadRequest(error.to_string()))?
+            .map(|catalog| catalog.default_profile),
+    };
+    let previous = adapter
+        .resolve_profile(previous_selection.as_deref(), cwd)
+        .await
+        .map_err(|error| AppError::BadRequest(error.to_string()))?;
+    let next = adapter
+        .resolve_profile(Some(next_profile), cwd)
+        .await
+        .map_err(|error| AppError::BadRequest(error.to_string()))?;
+    let previous_state = previous.and_then(|profile| profile.state_identity);
+    let next_state = next.and_then(|profile| profile.state_identity);
+    if previous_state.is_some() && previous_state != next_state {
+        return Err(AppError::BadRequest(
+            "scheduled profile cannot change provider state for a resumable session".into(),
+        ));
+    }
+    Ok(())
+}
+
+async fn merge_runtime_overrides(
+    state: &AppState,
+    session_id: i64,
+    pins: &SessionPins,
+) -> Result<Option<String>, AppError> {
+    if pins.model.is_none() && pins.thinking_effort.is_none() {
+        return Ok(None);
+    }
+    let stored = WsSessionPersistence::try_get_session_row(&state.read_pool, session_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("session '{session_id}' not found")))?;
+    let mut overrides = runtime_overrides::restore(
+        RestoreOptions::builder()
+            .provider(stored.runtime_provider.as_deref().unwrap_or_default())
+            .maybe_runtime_session_id(stored.runtime_session_id.as_deref())
+            .maybe_stored_json(stored.runtime_overrides.as_deref())
+            .maybe_model(stored.model.as_deref())
+            .maybe_thinking_effort(stored.thinking_effort.as_deref())
+            .fast_mode(stored.fast_mode)
+            .build(),
+    )
+    .map_err(AppError::Internal)?;
+    if let Some(model) = &pins.model {
+        overrides.model = Some(model.clone());
+    }
+    if let Some(effort) = &pins.thinking_effort {
+        overrides.thinking_effort = Some(effort.clone());
+    }
+    serde_json::to_string(&overrides)
+        .map(Some)
+        .map_err(|error| AppError::Internal(format!("serialize runtime overrides: {error}")))
 }
 
 async fn resolve(
@@ -109,12 +201,27 @@ async fn resolve(
         pins.access_mode = trimmed(target.access_mode.as_deref());
         return Ok(pins);
     };
+    if profile.is_some() {
+        let cwd = project
+            .as_ref()
+            .map(|project| std::path::Path::new(&project.path))
+            .ok_or_else(|| {
+                AppError::BadRequest("scheduled profile requires a project path".into())
+            })?;
+        let adapter = crate::domain::agents::providers::runtime_adapter(&provider)
+            .ok_or_else(|| AppError::BadRequest(format!("provider '{provider}' is unavailable")))?;
+        pins.profile = adapter
+            .resolve_profile(profile.as_deref(), cwd)
+            .await
+            .map_err(|error| AppError::BadRequest(error.to_string()))?
+            .map(|resolved| resolved.identity);
+    }
     pins.model = model_for(
         &state.read_pool,
         project.as_ref().map(|project| project.path.as_str()),
         &provider,
         pins.model.as_deref(),
-        profile.as_deref(),
+        pins.profile.as_deref(),
     )
     .await?;
     pins.permission_mode = permission_mode_for(&provider, target.permission_mode.as_deref())?;
@@ -205,6 +312,82 @@ mod tests {
         (pool, state, feature_id, session_id)
     }
 
+    async fn legacy_codex_session() -> (AppState, i64) {
+        let (pool, state, _, session_id) = session_on("codex_cli").await;
+        sqlx::query(
+            "UPDATE agent_sessions SET runtime_session_id = 'legacy-thread',
+             model = 'gpt-5.4', thinking_effort = 'high', fast_mode = 1,
+             runtime_overrides = NULL WHERE id = ?",
+        )
+        .bind(session_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        (state, session_id)
+    }
+
+    #[tokio::test]
+    async fn model_pin_preserves_unpinned_legacy_effort_and_fast_mode() {
+        let (state, session_id) = legacy_codex_session().await;
+        let pins = SessionPins {
+            model: Some("new-model".into()),
+            ..Default::default()
+        };
+        let json = merge_runtime_overrides(&state, session_id, &pins)
+            .await
+            .unwrap()
+            .unwrap();
+        let overrides: crate::domain::agents::adapter::RuntimeConfigOverrides =
+            serde_json::from_str(&json).unwrap();
+        assert_eq!(overrides.model.as_deref(), Some("new-model"));
+        assert_eq!(overrides.thinking_effort.as_deref(), Some("high"));
+        assert_eq!(overrides.fast_mode, Some(true));
+    }
+
+    #[tokio::test]
+    async fn effort_pin_preserves_unpinned_legacy_model_and_fast_mode() {
+        let (state, session_id) = legacy_codex_session().await;
+        let pins = SessionPins {
+            thinking_effort: Some("low".into()),
+            ..Default::default()
+        };
+        let json = merge_runtime_overrides(&state, session_id, &pins)
+            .await
+            .unwrap()
+            .unwrap();
+        let overrides: crate::domain::agents::adapter::RuntimeConfigOverrides =
+            serde_json::from_str(&json).unwrap();
+        assert_eq!(overrides.model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(overrides.thinking_effort.as_deref(), Some("low"));
+        assert_eq!(overrides.fast_mode, Some(true));
+    }
+
+    #[tokio::test]
+    async fn malformed_override_provenance_rejects_schedule_pin() {
+        let (state, session_id) = legacy_codex_session().await;
+        sqlx::query("UPDATE agent_sessions SET runtime_overrides = '{' WHERE id = ?")
+            .bind(session_id)
+            .execute(&state.write_pool)
+            .await
+            .unwrap();
+        let pins = SessionPins {
+            model: Some("new-model".into()),
+            ..Default::default()
+        };
+        let error = merge_runtime_overrides(&state, session_id, &pins)
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("invalid persisted runtime overrides"));
+        let stored = WsSessionPersistence::try_get_session_row(&state.read_pool, session_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(stored.runtime_overrides.as_deref(), Some("{"));
+    }
+
     #[tokio::test]
     async fn every_pin_lands_on_the_conversations_session() {
         let (pool, state, feature_id, session_id) = session_on("claude_code").await;
@@ -217,7 +400,7 @@ mod tests {
         schedule.target.model = Some("haiku".into());
         schedule.target.thinking_level = Some("medium".into());
         schedule.target.permission_mode = Some("plan".into());
-        schedule.target.profile = Some("bedrock".into());
+        schedule.target.profile = Some("default".into());
 
         apply(&state, feature_id, session_id, &schedule)
             .await
@@ -228,23 +411,23 @@ mod tests {
             Option<String>,
             Option<String>,
             Option<String>,
+            String,
         ) = sqlx::query_as(
-            "SELECT model, thinking_effort, permission_mode, profile
+            "SELECT model, thinking_effort, permission_mode, profile, runtime_overrides
                  FROM agent_sessions WHERE id = ?",
         )
         .bind(session_id)
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(
-            stored,
-            (
-                Some("haiku".into()),
-                Some("medium".into()),
-                Some("plan".into()),
-                Some("bedrock".into())
-            )
-        );
+        assert_eq!(stored.0.as_deref(), Some("haiku"));
+        assert_eq!(stored.1.as_deref(), Some("medium"));
+        assert_eq!(stored.2.as_deref(), Some("plan"));
+        assert_eq!(stored.3.as_deref(), Some("default"));
+        let overrides: crate::domain::agents::adapter::RuntimeConfigOverrides =
+            serde_json::from_str(&stored.4).unwrap();
+        assert_eq!(overrides.model.as_deref(), Some("haiku"));
+        assert_eq!(overrides.thinking_effort.as_deref(), Some("medium"));
     }
 
     /// An unpinned schedule must leave the conversation exactly as the user left

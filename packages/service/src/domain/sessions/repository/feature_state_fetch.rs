@@ -178,11 +178,6 @@ async fn fetch_unbounded_batch(
     Ok(result)
 }
 
-pub(super) struct IncrementalData {
-    pub messages: HashMap<i64, Vec<AgentMessageRow>>,
-    pub updated_tool_calls: HashMap<i64, HashMap<i64, String>>,
-}
-
 pub(super) fn todo_fetch_session_ids(
     full_fetch_ids: &[i64],
     include_full_fetches: bool,
@@ -223,45 +218,6 @@ fn is_todo_source_message(message: &AgentMessageRow) -> bool {
         ("tool_call", Some("TodoWrite" | "TaskCreate" | "TaskUpdate"))
             | ("tool_result" | "tool_error", _)
     )
-}
-
-/// Fetch the new messages produced since `after_id` for each incremental
-/// session, plus any stale tool_call rows whose content may have grown.
-pub(super) async fn fetch_incremental_data(
-    pool: &SqlitePool,
-    fetches: &[(i64, i64)],
-) -> Result<IncrementalData, AppError> {
-    let mut messages: HashMap<i64, Vec<AgentMessageRow>> = HashMap::new();
-    let mut updated_tool_calls: HashMap<i64, HashMap<i64, String>> = HashMap::new();
-
-    for (sid, after_id) in fetches {
-        let msgs = sqlx::query_as::<_, AgentMessageRow>(AssertSqlSafe(format!(
-            "{MESSAGE_SELECT} FROM agent_messages WHERE session_id = ? AND id > ? ORDER BY id ASC"
-        )))
-        .bind(sid)
-        .bind(after_id)
-        .fetch_all(pool)
-        .await?;
-        messages.insert(*sid, msgs);
-
-        // Re-fetch stale tool_call rows
-        let stale = sqlx::query_as::<_, AgentMessageRow>(AssertSqlSafe(format!(
-            "{MESSAGE_SELECT} FROM agent_messages WHERE session_id = ? AND id <= ? AND message_type = 'tool_call' AND content != '{{}}' ORDER BY id ASC"
-        )))
-        .bind(sid)
-        .bind(after_id)
-        .fetch_all(pool)
-        .await?;
-        if !stale.is_empty() {
-            let map: HashMap<i64, String> = stale.into_iter().map(|r| (r.id, r.content)).collect();
-            updated_tool_calls.insert(*sid, map);
-        }
-    }
-
-    Ok(IncrementalData {
-        messages,
-        updated_tool_calls,
-    })
 }
 
 /// Fetch latest todo state for each session from `TodoWrite` snapshots or

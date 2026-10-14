@@ -1,0 +1,159 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, screen } from "@testing-library/react";
+import { render } from "@/test-utils";
+import { ThemeMarketplace } from "./ThemeMarketplace";
+
+const mocks = vi.hoisted(() => ({
+  themeId: "cadencr-dark",
+  mutate: vi.fn(),
+  damaged: false,
+  warning: "",
+  catalogError: "",
+  usableCatalog: false,
+}));
+vi.mock("@/hooks/useTheme", () => ({
+  useTheme: () => ({ themeId: mocks.themeId, isLoading: false }),
+}));
+vi.mock("react-virtuoso", () => ({
+  Virtuoso: ({
+    data,
+    itemContent,
+  }: {
+    data: unknown[];
+    itemContent: (index: number, entry: unknown) => React.ReactNode;
+  }) => data.map((entry, index) => itemContent(index, entry)),
+}));
+vi.mock("@/lib/theme-marketplace", async (original) => ({
+  ...(await original<typeof import("@/lib/theme-marketplace")>()),
+  groupThemePackages: () => [],
+  usableThemeCatalog: () => mocks.usableCatalog,
+  managedThemeDefinition: () => null,
+}));
+vi.mock("@/hooks/useThemeMarketplace", () => ({
+  useThemeMarketplace: () => ({
+    catalog: { data: mocks.catalogError ? { error: mocks.catalogError } : undefined },
+    inventory: {
+      data: [
+        mocks.damaged
+          ? {
+              id: "damaged",
+              name: "Damaged",
+              version: "1.0.0",
+              active: false,
+              theme: null,
+              error: "immutable payload changed",
+              error_code: "MANAGED_THEME_INVALID",
+            }
+          : {
+              id: "midnight",
+              name: "Midnight",
+              version: "1.0.0",
+              active: true,
+              theme: {},
+              warning: mocks.warning || null,
+            },
+      ],
+    },
+    refresh: {},
+    mutation: { mutate: mocks.mutate },
+    recovery: {},
+  }),
+}));
+
+describe("marketplace displayed theme versus saved references", () => {
+  beforeEach(() => {
+    mocks.themeId = "cadencr-dark";
+    mocks.mutate.mockReset();
+    mocks.damaged = false;
+    mocks.warning = "";
+    mocks.catalogError = "";
+    mocks.usableCatalog = false;
+  });
+  it("keeps catalog discovery and installed theme management clearly labeled", async () => {
+    const { user } = render(<ThemeMarketplace />);
+    expect(screen.queryByRole("heading", { name: "Discover themes" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Installed themes (1)" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Search marketplace themes" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Theme safety & diagnostics" }));
+    expect(await screen.findByText(/never executables/)).toBeInTheDocument();
+    expect(screen.getByText(/No current verified mixed catalog/)).toBeInTheDocument();
+  });
+  it("summarizes an unavailable theme catalog and preserves the full diagnostic on disclosure", async () => {
+    mocks.catalogError = "Could not read verified cache: operating system error 2";
+    const { user } = render(<ThemeMarketplace />);
+    expect(
+      screen.getByText("Theme catalog unavailable. Installed themes remain manageable."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Using verified cached theme catalog/)).not.toBeInTheDocument();
+    expect(screen.queryByText(mocks.catalogError)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Theme safety & diagnostics" }));
+    expect(await screen.findByText(mocks.catalogError)).toBeInTheDocument();
+  });
+  it("describes cached theme availability only when the catalog is usable", () => {
+    mocks.catalogError = "Catalog refresh failed; verified cache retained";
+    mocks.usableCatalog = true;
+    render(<ThemeMarketplace />);
+    expect(
+      screen.getByText("Using verified cached theme catalog. See diagnostics for details."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Theme catalog unavailable/)).not.toBeInTheDocument();
+  });
+  it("shows offline-policy warnings without blocking usable installed theme actions", () => {
+    mocks.warning = "Remote theme policy unavailable; verified cached policy used.";
+    render(<ThemeMarketplace />);
+    const diagnostic = screen.getByText(mocks.warning);
+    expect(diagnostic).toHaveAttribute("role", "status");
+    expect(diagnostic).not.toHaveClass("text-destructive");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    const activate = screen.getByRole("button", { name: "Activate theme" });
+    expect(activate).toBeEnabled();
+    fireEvent.click(activate);
+    expect(mocks.mutate).toHaveBeenCalledWith({ kind: "apply", id: "midnight" });
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "New author project name for Midnight" }),
+      {
+        target: { value: "Local copy" },
+      },
+    );
+    const duplicate = screen.getByRole("button", { name: "Duplicate to author project" });
+    expect(duplicate).toBeEnabled();
+    fireEvent.click(duplicate);
+    expect(mocks.mutate).toHaveBeenCalledWith(
+      { kind: "duplicate", id: "midnight", label: "Local copy" },
+      expect.any(Object),
+    );
+    expect(screen.getByRole("button", { name: "Remove theme…" })).toBeEnabled();
+  });
+
+  it("shows corruption and permits confirmed removal, but never applies or duplicates it", () => {
+    mocks.damaged = true;
+    render(<ThemeMarketplace />);
+    expect(screen.getByText(/immutable payload changed/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Activate theme" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Duplicate to author project" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Remove theme…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm removal and built-in fallback" }));
+    expect(mocks.mutate).toHaveBeenCalledWith(
+      { kind: "remove", id: "damaged", confirmFallback: true },
+      expect.any(Object),
+    );
+  });
+  it("allows activating a theme referenced only by the dark system slot in manual mode", () => {
+    render(<ThemeMarketplace />);
+    expect(screen.getByText(/Saved selection/)).toBeInTheDocument();
+    const activate = screen.getByRole("button", { name: "Activate theme" });
+    expect(activate).toBeEnabled();
+    fireEvent.click(activate);
+    expect(mocks.mutate).toHaveBeenCalledWith({ kind: "apply", id: "midnight" });
+    fireEvent.click(screen.getByRole("button", { name: "Remove theme…" }));
+    expect(screen.getByText(/Any manual or system selection/)).toBeInTheDocument();
+  });
+  it("disables activation only when actually displayed, including follow-system resolution", () => {
+    mocks.themeId = "managed:midnight";
+    const view = render(<ThemeMarketplace />);
+    expect(screen.getByRole("button", { name: "Theme active" })).toBeDisabled();
+    mocks.themeId = "cadencr-light";
+    view.rerender(<ThemeMarketplace />);
+    expect(screen.getByRole("button", { name: "Activate theme" })).toBeEnabled();
+  });
+});

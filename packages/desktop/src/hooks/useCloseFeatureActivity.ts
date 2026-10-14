@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { getListFeatureActivityQueryKey, useKillTerminalSessions } from "@/api/generated";
 import { apiErrorMessage } from "@/lib/api-errors";
-import { desktopBridge } from "@/lib/desktop-bridge";
+import { desktopBridge, isDesktopShell } from "@/lib/desktop-bridge";
 import { closeFeatureActivityNoun } from "@/lib/feature-activity-close";
 import { useTerminalStore } from "@/hooks/useTerminalState";
 
@@ -12,6 +12,7 @@ export interface CloseFeatureActivityArgs {
   featureId: number;
   shellCount: number;
   browserCount: number;
+  downloadCount: number;
 }
 
 /**
@@ -25,9 +26,19 @@ export function useCloseFeatureActivity(): (args: CloseFeatureActivityArgs) => v
   const { mutateAsync: killTerminals } = useKillTerminalSessions();
   const queryClient = useQueryClient();
   return useCallback(
-    ({ projectId, featureId, shellCount, browserCount }: CloseFeatureActivityArgs): void => {
-      if (shellCount <= 0 && browserCount <= 0) return;
-      const noun = closeFeatureActivityNoun(shellCount, browserCount);
+    ({
+      projectId,
+      featureId,
+      shellCount,
+      browserCount,
+      downloadCount,
+    }: CloseFeatureActivityArgs): void => {
+      if (!isDesktopShell()) {
+        browserCount = 0;
+        downloadCount = 0;
+      }
+      if (shellCount <= 0 && browserCount <= 0 && downloadCount <= 0) return;
+      const noun = closeFeatureActivityNoun(shellCount, browserCount, downloadCount);
       const work = (async (): Promise<void> => {
         if (shellCount > 0) {
           await killTerminals({ params: { feature_id: featureId } });
@@ -45,7 +56,9 @@ export function useCloseFeatureActivity(): (args: CloseFeatureActivityArgs) => v
             }),
           });
         }
-        if (browserCount > 0) await desktopBridge.closeBrowserTabsForScope(featureId);
+        if (browserCount > 0 || downloadCount > 0) {
+          await desktopBridge.closeBrowserTabsForScope(featureId);
+        }
       })();
       toast.promise(work, {
         loading: `Closing ${noun}…`,

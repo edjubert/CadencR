@@ -3,21 +3,22 @@ import type { VirtuosoHandle } from "react-virtuoso";
 import type { AgentBlockData } from "@/components/AgentBlock";
 import type { DisplayItem } from "@/components/agentStreamDisplay";
 import {
-  computeConversationMatches,
-  type ConversationMatch,
-} from "@/lib/conversation-search/matches";
+  ConversationSearchIndex,
+  ConversationSearchSnapshot,
+} from "@/lib/conversation-search/incremental-index";
+import type { ConversationMatch } from "@/lib/conversation-search/matches";
 import {
   clearConversationHighlights,
   paintConversationHighlights,
   scrollActiveMatchIntoView,
 } from "@/lib/conversation-search/highlight";
 import { useDebouncedValue } from "./useDebouncedValue";
+import { useConversationSearchNavigation } from "./useConversationSearchNavigation";
 
 const SEARCH_DEBOUNCE_MS = 100;
 // Far off-screen jumps need a few frames for Virtuoso to mount the row and
 // settle variable row heights; we re-center the occurrence on each frame.
 const REPAINT_FRAMES = 8;
-const NO_MATCHES: ConversationMatch[] = [];
 
 export interface ConversationSearchState {
   isOpen: boolean;
@@ -51,8 +52,8 @@ interface PaintArgs {
   virtuosoRef: RefObject<VirtuosoHandle | null>;
   isOpen: boolean;
   query: string;
-  matches: ConversationMatch[];
-  activeIndex: number;
+  matchCount: number;
+  activeMatch: ConversationMatch | null;
 }
 
 /**
@@ -66,12 +67,14 @@ function usePaintConversationMatches({
   virtuosoRef,
   isOpen,
   query,
-  matches,
-  activeIndex,
+  matchCount,
+  activeMatch,
 }: PaintArgs): void {
-  const activeMatch = matches[activeIndex] ?? null;
   const stateRef = useRef({ isOpen, query, activeMatch });
   stateRef.current = { isOpen, query, activeMatch };
+  const targetRow = activeMatch?.rowIndex ?? -1;
+  const targetBlock = activeMatch?.blockId ?? "";
+  const targetOcc = activeMatch?.occurrenceInBlock ?? -1;
 
   const repaint = useCallback((): void => {
     const scroller = scrollerRef.current;
@@ -84,15 +87,15 @@ function usePaintConversationMatches({
   // on the match count (not the array) so a fresh `matches` identity on every
   // streaming chunk doesn't trigger a full repaint; scroll/navigation repaints
   // cover row recycling.
-  useEffect(() => repaint(), [repaint, isOpen, query, matches.length, activeIndex]);
+  useEffect(
+    () => repaint(),
+    [repaint, isOpen, query, matchCount, targetRow, targetBlock, targetOcc],
+  );
 
   // Bring the active match into view, then keep centering the exact occurrence
   // across the frames Virtuoso needs to mount the row and settle row heights.
   // `scrollToIndex` only positions the row — a block taller than the viewport
   // can still hide the occurrence, so we re-center its range every frame.
-  const targetRow = activeMatch?.rowIndex ?? -1;
-  const targetBlock = activeMatch?.blockId ?? "";
-  const targetOcc = activeMatch?.occurrenceInBlock ?? -1;
   useEffect(() => {
     if (!isOpen || targetRow < 0) return;
     const scroller = scrollerRef.current;
@@ -153,29 +156,34 @@ export function useConversationSearch({
 }: UseConversationSearchArgs): ConversationSearchState {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [activeIndex, setActiveIndex] = useState(0);
   const [focusNonce, setFocusNonce] = useState(0);
+  const searchIndexRef = useRef<ConversationSearchIndex | null>(null);
+  if (!searchIndexRef.current) searchIndexRef.current = new ConversationSearchIndex();
+  const searchIndex = searchIndexRef.current;
 
   const debouncedQuery = useDebouncedValue(query, SEARCH_DEBOUNCE_MS);
-  const matches = useMemo(
-    () => (isOpen ? computeConversationMatches(items, debouncedQuery, toolResultMap) : NO_MATCHES),
-    [isOpen, items, debouncedQuery, toolResultMap],
+  const snapshot = useMemo(
+    () =>
+      isOpen
+        ? searchIndex.update(items, debouncedQuery, toolResultMap)
+        : ConversationSearchSnapshot.empty,
+    [isOpen, items, debouncedQuery, toolResultMap, searchIndex],
   );
-  // Clamp at read time so a shrinking match set can't leave a stale index (or a
-  // transient "4/3") — no extra effect needed.
-  const activeNumber = matches.length === 0 ? 0 : Math.min(activeIndex, matches.length - 1) + 1;
-
-  // New query → jump back to the first match.
-  useEffect(() => setActiveIndex(0), [debouncedQuery]);
+  const { activeMatch, activeNumber, next, prev, reset } = useConversationSearchNavigation(
+    snapshot,
+    debouncedQuery,
+  );
 
   usePaintConversationMatches({
     scrollerRef,
     virtuosoRef,
     isOpen,
     query: debouncedQuery,
-    matches,
-    activeIndex: activeNumber - 1,
+    matchCount: snapshot.matchCount,
+    activeMatch,
   });
+
+  useEffect(() => () => searchIndex.clear(), [searchIndex]);
 
   const openSearch = useCallback((): void => {
     setIsOpen(true);
@@ -184,26 +192,16 @@ export function useConversationSearch({
   const closeSearch = useCallback((): void => {
     setIsOpen(false);
     setQuery("");
-    setActiveIndex(0);
+    reset();
+    searchIndex.clear();
     clearConversationHighlights();
-  }, []);
-  const step = useCallback(
-    (delta: number): void => {
-      const count = matches.length;
-      if (count === 0) return;
-      // `% count` keeps the index in range even if it was left stale by a shrink.
-      setActiveIndex((i) => (i + delta + count) % count);
-    },
-    [matches.length],
-  );
-  const next = useCallback(() => step(1), [step]);
-  const prev = useCallback(() => step(-1), [step]);
+  }, [reset, searchIndex]);
 
   return useMemo(
     () => ({
       isOpen,
       query,
-      matchCount: matches.length,
+      matchCount: snapshot.matchCount,
       activeNumber,
       focusNonce,
       setQuery,
@@ -212,6 +210,16 @@ export function useConversationSearch({
       next,
       prev,
     }),
-    [isOpen, query, matches.length, activeNumber, focusNonce, openSearch, closeSearch, next, prev],
+    [
+      isOpen,
+      query,
+      snapshot.matchCount,
+      activeNumber,
+      focusNonce,
+      openSearch,
+      closeSearch,
+      next,
+      prev,
+    ],
   );
 }

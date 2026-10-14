@@ -5,6 +5,7 @@ import { processStreamEvent } from "./ws-message-processing-stream";
 import { processSystemMessage } from "./ws-message-processing-system";
 import { processUserMessage } from "./ws-message-processing-user";
 import { nextSyntheticBlockId } from "./ws-message-processing-utils";
+import type { StructuredToolStream } from "./ws-structured-tool-stream";
 
 export { isRecord } from "./ws-message-processing-utils";
 
@@ -59,6 +60,8 @@ export interface StreamingState {
    * `new Map(...)` clone on the common text/tool-call-only delta.
    */
   toolResultMapVersion: number;
+  /** Raw chunked input for live tool JSON; kept out of render-facing blocks. */
+  structuredToolStreams: Map<string, StructuredToolStream>;
 }
 
 export interface ParserSignals {
@@ -74,7 +77,7 @@ export interface MessageProcessingResult {
 }
 
 export type BlockMutation = {
-  action: "append" | "update" | "replace";
+  action: "append" | "update" | "replace" | "finalize";
   block: AgentBlockData;
 };
 
@@ -90,6 +93,7 @@ export function createStreamingState(): StreamingState {
     tailRepairNeeded: false,
     rootBlocksVersion: 0,
     toolResultMapVersion: 0,
+    structuredToolStreams: new Map(),
   };
 }
 
@@ -131,16 +135,7 @@ export function processSdkMessage(
   }
 }
 
-export function blockIdFromAgentMessage(msg: Record<string, unknown>): string | null {
-  const rawId = msg.agent_message_id;
-  if (typeof rawId === "number" && Number.isSafeInteger(rawId)) {
-    return `msg-${rawId}`;
-  }
-  if (typeof rawId === "string" && /^\d+$/.test(rawId)) {
-    return `msg-${rawId}`;
-  }
-  return null;
-}
+export { blockIdFromAgentMessage } from "./ws-message-identity";
 
 function processAssistantMessage(
   msg: Record<string, unknown>,

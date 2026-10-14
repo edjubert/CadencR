@@ -14,17 +14,40 @@ pub async fn get_draft(pool: &SqlitePool, session_id: i64) -> Result<Option<Stri
 }
 
 /// Fetch the full, untruncated `content` for a single `agent_messages` row.
-/// Used by the "Show all" affordance on Bash blocks whose payload was
-/// tail-truncated for the agent-state response.
+/// Used by explicit expansion of any oversized payload preview in agent state.
 pub async fn get_message_content(
     pool: &SqlitePool,
     message_id: i64,
 ) -> Result<Option<String>, AppError> {
-    let row: Option<(String,)> = sqlx::query_as("SELECT content FROM agent_messages WHERE id = ?")
+    let row: Option<(i64, String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT session_id, content, message_type, tool_use_id, tool_name FROM agent_messages WHERE id = ?",
+    )
         .bind(message_id)
         .fetch_optional(pool)
         .await?;
-    Ok(row.map(|(c,)| c))
+    let Some((session_id, mut content, message_type, tool_use_id, tool_name)) = row else {
+        return Ok(None);
+    };
+    if message_type == "tool_call"
+        && super::truncation::is_file_change_tool_name(tool_name.as_deref())
+    {
+        if let Some(tool_use_id) = tool_use_id {
+            let result: Option<(String,)> = sqlx::query_as(
+                "SELECT content FROM agent_messages
+                 WHERE session_id = ? AND tool_use_id = ?
+                   AND message_type IN ('tool_result', 'tool_error')
+                 ORDER BY id DESC LIMIT 1",
+            )
+            .bind(session_id)
+            .bind(tool_use_id)
+            .fetch_optional(pool)
+            .await?;
+            if let Some((result_content,)) = result {
+                super::tool_blocks::merge_tool_result_patch(&mut content, &result_content);
+            }
+        }
+    }
+    Ok(Some(content))
 }
 
 pub async fn save_draft(
@@ -122,5 +145,36 @@ mod tests {
         let pool = setup_test_db().await;
         let res = get_message_content(&pool, 999_999).await.unwrap();
         assert!(res.is_none());
+    }
+
+    #[tokio::test]
+    async fn full_file_change_content_includes_patch_recovered_from_result() {
+        let pool = setup_test_db().await;
+        let session_id = insert_session(&pool, 1, "completed").await;
+        let call_id = insert_message(
+            &pool,
+            session_id,
+            "tool_call",
+            r#"{"file_path":"src/main.rs"}"#,
+            Some("Write"),
+            Some("write-1"),
+            None,
+        )
+        .await;
+        insert_message(
+            &pool,
+            session_id,
+            "tool_result",
+            r#"{"patch_text":"*** Begin Patch\\n+new\\n*** End Patch"}"#,
+            None,
+            Some("write-1"),
+            None,
+        )
+        .await;
+
+        let full = get_message_content(&pool, call_id).await.unwrap().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&full).unwrap();
+        assert_eq!(parsed["file_path"], "src/main.rs");
+        assert!(parsed["patch_text"].as_str().unwrap().contains("+new"));
     }
 }

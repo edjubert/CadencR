@@ -45,6 +45,68 @@ describe("AgentBlock", () => {
     });
   });
 
+  describe("truncated persisted content", () => {
+    it("shows a safe text preview without parsing Markdown or fetching automatically", () => {
+      render(
+        <AgentBlock
+          block={makeBlock({
+            id: "msg-42",
+            type: "text",
+            content: "# Preview only",
+            truncatedContent: true,
+          })}
+        />,
+      );
+
+      expect(screen.getByText("# Preview only")).toHaveProperty("tagName", "PRE");
+      expect(screen.queryByRole("heading", { name: "Preview only" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Load full content" })).toBeInTheDocument();
+    });
+
+    it("gates a truncated file-change tool before its normal renderer", () => {
+      render(
+        <AgentBlock
+          block={makeBlock({
+            id: "msg-43",
+            type: "tool_call",
+            toolName: "Write",
+            content: JSON.stringify({ file_path: "src/foo.ts", content: "partial" }),
+            toolArgs: JSON.stringify({ file_path: "src/foo.ts", content: "partial" }),
+            truncatedContent: true,
+          })}
+        />,
+      );
+
+      expect(screen.queryByTestId("inline-diff")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Load full content" })).toBeInTheDocument();
+    });
+
+    it("gates truncated Bash arguments but leaves truncated output on the existing path", () => {
+      const call = makeBlock({
+        id: "msg-44",
+        type: "tool_call",
+        toolName: "Bash",
+        toolUseId: "bash-1",
+        content: JSON.stringify({ command: "pwd" }),
+        toolArgs: JSON.stringify({ command: "pwd" }),
+      });
+      const result = makeBlock({
+        id: "msg-45",
+        type: "tool_result",
+        sourceToolName: "Bash",
+        toolUseId: "bash-1",
+        content: JSON.stringify({ output: "preview" }),
+        truncatedContent: true,
+      });
+      const { rerender } = render(<AgentBlock block={{ ...call, truncatedContent: true }} />);
+      expect(screen.getByRole("button", { name: "Load full content" })).toBeInTheDocument();
+
+      rerender(<AgentBlock block={call} toolResultMap={new Map([["bash-1", result]])} />);
+      expect(screen.getByText("pwd")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Load full content" })).not.toBeInTheDocument();
+    });
+  });
+
   describe("code block", () => {
     it("renders code with language label", () => {
       render(

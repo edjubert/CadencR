@@ -10,6 +10,8 @@ pub struct CommandsGetPayload {
     /// `"opencode"`). Required so command discovery is scoped to the active
     /// provider instead of falling back to shared filesystem scans.
     pub provider: String,
+    #[serde(default)]
+    pub profile: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

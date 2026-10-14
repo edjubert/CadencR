@@ -143,6 +143,8 @@ pub enum RuntimeEventKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeTurnStartedSource {
+    /// Provider-confirmed activity, including autonomous resumed turns.
+    ProviderActivity,
     ContextCompaction,
     ManualCompact,
 }
@@ -150,6 +152,7 @@ pub enum RuntimeTurnStartedSource {
 impl RuntimeTurnStartedSource {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::ProviderActivity => "provider_activity",
             Self::ContextCompaction => "context_compaction",
             Self::ManualCompact => "manual_compact",
         }

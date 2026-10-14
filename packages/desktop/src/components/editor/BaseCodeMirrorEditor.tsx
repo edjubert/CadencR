@@ -7,7 +7,7 @@ import {
   keymap,
   tooltips,
 } from "@codemirror/view";
-import { EditorState, Compartment, type Extension } from "@codemirror/state";
+import { EditorState, Compartment, type Extension, type Text } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { bracketMatching, indentOnInput } from "@codemirror/language";
 import { vim } from "@replit/codemirror-vim";
@@ -32,6 +32,8 @@ interface BaseCodeMirrorEditorProps {
   ergonomics?: boolean;
   /** Called on every doc change — callers own debounce */
   onChange?: (value: string) => void;
+  /** Document notification without serializing the full buffer on each keystroke. */
+  onDocChange?: (doc: Text) => void;
   /** Mod-s handler */
   onSave?: () => void;
   /** Additional extensions (cursor tracking, etc.) */
@@ -90,6 +92,7 @@ function buildEditorExtensions({
   language,
   extraExtensions,
   onChangeRef,
+  onDocChangeRef,
   onSaveRef,
   vimCompartment,
   readOnlyCompartment,
@@ -101,13 +104,16 @@ function buildEditorExtensions({
   language?: Extension | null;
   extraExtensions?: Extension[];
   onChangeRef: RefObject<((value: string) => void) | undefined>;
+  onDocChangeRef: RefObject<((doc: Text) => void) | undefined>;
   onSaveRef: RefObject<(() => void) | undefined>;
   vimCompartment: RefObject<Compartment>;
   readOnlyCompartment: RefObject<Compartment>;
   languageCompartment: RefObject<Compartment>;
 }): Extension[] {
   const updateListener = EditorView.updateListener.of((update) => {
-    if (update.docChanged) onChangeRef.current?.(update.state.doc.toString());
+    if (!update.docChanged) return;
+    onDocChangeRef.current?.(update.state.doc);
+    onChangeRef.current?.(update.state.doc.toString());
   });
   const saveKeymap = keymap.of([
     {
@@ -146,6 +152,7 @@ export default function BaseCodeMirrorEditor({
   vimMode = false,
   ergonomics = true,
   onChange,
+  onDocChange,
   onSave,
   extraExtensions,
   className = "h-full overflow-auto",
@@ -161,6 +168,8 @@ export default function BaseCodeMirrorEditor({
   // Store callbacks in refs to avoid stale closures
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  const onDocChangeRef = useRef(onDocChange);
+  onDocChangeRef.current = onDocChange;
   const onSaveRef = useRef(onSave);
   onSaveRef.current = onSave;
 
@@ -185,6 +194,7 @@ export default function BaseCodeMirrorEditor({
       language,
       extraExtensions,
       onChangeRef,
+      onDocChangeRef,
       onSaveRef,
       vimCompartment,
       readOnlyCompartment,

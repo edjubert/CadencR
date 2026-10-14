@@ -21,6 +21,8 @@ static READERS: LazyLock<Mutex<HashMap<u64, RegisteredReader>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 struct RegisteredReader {
+    #[allow(dead_code)] // Read during process shutdown.
+    db_session_id: i64,
     #[allow(dead_code)] // Read by the service binary's shutdown path.
     runtime: Option<RuntimeSessionWeakHandle>,
     task: JoinHandle<()>,
@@ -32,7 +34,7 @@ fn readers() -> std::sync::MutexGuard<'static, HashMap<u64, RegisteredReader>> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-pub(crate) fn spawn<F>(runtime: Option<RuntimeSessionWeakHandle>, reader: F)
+pub(crate) fn spawn<F>(db_session_id: i64, runtime: Option<RuntimeSessionWeakHandle>, reader: F)
 where
     F: Future<Output = ()> + Send + 'static,
 {
@@ -45,7 +47,14 @@ where
         reader.await;
         readers().remove(&id);
     });
-    readers().insert(id, RegisteredReader { runtime, task });
+    readers().insert(
+        id,
+        RegisteredReader {
+            db_session_id,
+            runtime,
+            task,
+        },
+    );
     let _ = start_tx.send(());
 }
 
@@ -58,7 +67,7 @@ pub(crate) async fn shutdown(pool: &sqlx::SqlitePool) {
     let entries = std::mem::take(&mut *readers())
         .into_values()
         .collect::<Vec<_>>();
-    close_runtimes(&entries).await;
+    close_runtimes(&entries, pool).await;
     let aborted = join_within(
         entries.into_iter().map(|entry| entry.task).collect(),
         READER_SHUTDOWN_TIMEOUT,
@@ -77,15 +86,27 @@ pub(crate) async fn shutdown(pool: &sqlx::SqlitePool) {
 }
 
 #[allow(dead_code)] // Reachable through `shutdown` in the service binary.
-async fn close_runtimes(entries: &[RegisteredReader]) {
+async fn close_runtimes(entries: &[RegisteredReader], pool: &sqlx::SqlitePool) {
     let runtimes = entries
         .iter()
-        .filter_map(|entry| entry.runtime.as_ref()?.upgrade())
+        .filter_map(|entry| Some((entry.db_session_id, entry.runtime.as_ref()?.upgrade()?)))
         .collect::<Vec<_>>();
     let close_all = async {
-        futures::future::join_all(runtimes.into_iter().map(|runtime| async move {
-            runtime.write().await.close().await;
-        }))
+        futures::future::join_all(runtimes.into_iter().map(
+            |(db_session_id, runtime)| async move {
+                if let Err(error) = runtime.write().await.close().await {
+                    let message = format!("Runtime close failed during shutdown: {error}");
+                    tracing::warn!(db_session_id, %error, "runtime close failed during shutdown");
+                    super::persistence::WsSessionPersistence::persist_error_message_static(
+                        pool,
+                        db_session_id,
+                        &message,
+                        None,
+                    )
+                    .await;
+                }
+            },
+        ))
         .await;
     };
     if tokio::time::timeout(READER_SHUTDOWN_TIMEOUT, close_all)

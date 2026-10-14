@@ -6,6 +6,7 @@
  */
 import { memo, type ReactNode } from "react";
 import { EyeIcon, PencilIcon } from "lucide-react";
+import { EditorDiskSyncIndicator, type EditorDiskSyncState } from "./EditorDiskSyncIndicator";
 import { LspStatusIndicator } from "./LspStatusIndicator";
 import type { LspStatus } from "@/lib/lsp/useLsp";
 
@@ -19,6 +20,9 @@ export interface EditorStatusBarProps {
   col: number;
   language: ReactNode;
   autoSavedVisible: boolean;
+  diskSync?: EditorDiskSyncState;
+  isFormatting?: boolean;
+  readError?: string;
   lspStatus: LspStatus;
   lspLanguageId: string | null;
   lspError?: string;
@@ -38,6 +42,9 @@ export const EditorStatusBar = memo(function EditorStatusBar({
   col,
   language,
   autoSavedVisible,
+  diskSync,
+  isFormatting,
+  readError,
   lspStatus,
   lspLanguageId,
   lspError,
@@ -49,7 +56,19 @@ export const EditorStatusBar = memo(function EditorStatusBar({
     <div className="flex items-center justify-between px-3 py-0.5 border-t border-border bg-card text-xs text-muted-foreground shrink-0">
       <span>{isPreview ? "Preview" : `Ln ${line}, Col ${col}`}</span>
       <div className="flex items-center gap-3">
-        {autoSavedVisible && <span>Auto-saved</span>}
+        {readError && (
+          <span role="alert" title={readError} className="text-destructive">
+            Disk check failed
+          </span>
+        )}
+        {diskSync && <EditorDiskSyncIndicator sync={diskSync} />}
+        {isFormatting ? (
+          <span role="status">Formatting…</span>
+        ) : diskSync?.isSaving ? (
+          <span role="status">Saving…</span>
+        ) : (
+          autoSavedVisible && <span>Auto-saved</span>
+        )}
         {preview && (
           <button
             type="button"

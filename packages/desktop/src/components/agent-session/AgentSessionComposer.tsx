@@ -1,6 +1,6 @@
 import { memo, useCallback, useMemo, type RefObject, type ReactElement } from "react";
 import { parseThinkingEffort } from "@/shared/thinking-effort";
-import { normalizeContextWindow } from "@/types/agent";
+import { contextUsageToShow } from "@/types/agent";
 import { AgentPromptBar, type AgentPromptBarHandle } from "../AgentPromptBar";
 import { ContextUsageBar } from "../ContextUsageBar";
 import type { AgentSessionProps } from "./types";
@@ -23,8 +23,6 @@ export interface AgentSessionComposerProps {
   autoScrollEnabled: boolean;
   showWorktreeChip: boolean;
   activeProviderId: string;
-  currentModelLabel: string;
-  modelSelectionStatus: AgentSessionMetaProps["modelSelectionStatus"];
   models: AgentSessionMetaProps["models"];
   providers: AgentSessionMetaProps["providers"];
   canChangeProvider: boolean;
@@ -41,8 +39,8 @@ export interface AgentSessionComposerProps {
   claudeProfiles: AgentSessionMetaProps["claudeProfiles"];
   claudeProfilesLoading: boolean;
   claudeProfilesError: boolean;
-  activeClaudeProfile: string;
   onClaudeProfileChange: (profile: string) => void;
+  activeClaudeProfile: string;
 }
 
 type AgentSessionMetaProps = Parameters<typeof MetaBar>[0];
@@ -106,11 +104,7 @@ export const AgentSessionComposer = memo(function AgentSessionComposer(
       {metaBar}
       {promptBar}
       {secondaryBar}
-      <ComposerContextUsage
-        contextUsage={contextUsage}
-        isAgentWorking={props.isAgentWorking}
-        collapsible={props.collapsible}
-      />
+      <ComposerContextUsage contextUsage={contextUsage} isAgentWorking={props.isAgentWorking} />
     </div>
   );
 });
@@ -145,7 +139,6 @@ function AgentSessionMeta(
       worktreeSelectedBranch={session.worktreeSelectedBranch}
       onWorktreeBranchChange={session.onWorktreeBranchChange}
       onProviderChange={session.onProviderChange}
-      currentProviderId={props.activeProviderId}
       onModelChange={session.onModelChange}
       currentThinkingEffort={parseThinkingEffort(session.currentThinkingEffort)}
       supportedThinkingEfforts={props.supportedThinkingEfforts}
@@ -159,17 +152,14 @@ function AgentSessionMeta(
       claudeProfiles={props.claudeProfiles}
       claudeProfilesLoading={props.claudeProfilesLoading}
       claudeProfilesError={props.claudeProfilesError}
-      activeClaudeProfile={props.activeClaudeProfile}
       onClaudeProfileChange={props.onClaudeProfileChange}
+      activeClaudeProfile={props.activeClaudeProfile}
       showReadOnlyModel={session.showReadOnlyModel}
-      currentModelId={session.currentModelId}
-      currentModelLabel={props.currentModelLabel}
-      modelSelectionStatus={props.modelSelectionStatus}
+      currentSelection={session.selection ?? null}
       models={props.models}
       providers={props.providers}
       canChangeProvider={props.canChangeProvider}
       todos={session.todos}
-      runtimeProvider={session.runtimeProvider}
       runtimeSessionId={session.runtimeSessionId}
       featureId={session.featureId}
       wsSessionId={session.wsSessionId}
@@ -177,6 +167,7 @@ function AgentSessionMeta(
       isRunning={session.status === "agent"}
       onPause={session.onStop}
       onModelSelected={() => props.promptBarRef.current?.focusInput()}
+      sessionConfigControls={session.sessionConfigControls}
     />
   );
 }
@@ -285,8 +276,9 @@ function AgentSessionSecondary(props: AgentSessionComposerProps): ReactElement {
       claudeProfiles={props.claudeProfiles}
       claudeProfilesLoading={props.claudeProfilesLoading}
       claudeProfilesError={props.claudeProfilesError}
-      activeClaudeProfile={props.activeClaudeProfile}
       onClaudeProfileChange={props.onClaudeProfileChange}
+      activeClaudeProfile={props.activeClaudeProfile}
+      showProfileSelector={props.showClaudeProfileSelector}
     />
   );
 }
@@ -294,16 +286,11 @@ function AgentSessionSecondary(props: AgentSessionComposerProps): ReactElement {
 function ComposerContextUsage({
   contextUsage,
   isAgentWorking,
-  collapsible,
 }: {
   contextUsage: AgentSessionProps["contextUsage"];
   isAgentWorking: boolean;
-  collapsible: boolean;
 }) {
-  const shouldShow = collapsible
-    ? !!contextUsage
-    : normalizeContextWindow(contextUsage?.contextWindow) != null;
-  if (!contextUsage || !shouldShow) return null;
+  if (!contextUsageToShow(contextUsage, isAgentWorking)) return null;
 
   return (
     <div className={CONTEXT_USAGE_CLASS}>

@@ -10,6 +10,8 @@
 //! validator (super-defensive: a bad value never breaks the app). `None` means
 //! "treat an invalid value as unset" and let the consumer's own fallback apply.
 
+mod sidebar;
+
 /// The shape a setting's string value must take.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValueKind {
@@ -79,7 +81,7 @@ fn editor_tooling_spec(key: &str) -> Option<SettingSpec> {
 
 /// Spec for a workspace/global key, or `None` for free-form keys.
 pub fn workspace_spec(key: &str) -> Option<SettingSpec> {
-    if let Some(spec) = editor_tooling_spec(key) {
+    if let Some(spec) = editor_tooling_spec(key).or_else(|| sidebar::sidebar_display_spec(key)) {
         return Some(spec);
     }
     let spec = match key {
@@ -91,12 +93,17 @@ pub fn workspace_spec(key: &str) -> Option<SettingSpec> {
         | "editor_sidebar_collapsed"
         | "git_sidebar_collapsed"
         | "theme_follow_system"
+        | "notch_always_animate"
+        | "notch_default_applied"
         | "claude_bypass_permissions_enabled"
         | "codex_full_access_enabled"
         | "onboarding_intro_shown" => SettingSpec::new(BOOL, Some("false")),
         // These default on.
         "editor_auto_save"
+        | "sidebar_provider_logos"
+        | "layout_auto_mode_default"
         | "animations_enabled"
+        | "notch_always_on"
         | "browser_mcp_enabled"
         | "project_mcp_enabled" => SettingSpec::new(BOOL, Some("true")),
         "workspace_mcp_enabled" => SettingSpec::new(BOOL, Some("true")),
@@ -109,18 +116,25 @@ pub fn workspace_spec(key: &str) -> Option<SettingSpec> {
         }
         // Enums (mirrors the frontend option sets).
         "notification_mode" => SettingSpec::new(
-            ValueKind::Enum(&["native", "in_app", "off"]),
+            ValueKind::Enum(&["native", "in_app", "notch", "off"]),
             Some("native"),
         ),
         "browser_default_mode" => {
             SettingSpec::new(ValueKind::Enum(&["normal", "private"]), Some("normal"))
         }
+        "browser_search_engine" => SettingSpec::new(
+            ValueKind::Enum(&["google", "duckduckgo", "bing", "brave"]),
+            Some("google"),
+        ),
         "editor_file_tree_icon_set" => SettingSpec::new(
             ValueKind::Enum(&["minimal", "standard", "complete"]),
             Some("standard"),
         ),
         "git_diff_view_mode" => {
             SettingSpec::new(ValueKind::Enum(&["unified", "split"]), Some("unified"))
+        }
+        "editor_vim_mode_level" => {
+            SettingSpec::new(ValueKind::Enum(&["0", "1", "2", "3"]), Some("0"))
         }
         "agent_stream_verbosity_mode" => SettingSpec::new(
             ValueKind::Enum(&["maximal", "auto_collapse", "collapsed", "compact"]),
@@ -165,6 +179,14 @@ mod tests {
     }
 
     #[test]
+    fn auto_layout_defaults_on() {
+        assert_eq!(
+            workspace_spec("layout_auto_mode_default").unwrap().default,
+            Some("true")
+        );
+    }
+
+    #[test]
     fn mcp_setting_defaults_enable_agent_mcp_tools_by_default() {
         assert_eq!(
             workspace_spec("project_mcp_enabled").unwrap().default,
@@ -188,7 +210,18 @@ mod tests {
     fn enum_spec_validates() {
         let spec = workspace_spec("notification_mode").unwrap();
         assert!(spec.is_valid("native"));
+        assert!(spec.is_valid("notch"));
         assert!(!spec.is_valid("loud"));
+    }
+
+    #[test]
+    fn browser_search_engine_spec_matches_frontend_options() {
+        let spec = workspace_spec("browser_search_engine").unwrap();
+        for valid in ["google", "duckduckgo", "bing", "brave"] {
+            assert!(spec.is_valid(valid), "expected {valid} to be valid");
+        }
+        assert!(!spec.is_valid("ask-jeeves"));
+        assert_eq!(spec.default, Some("google"));
     }
 
     #[test]
@@ -249,6 +282,26 @@ mod tests {
             );
             assert!(project_spec(key).is_some(), "{key} missing project spec");
         }
+    }
+
+    #[test]
+    fn editor_vim_mode_level_accepts_0_to_3_and_rejects_others() {
+        let spec = workspace_spec("editor_vim_mode_level").expect("key must be registered");
+        assert_eq!(spec.default, Some("0"));
+        for valid in ["0", "1", "2", "3"] {
+            assert!(spec.is_valid(valid), "expected {valid} to be valid");
+        }
+        assert!(!spec.is_valid("4"));
+        assert!(!spec.is_valid("true"));
+    }
+
+    #[test]
+    fn sidebar_provider_logos_default_on_and_validate() {
+        let spec = workspace_spec("sidebar_provider_logos").unwrap();
+        assert_eq!(spec.default, Some("true"));
+        assert!(spec.is_valid("true"));
+        assert!(spec.is_valid("false"));
+        assert!(!spec.is_valid("hidden"));
     }
 
     #[test]

@@ -1,17 +1,21 @@
-import { memo, useCallback, useRef, type ReactElement, type ReactNode } from "react";
+import {
+  memo,
+  useCallback,
+  useRef,
+  type ReactElement,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import type { AllocatedPort, Feature, FeatureWorktreeInfo } from "@/api/generated";
-import { SidebarShortcutBadge } from "@/components/SidebarShortcutBadge";
 import { ProjectFeatureContextMenu } from "@/components/ProjectFeatureContextMenu";
-import {
-  FeatureRowActions,
-  FeatureRowMetaLine,
-  FeatureRowTitleLine,
-} from "@/components/ProjectFeatureRowParts";
+import { FeatureRowActions } from "@/components/ProjectFeatureRowParts";
+import { FeatureHierarchyGutter } from "@/components/FeatureHierarchyGutter";
+import { FeatureRowBody } from "@/components/FeatureRowBody";
 import { useNavShortcutHint } from "@/hooks/useNavShortcutHints";
 import { useProjectFeatureRowState } from "@/hooks/useProjectFeatureRowState";
-import { portUrl } from "@/lib/feature-ports";
-import { openLink } from "@/lib/link-routing";
+import { useOpenFeaturePort } from "@/hooks/useOpenFeaturePort";
+import { useSidebarRowActionListener } from "@/hooks/useSidebarRowActionListener";
 
 const ROW_KEYDOWN_IGNORED_SELECTOR = [
   "input",
@@ -37,6 +41,7 @@ interface ProjectFeatureRowProps {
   worktree: FeatureWorktreeInfo | undefined;
   shellCount: number;
   browserCount: number;
+  downloadCount: number;
   /** Ports this conversation's own terminal/agent processes are listening on. */
   ports: readonly AllocatedPort[];
   isEditingLabel: boolean;
@@ -51,14 +56,19 @@ interface ProjectFeatureRowProps {
   onArchiveOrDelete: (featureId: number) => void;
   onUnarchive: (featureId: number) => void;
   onTogglePin: (featureId: number, pinned: boolean) => void;
-  onCloseActivity: (featureId: number, shellCount: number, browserCount: number) => void;
+  onCloseActivity: (
+    featureId: number,
+    shellCount: number,
+    browserCount: number,
+    downloadCount: number,
+  ) => void;
   /** Expand/collapse twisty rendered by FeatureSubtree. */
   hierarchyControl?: ReactNode;
   /** Zero-based nesting depth; indentation stays inside the full-width row. */
   hierarchyDepth?: number;
+  /** Children folded under this row (collapsed subtree); it signals their state. */
+  hiddenDescendantIds?: readonly number[];
 }
-
-const FEATURE_NESTING_INDENT_PX = 16;
 
 type ProjectFeatureRowState = ReturnType<typeof useProjectFeatureRowState>;
 
@@ -67,6 +77,7 @@ interface FeatureRowDetailsProps {
   state: ProjectFeatureRowState;
   onOpenConversation: () => void;
   onOpenPort: (port: number) => void;
+  badgeRef: RefObject<HTMLSpanElement | null>;
 }
 
 function FeatureRowDetails({
@@ -74,14 +85,17 @@ function FeatureRowDetails({
   state,
   onOpenConversation,
   onOpenPort,
+  badgeRef,
 }: FeatureRowDetailsProps): ReactElement {
   const {
     feature,
     liveTitle,
     isAutoNaming,
     hasWorktree,
+    worktree,
     shellCount,
     browserCount,
+    downloadCount,
     ports,
     isEditingLabel,
     labelDraft,
@@ -94,44 +108,46 @@ function FeatureRowDetails({
     onArchiveOrDelete,
   } = props;
   return (
-    <>
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <FeatureRowTitleLine
-          feature={feature}
-          liveTitle={liveTitle}
-          isAutoNaming={isAutoNaming}
+    <FeatureRowBody
+      feature={feature}
+      liveTitle={liveTitle}
+      isAutoNaming={isAutoNaming}
+      isArchived={state.isArchived}
+      hasWorktree={hasWorktree}
+      worktree={worktree}
+      attention={state.attention}
+      isActive={state.isActive}
+      badgeRef={badgeRef}
+      onOpenConversation={onOpenConversation}
+      actions={
+        <FeatureRowActions
+          featureId={feature.id}
           isArchived={state.isArchived}
-          hasWorktree={hasWorktree}
-          liveStatus={state.liveStatus}
-          isActive={state.isActive}
-          isUnread={state.isUnread}
-          onOpenConversation={onOpenConversation}
+          isPinned={state.isPinned}
+          onTogglePin={onTogglePin}
+          onArchiveOrDelete={onArchiveOrDelete}
         />
-        <FeatureRowMetaLine
-          feature={feature}
-          prStatus={state.prStatus}
-          gitStats={state.gitStats}
-          shellCount={shellCount}
-          browserCount={browserCount}
-          ports={ports}
-          isEditingLabel={isEditingLabel}
-          labelDraft={labelDraft}
-          labelSuggestions={labelSuggestions}
-          isSavingLabel={isSavingLabel}
-          onLabelDraftChange={onLabelDraftChange}
-          onSaveLabel={onSaveLabel}
-          onCancelLabelEdit={onCancelLabelEdit}
-          onOpenPort={onOpenPort}
-        />
-      </div>
-      <FeatureRowActions
-        featureId={feature.id}
-        isArchived={state.isArchived}
-        isPinned={state.isPinned}
-        onTogglePin={onTogglePin}
-        onArchiveOrDelete={onArchiveOrDelete}
-      />
-    </>
+      }
+      prStatus={state.prStatus}
+      gitStats={state.gitStats}
+      shellCount={shellCount}
+      browserCount={browserCount}
+      downloadCount={downloadCount}
+      ports={ports}
+      labelEditor={
+        isEditingLabel
+          ? {
+              draft: labelDraft,
+              suggestions: labelSuggestions,
+              isSaving: isSavingLabel,
+              onDraftChange: onLabelDraftChange,
+              onSave: (override) => onSaveLabel(feature.id, override),
+              onCancel: onCancelLabelEdit,
+            }
+          : undefined
+      }
+      onOpenPort={onOpenPort}
+    />
   );
 }
 
@@ -152,6 +168,7 @@ function FeatureRowMenu({
     worktree,
     shellCount,
     browserCount,
+    downloadCount,
     onNavigate,
     onTogglePin,
     onCloseActivity,
@@ -166,9 +183,10 @@ function FeatureRowMenu({
       pullRequest={state.prStatus?.pr}
       isArchived={state.isArchived}
       isPinned={state.isPinned}
-      hasActivity={shellCount > 0 || browserCount > 0}
+      hasActivity={shellCount > 0 || browserCount > 0 || downloadCount > 0}
       shellCount={shellCount}
       browserCount={browserCount}
+      downloadCount={downloadCount}
       onNavigate={onNavigate}
       onTogglePin={onTogglePin}
       onStartLabelEditAfterMenuClose={onStartLabelEditAfterMenuClose}
@@ -197,9 +215,16 @@ export const ProjectFeatureRow = memo(function ProjectFeatureRow(
     onStartLabelEdit,
     hierarchyControl,
     hierarchyDepth = 0,
+    hiddenDescendantIds,
   } = props;
   const startLabelEditOnMenuCloseRef = useRef(false);
-  const state = useProjectFeatureRowState(feature, projectId, activeFeatureId, hasLiveWorktree);
+  const state = useProjectFeatureRowState(
+    feature,
+    projectId,
+    activeFeatureId,
+    hasLiveWorktree,
+    hiddenDescendantIds,
+  );
   const { navRef, badgeRef } = useNavShortcutHint<HTMLDivElement>();
   const markStartLabelEditAfterMenuClose = (): void => {
     startLabelEditOnMenuCloseRef.current = true;
@@ -216,21 +241,12 @@ export const ProjectFeatureRow = memo(function ProjectFeatureRow(
     onNavigate(feature);
   }, [feature, onNavigate]);
 
-  // Browser tabs are scoped per feature, so a port opened from another
-  // conversation's row would land in a pane the user isn't looking at.
-  // `openLink` falls back to the system browser off the desktop shell.
-  const handleOpenPort = useCallback(
-    (port: number): void => {
-      onNavigate(feature);
-      void openLink(portUrl(port), {
-        target: "cadencr",
-        scopeId: feature.id,
-        cookieMode: "normal",
-        domains: [],
-      });
-    },
-    [feature, onNavigate],
-  );
+  const handleOpenPort = useOpenFeaturePort(feature, onNavigate);
+  useSidebarRowActionListener(navRef, {
+    label: () => onStartLabelEdit(feature),
+    archive: () => props.onArchiveOrDelete(feature.id),
+    pin: state.isArchived ? undefined : () => props.onTogglePin(feature.id, !state.isPinned),
+  });
 
   return (
     <ContextMenu>
@@ -244,7 +260,7 @@ export const ProjectFeatureRow = memo(function ProjectFeatureRow(
           data-nav-id={String(feature.id)}
           data-nav-project-id={String(projectId)}
           data-feature-depth={hierarchyDepth}
-          className={`group/feature relative flex min-w-0 cursor-pointer items-center gap-0.5 rounded-md py-1.5 pl-3 pr-1.5 text-sm outline-none transition-colors hover:bg-sidebar-accent ${
+          className={`sidebar-row group/feature relative flex min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 outline-none transition-colors hover:bg-sidebar-accent ${
             state.isActive ? "bg-sidebar-accent" : ""
           } ${state.isArchived ? "opacity-50" : ""}`}
           onClick={(e) => {
@@ -261,20 +277,14 @@ export const ProjectFeatureRow = memo(function ProjectFeatureRow(
             }
           }}
         >
-          <SidebarShortcutBadge ref={badgeRef} />
-          <div
-            data-feature-hierarchy-gutter
-            className="flex h-3 w-2 shrink-0 items-center justify-center"
-            style={{ marginInlineStart: hierarchyDepth * FEATURE_NESTING_INDENT_PX }}
-          >
-            {hierarchyControl}
-          </div>
+          <FeatureHierarchyGutter depth={hierarchyDepth}>{hierarchyControl}</FeatureHierarchyGutter>
 
           <FeatureRowDetails
             props={props}
             state={state}
             onOpenConversation={handleOpenConversation}
             onOpenPort={handleOpenPort}
+            badgeRef={badgeRef}
           />
         </div>
       </ContextMenuTrigger>

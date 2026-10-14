@@ -48,7 +48,7 @@ async fn prepare(state: &AppState, action_id: i64, feature_id: i64) -> Result<Pr
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Custom action {action_id} not found")))?;
 
-    let cwd = crate::domain::git::service::resolve_feature_git_path(state, feature_id)
+    let cwd = crate::domain::git::service::resolve_feature_working_path(state, feature_id)
         .await?
         .ok_or_else(|| {
             AppError::BadRequest(

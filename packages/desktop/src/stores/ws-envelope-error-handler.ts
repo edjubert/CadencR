@@ -19,7 +19,9 @@ import { notifyRateLimited, WS_RATE_LIMIT_RETRY_MS } from "@/lib/ws-reconnect";
  * confusing — the user wasn't talking to the agent. Route them to a toast
  * instead, and don't transition the turn lifecycle since no turn was active.
  */
-const TOAST_ERROR_CODES = new Set(["MODE_NOT_SUPPORTED"]);
+// LAST_USED_MODEL_SAVE_FAILED: the prompt itself went through; only
+// remembering its model for the next new conversation failed.
+const TOAST_ERROR_CODES = new Set(["MODE_NOT_SUPPORTED", "LAST_USED_MODEL_SAVE_FAILED"]);
 const COMPACT_PRE_START_ERROR_CODES = new Set([
   "COMPACT_REJECTED",
   "SDK_SPAWN_ERROR",
@@ -117,8 +119,9 @@ function handleModeRejectedByCli(
 
   const session = ctx.get().sessions[sessionId];
   if (!session) return;
-  const providerId = session.currentProviderId || session.runtimeProvider;
-  const optInModes = getEnabledOptInModesFromCache(providerId ?? "");
+  const providerId = session.currentSelection?.providerId;
+  if (providerId == null) return;
+  const optInModes = getEnabledOptInModesFromCache(providerId);
   const next = nextProviderMode(providerId, rejectedMode, optInModes);
   if (next === rejectedMode) return;
   ctx.get().setPermissionMode(sessionId, next);

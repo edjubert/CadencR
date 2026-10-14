@@ -3,6 +3,8 @@ import type { BrowserWindow, WebContentsView } from "electron";
 import { browserBounds, devtoolsBounds, offscreenBounds } from "./browser-manager-layout";
 import type { ManagedTab } from "./browser-tab-events";
 import type { BrowserBounds } from "./browser-types";
+import { fitBrowserResponsiveViewport } from "../../src/shared/browser-responsive";
+import type { BrowserResponsiveGeometry } from "../../src/shared/browser-responsive";
 
 /**
  * A WebContentsView paints above the renderer DOM and, on macOS, keeps its last
@@ -33,7 +35,11 @@ export class BrowserViewLayout {
   // (the viewport ResizeObserver re-runs layout on every frame).
   private readonly attachedViews = new Set<WebContentsView>();
 
-  constructor(private readonly getWindow: () => BrowserWindow | null) {}
+  constructor(
+    private readonly getWindow: () => BrowserWindow | null,
+    private readonly syncResponsiveScale: (tab: ManagedTab, nativeScale: number) => void = () =>
+      undefined,
+  ) {}
 
   /** Record the new suppression state; returns true only when it changed. */
   setSuppressed(value: boolean): boolean {
@@ -56,6 +62,7 @@ export class BrowserViewLayout {
     tabs: Map<string, ManagedTab>,
     activeByScope: Map<number | null, string>,
     boundsByScope: Map<number | null, BrowserBounds>,
+    rendererZoomByScope: Map<number | null, number> = new Map(),
   ): void {
     const attached = !this.suppressed;
     for (const [id, tab] of tabs) {
@@ -66,7 +73,9 @@ export class BrowserViewLayout {
       const active = attachThis && activeByScope.get(scope) === id;
       const devToolsOpen = tab.metadata.devToolsOpen;
       const base = scopeBounds ?? { x: 0, y: 0, width: 0, height: 0 };
-      this.layoutView(tab.view, attachThis, active, browserBounds(base, devToolsOpen));
+      const responsive = this.responsiveGeometry(tab, base, rendererZoomByScope.get(scope) ?? 1);
+      if (active) this.syncResponsiveScale(tab, responsive.nativeScale);
+      this.layoutView(tab.view, attachThis, active, responsive.bounds);
       if (tab.devtoolsView) {
         const dtVisible = active && devToolsOpen;
         this.layoutView(tab.devtoolsView, attachThis, dtVisible, devtoolsBounds(base));
@@ -74,11 +83,29 @@ export class BrowserViewLayout {
     }
   }
 
+  responsiveGeometry(
+    tab: ManagedTab,
+    base: BrowserBounds,
+    rendererZoom = 1,
+  ): BrowserResponsiveGeometry {
+    return fitBrowserResponsiveViewport(
+      browserBounds(base, tab.metadata.devToolsOpen),
+      tab.metadata.responsive,
+      rendererZoom,
+    );
+  }
+
   /** Fully detach a single view (used on close). Idempotent. */
   detach(view: WebContentsView): void {
     if (!this.attachedViews.has(view)) return;
     this.getWindow()?.contentView.removeChildView(view);
     this.attachedViews.delete(view);
+  }
+
+  /** Detach every live view before its parent window is destroyed. */
+  detachAll(): void {
+    for (const view of [...this.attachedViews]) this.detach(view);
+    this.suppressed = false;
   }
 
   private layoutView(

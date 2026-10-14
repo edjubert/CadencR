@@ -4,7 +4,6 @@ import { render, screen } from "@/test-utils";
 import { PROVIDER_IDS } from "@/lib/providers";
 import { parseThinkingEffort } from "@/shared/thinking-effort";
 import { MetaBar, type MetaBarProps } from "./MetaBar";
-import { MODEL_CATALOG_LOADING_LABEL } from "./useAgentSessionModelState";
 
 const THINKING_LOW = parseThinkingEffort("low")!;
 const THINKING_MEDIUM = parseThinkingEffort("medium")!;
@@ -49,17 +48,19 @@ const CURSOR_ACCESS_MODES = [
  * props needed to render and only assert on the mode chip.
  */
 function renderChip(overrides: Partial<MetaBarProps> = {}) {
-  const accessProvider = overrides.runtimeProvider ?? overrides.currentProviderId;
+  const accessProvider =
+    "currentSelection" in overrides
+      ? overrides.currentSelection?.providerId
+      : PROVIDER_IDS.CLAUDE_CODE;
   const baseProps: MetaBarProps = {
     showAutoScrollChip: false,
     autoScrollEnabled: false,
     onToggleAutoScroll: vi.fn(),
     showWorktreeChip: false,
-    currentModelLabel: "claude-sonnet",
     models: [],
     onPermissionModeToggle: vi.fn(),
     permissionMode: "acceptEdits",
-    currentProviderId: PROVIDER_IDS.CLAUDE_CODE,
+    currentSelection: { providerId: PROVIDER_IDS.CLAUDE_CODE, modelId: "claude-sonnet" },
     providerAccessModes:
       accessProvider === PROVIDER_IDS.CURSOR ? CURSOR_ACCESS_MODES : CODEX_ACCESS_MODES,
     ...overrides,
@@ -75,7 +76,7 @@ describe("MetaBar mode chip", () => {
   // check the var name rather than a Tailwind named color.
   it("renders 'Auto-Accept Edits' with violet styling for Claude Code's primary mode", () => {
     renderChip({
-      currentProviderId: PROVIDER_IDS.CLAUDE_CODE,
+      currentSelection: { providerId: PROVIDER_IDS.CLAUDE_CODE, modelId: "claude-sonnet" },
       permissionMode: "acceptEdits",
     });
     const chip = screen.getByRole("button", {
@@ -87,7 +88,7 @@ describe("MetaBar mode chip", () => {
 
   it("renders 'Plan' with green styling when Claude is in plan mode", () => {
     renderChip({
-      currentProviderId: PROVIDER_IDS.CLAUDE_CODE,
+      currentSelection: { providerId: PROVIDER_IDS.CLAUDE_CODE, modelId: "claude-sonnet" },
       permissionMode: "plan",
     });
     const chip = screen.getByRole("button", { name: /Permission mode: Plan/i });
@@ -96,7 +97,7 @@ describe("MetaBar mode chip", () => {
 
   it("renders 'Auto' with yellow styling for Claude's classifier-backed mode", () => {
     renderChip({
-      currentProviderId: PROVIDER_IDS.CLAUDE_CODE,
+      currentSelection: { providerId: PROVIDER_IDS.CLAUDE_CODE, modelId: "claude-sonnet" },
       permissionMode: "auto",
     });
     const chip = screen.getByRole("button", {
@@ -107,10 +108,9 @@ describe("MetaBar mode chip", () => {
 
   it("renders Claude bypass as the normal permission mode chip when enabled", () => {
     renderChip({
-      currentProviderId: PROVIDER_IDS.CLAUDE_CODE,
+      currentSelection: { providerId: PROVIDER_IDS.CLAUDE_CODE, modelId: "claude-sonnet" },
       permissionMode: "bypassPermissions",
       enabledOptInModes: ["bypassPermissions"],
-      runtimeProvider: PROVIDER_IDS.CLAUDE_CODE,
       runtimeSessionId: "claude-session-123",
     });
     const chip = screen.getByRole("button", {
@@ -124,7 +124,7 @@ describe("MetaBar mode chip", () => {
 
   it("renders 'Build' with fuchsia styling for OpenCode's primary mode", () => {
     renderChip({
-      currentProviderId: PROVIDER_IDS.OPENCODE,
+      currentSelection: { providerId: PROVIDER_IDS.OPENCODE, modelId: "opencode-model" },
       permissionMode: "acceptEdits",
     });
     const chip = screen.getByRole("button", {
@@ -135,7 +135,7 @@ describe("MetaBar mode chip", () => {
 
   it("renders Codex default collaboration state as a grey Default chip", () => {
     renderChip({
-      currentProviderId: PROVIDER_IDS.CODEX_CLI,
+      currentSelection: { providerId: PROVIDER_IDS.CODEX_CLI, modelId: "codex-model" },
       permissionMode: "default",
     });
     const chip = screen.getByRole("button", {
@@ -147,7 +147,7 @@ describe("MetaBar mode chip", () => {
 
   it("renders Codex plan state as a colored Plan chip", () => {
     renderChip({
-      currentProviderId: PROVIDER_IDS.CODEX_CLI,
+      currentSelection: { providerId: PROVIDER_IDS.CODEX_CLI, modelId: "codex-model" },
       permissionMode: "plan",
     });
     const chip = screen.getByRole("button", {
@@ -159,7 +159,7 @@ describe("MetaBar mode chip", () => {
 
   it("does not render Full Access as Codex's collaboration mode chip", () => {
     renderChip({
-      currentProviderId: PROVIDER_IDS.CODEX_CLI,
+      currentSelection: { providerId: PROVIDER_IDS.CODEX_CLI, modelId: "codex-model" },
       permissionMode: "bypassPermissions",
       enabledOptInModes: ["bypassPermissions"],
     });
@@ -168,10 +168,9 @@ describe("MetaBar mode chip", () => {
 
   it("renders Codex access mode as a separate chip without a shortcut", () => {
     renderChip({
-      currentProviderId: PROVIDER_IDS.CODEX_CLI,
+      currentSelection: { providerId: PROVIDER_IDS.CODEX_CLI, modelId: "codex-model" },
       accessMode: "autoReview",
       onAccessModeChange: vi.fn(),
-      runtimeProvider: PROVIDER_IDS.CODEX_CLI,
       runtimeSessionId: "thread-123",
     });
     const chip = screen.getByRole("button", {
@@ -184,10 +183,9 @@ describe("MetaBar mode chip", () => {
   it("renders Cursor access mode with Cursor permission semantics", async () => {
     const user = userEvent.setup();
     renderChip({
-      currentProviderId: PROVIDER_IDS.CURSOR,
+      currentSelection: { providerId: PROVIDER_IDS.CURSOR, modelId: "cursor-model" },
       accessMode: "autoReview",
       onAccessModeChange: vi.fn(),
-      runtimeProvider: PROVIDER_IDS.CURSOR,
       runtimeSessionId: "cursor-chat-123",
     });
 
@@ -202,10 +200,9 @@ describe("MetaBar mode chip", () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     renderChip({
-      currentProviderId: PROVIDER_IDS.CODEX_CLI,
+      currentSelection: { providerId: PROVIDER_IDS.CODEX_CLI, modelId: "codex-model" },
       accessMode: "default",
       onAccessModeChange: onChange,
-      runtimeProvider: PROVIDER_IDS.CODEX_CLI,
       runtimeSessionId: "thread-123",
     });
 
@@ -224,11 +221,10 @@ describe("MetaBar mode chip", () => {
   it("shows the current conversation mode on the chip but selects the new-conversation default in the popover", async () => {
     const user = userEvent.setup();
     renderChip({
-      currentProviderId: PROVIDER_IDS.CODEX_CLI,
+      currentSelection: { providerId: PROVIDER_IDS.CODEX_CLI, modelId: "codex-model" },
       accessMode: "default",
       accessModeDefault: "fullAccess",
       onAccessModeChange: vi.fn(),
-      runtimeProvider: PROVIDER_IDS.CODEX_CLI,
       runtimeSessionId: "thread-123",
     });
 
@@ -243,11 +239,10 @@ describe("MetaBar mode chip", () => {
 
   it("keeps collaboration mode in the left group and places access mode before session info", () => {
     renderChip({
-      currentProviderId: PROVIDER_IDS.CODEX_CLI,
+      currentSelection: { providerId: PROVIDER_IDS.CODEX_CLI, modelId: "codex-model" },
       permissionMode: "default",
       accessMode: "default",
       onAccessModeChange: vi.fn(),
-      runtimeProvider: PROVIDER_IDS.CODEX_CLI,
       runtimeSessionId: "thread-123",
       onPause: vi.fn(),
     });
@@ -268,53 +263,25 @@ describe("MetaBar mode chip", () => {
     expect(screen.queryByRole("button", { name: /Permission mode/i })).toBeNull();
   });
 
-  it("renders a disabled loader and hides provider-specific controls while the catalog loads", () => {
+  it("renders a disabled loader in the model chip while no selection is confirmed", () => {
     renderChip({
       onModelChange: vi.fn(),
-      currentProviderId: PROVIDER_IDS.OPENCODE,
-      currentModelId: "default/default",
-      currentModelLabel: MODEL_CATALOG_LOADING_LABEL,
-      modelSelectionStatus: "catalog-loading",
+      currentSelection: null,
       models: [],
       providers: [],
-      accessMode: "default",
-      onAccessModeChange: vi.fn(),
     });
 
     const loader = screen.getByRole("button", {
-      name: "Loading model",
+      name: "Loading model catalog",
     });
     expect(loader).toBeDisabled();
-    expect(screen.getByText(MODEL_CATALOG_LOADING_LABEL)).toBeInTheDocument();
-    expect(screen.queryByText("default/default")).toBeNull();
-    expect(screen.queryByRole("button", { name: /Permission mode/i })).toBeNull();
-    expect(screen.queryByRole("button", { name: /access mode/i })).toBeNull();
-  });
-
-  it("keeps the picker enabled while a provider switch is awaiting its model", () => {
-    renderChip({
-      onModelChange: vi.fn(),
-      currentProviderId: PROVIDER_IDS.OPENCODE,
-      currentModelId: "",
-      currentModelLabel: MODEL_CATALOG_LOADING_LABEL,
-      modelSelectionStatus: "selection-pending",
-      models: [{ id: "default/default", label: "Default" }],
-      accessMode: "default",
-      onAccessModeChange: vi.fn(),
-    });
-
-    expect(screen.getByRole("button", { name: "Loading model" })).toBeEnabled();
-    expect(screen.queryByRole("button", { name: /Permission mode/i })).toBeNull();
-    expect(screen.queryByRole("button", { name: /access mode/i })).toBeNull();
   });
 
   it("renders fast mode beside the thinking control and toggles it accessibly", async () => {
     const user = userEvent.setup();
     const onFastModeChange = vi.fn();
     const { container } = renderChip({
-      currentProviderId: PROVIDER_IDS.CODEX_CLI,
-      currentModelId: "gpt-5.6-sol",
-      currentModelLabel: "GPT-5.6 Sol",
+      currentSelection: { providerId: PROVIDER_IDS.CODEX_CLI, modelId: "gpt-5.6-sol" },
       models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }],
       onModelChange: vi.fn(),
       supportedThinkingEfforts: [THINKING_LOW, THINKING_MEDIUM, THINKING_HIGH],
@@ -341,9 +308,7 @@ describe("MetaBar mode chip", () => {
 
   it("styles the pressed fast-mode state with charged violet chip tokens", () => {
     renderChip({
-      currentProviderId: PROVIDER_IDS.CODEX_CLI,
-      currentModelId: "gpt-5.6-sol",
-      currentModelLabel: "GPT-5.6 Sol",
+      currentSelection: { providerId: PROVIDER_IDS.CODEX_CLI, modelId: "gpt-5.6-sol" },
       models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }],
       onModelChange: vi.fn(),
       supportsFastMode: true,
@@ -362,9 +327,7 @@ describe("MetaBar mode chip", () => {
 
   it("shows a disabled loader while fast mode is being confirmed", () => {
     renderChip({
-      currentProviderId: PROVIDER_IDS.CODEX_CLI,
-      currentModelId: "gpt-5.6-sol",
-      currentModelLabel: "GPT-5.6 Sol",
+      currentSelection: { providerId: PROVIDER_IDS.CODEX_CLI, modelId: "gpt-5.6-sol" },
       models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }],
       onModelChange: vi.fn(),
       supportsFastMode: true,
@@ -380,9 +343,10 @@ describe("MetaBar mode chip", () => {
     expect(toggle).toHaveAttribute("data-state", "on");
   });
 
-  it("places the pre-first-prompt Claude profile selector at the end of the top line", () => {
+  it("puts the pre-first-prompt profile selector inside Info", async () => {
+    const user = userEvent.setup();
     renderChip({
-      currentProviderId: PROVIDER_IDS.CLAUDE_CODE,
+      currentSelection: { providerId: PROVIDER_IDS.CLAUDE_CODE, modelId: "claude-sonnet" },
       showClaudeProfileSelector: true,
       claudeProfile: "default",
       claudeProfiles: [{ name: "bedrock", env: {} }],
@@ -393,11 +357,10 @@ describe("MetaBar mode chip", () => {
       showWorktreeChip: false,
     });
 
-    const modelText = screen.getByText("claude-sonnet");
-    const profileCombobox = screen.getByRole("combobox", { name: /Claude profile/i });
-    expect(modelText.compareDocumentPosition(profileCombobox)).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING,
-    );
+    expect(screen.queryByRole("combobox", { name: "Profile" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Session info" }));
+    expect(screen.getByRole("combobox", { name: "Profile" })).toBeInTheDocument();
+    expect(screen.queryByText("Session ID")).not.toBeInTheDocument();
   });
 });
 
@@ -407,7 +370,6 @@ describe("MetaBar secondaryBelow", () => {
       secondaryBelow: true,
       showAutoScrollChip: true,
       todos: [{ content: "Do thing", activeForm: "Doing thing", status: "pending" }],
-      runtimeProvider: PROVIDER_IDS.CLAUDE_CODE,
       runtimeSessionId: "abc-123",
       onPause: vi.fn(),
     });
@@ -424,12 +386,147 @@ describe("MetaBar secondaryBelow", () => {
       secondaryBelow: false,
       showAutoScrollChip: true,
       todos: [{ content: "Do thing", activeForm: "Doing thing", status: "pending" }],
-      runtimeProvider: PROVIDER_IDS.CLAUDE_CODE,
       runtimeSessionId: "abc-123",
       onPause: vi.fn(),
     });
     expect(screen.getByRole("button", { name: /Auto-scroll/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Session info/i })).toBeInTheDocument();
     expect(screen.getByText("0/1")).toBeInTheDocument();
+  });
+});
+
+describe("MetaBar negotiated session configuration", () => {
+  it("renders opaque ACP options and waits for an authoritative update", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderChip({
+      sessionConfigControls: {
+        supported: true,
+        loading: false,
+        error: null,
+        pendingId: null,
+        config: {
+          options: [
+            {
+              id: "safe_mode",
+              name: "Safe mode",
+              description: "Use conservative behavior",
+              category: "_fixture",
+              type: "boolean",
+              current_value: false,
+            },
+          ],
+        },
+        onRefresh: vi.fn(),
+        onChange,
+      },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Session configuration" }));
+    const toggle = screen.getByRole("switch", { name: "Safe mode" });
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByText("_fixture")).toBeInTheDocument();
+
+    await user.click(toggle);
+
+    expect(onChange).toHaveBeenCalledWith("safe_mode", true);
+    expect(toggle).not.toBeChecked();
+  });
+
+  it("does not render a configuration chip after the runtime declines it", () => {
+    renderChip({
+      sessionConfigControls: {
+        supported: false,
+        loading: false,
+        error: null,
+        pendingId: null,
+        config: null,
+        onRefresh: vi.fn(),
+        onChange: vi.fn(),
+      },
+    });
+    expect(screen.queryByRole("button", { name: "Session configuration" })).toBeNull();
+  });
+
+  it("does not render a configuration chip for an inactive persisted runtime", () => {
+    renderChip({
+      sessionConfigControls: {
+        supported: false,
+        loading: false,
+        error: null,
+        pendingId: null,
+        config: null,
+        onRefresh: vi.fn(),
+        onChange: vi.fn(),
+      },
+    });
+
+    expect(screen.queryByRole("button", { name: "Session configuration" })).toBeNull();
+  });
+
+  it("keeps initial loading and actionable failures visible", async () => {
+    const user = userEvent.setup();
+    const { unmount } = renderChip({
+      sessionConfigControls: {
+        supported: null,
+        loading: true,
+        error: null,
+        pendingId: null,
+        config: null,
+        onRefresh: vi.fn(),
+        onChange: vi.fn(),
+      },
+    });
+    expect(screen.getByRole("button", { name: "Session configuration" })).toBeInTheDocument();
+
+    unmount();
+    renderChip({
+      sessionConfigControls: {
+        supported: null,
+        loading: false,
+        error: "Configuration request failed",
+        pendingId: null,
+        config: null,
+        onRefresh: vi.fn(),
+        onChange: vi.fn(),
+      },
+    });
+    await user.click(screen.getByRole("button", { name: "Session configuration" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Configuration request failed");
+  });
+
+  it("keeps model and thinking changes on their durable primary controls", () => {
+    renderChip({
+      sessionConfigControls: {
+        supported: true,
+        loading: false,
+        error: null,
+        pendingId: null,
+        config: {
+          options: [
+            {
+              id: "model",
+              name: "Model",
+              category: "model",
+              type: "select",
+              current_value: "model-1",
+              choices: { layout: "ungrouped", options: [] },
+            },
+            {
+              id: "thought_level",
+              name: "Thinking",
+              category: "thought_level",
+              type: "select",
+              current_value: "high",
+              choices: { layout: "ungrouped", options: [] },
+            },
+          ],
+        },
+        onRefresh: vi.fn(),
+        onChange: vi.fn(),
+      },
+    });
+
+    expect(screen.queryByRole("button", { name: "Session configuration" })).toBeNull();
   });
 });

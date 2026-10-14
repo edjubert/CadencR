@@ -209,6 +209,29 @@ describe("useGitKeyboardController", () => {
     expect(adapter.moveSelection).not.toHaveBeenCalled();
   });
 
+  it("keeps chords live while a selection holds the bare keys back", () => {
+    const adapter = adapterMocks();
+    const { getByTestId } = render(
+      <>
+        <Harness adapter={adapter} />
+        <p data-testid="selection">selected text</p>
+      </>,
+    );
+    const range = document.createRange();
+    range.selectNodeContents(getByTestId("selection"));
+    const selection = document.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    // `j` stays deferred — a bare letter next to a highlighted range reads as a
+    // selection gesture. ⌘O cannot, so the selection has no claim on it.
+    dispatchKey({ key: "j", code: "KeyJ" });
+    dispatchKey({ key: "o", code: "KeyO", metaKey: true });
+
+    expect(adapter.moveSelection).not.toHaveBeenCalled();
+    expect(adapter.openInEditor).toHaveBeenCalledOnce();
+  });
+
   it("lets an open dialog own bare u before the Git scroll command", () => {
     const adapter = adapterMocks();
     render(<Harness adapter={adapter} />);

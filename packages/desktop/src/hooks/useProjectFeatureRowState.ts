@@ -1,13 +1,11 @@
 import { useGetStats, type Feature, type GitStats, type PrStatusSnapshot } from "@/api/generated";
 import { useFeaturePrefetch } from "@/hooks/useFeaturePrefetch";
-import { useFeatureStatus } from "@/stores/session-status-selectors";
-import { useIsFeatureUnread } from "@/stores/unread-store";
+import { useFeatureAttention } from "@/hooks/useFeatureAttention";
+import type { Attention } from "@/lib/sidebar-attention";
 import { selectPrStatus, usePrStatusStore } from "@/stores/usePrStatusStore";
-import type { LiveAgentStatus } from "@/stores/session-status-store";
 
 interface FeatureRowState {
-  liveStatus: LiveAgentStatus;
-  isUnread: boolean;
+  attention: Attention;
   prStatus: PrStatusSnapshot | undefined;
   gitStats: GitStats | undefined;
   isActive: boolean;
@@ -29,16 +27,13 @@ export function useProjectFeatureRowState(
   projectId: number,
   activeFeatureId: number | null,
   hasLiveWorktree: boolean,
+  /** Conversations folded under this row; their most urgent state shows here. */
+  hiddenDescendantIds?: readonly number[],
 ): FeatureRowState {
-  // Live status is the canonical 3-value enum: per-session entries pushed by
-  // the backend, aggregated here per-feature. `useShallow` inside the hook
-  // ensures this row only re-renders when its own feature's (status, kind)
-  // actually changes.
-  const { status: liveStatus } = useFeatureStatus(feature.id);
-  // Blue unread overlay: the agent finished while this conversation wasn't
-  // open. Only meaningful when idle — a working/asking mark already carries
-  // status on the provider silhouette.
-  const isUnread = useIsFeatureUnread(feature.id);
+  // Pending request > working > unread reply > idle, across the row and any
+  // collapsed children. Subscribes to just those ids, so another
+  // conversation's status push doesn't re-render this row.
+  const attention = useFeatureAttention(feature.id, hiddenDescendantIds);
   const prStatus = usePrStatusStore(selectPrStatus(feature.id));
   const isActive = activeFeatureId === feature.id;
   const { data: gitStats } = useGetStats(
@@ -56,8 +51,7 @@ export function useProjectFeatureRowState(
   const prefetchFeature = useFeaturePrefetch(feature.id, projectId);
 
   return {
-    liveStatus,
-    isUnread,
+    attention,
     prStatus,
     gitStats,
     isActive,

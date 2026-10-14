@@ -19,6 +19,9 @@ use super::{local_branch_exists, remote_branch_exists};
 /// deletion candidates against the normalized short name (`main`) so a local
 /// branch cannot be deleted just because the default was discovered remotely.
 pub async fn resolve_default_branch(repo: &Path) -> Result<String, AppError> {
+    if !crate::shared::git_context::has_git_metadata(repo).await? {
+        return Ok("main".to_string());
+    }
     if let Some(branch) = resolve_origin_head(repo).await {
         return Ok(branch);
     }

@@ -6,6 +6,7 @@ import cursorLogo from "../../assets/providers/cursor.png";
 import cursorMonoLogo from "../../assets/providers/cursor-mono.png";
 import opencodeLogo from "../../assets/providers/opencode.png";
 import opencodeMonoLogo from "../../assets/providers/opencode-mono.png";
+import { getCatalogProviderMetadata } from "./provider-catalog-registry";
 
 export const PROVIDER_IDS = {
   CLAUDE_CODE: "claude_code",
@@ -35,6 +36,9 @@ export interface ProviderMetadata {
   id: string;
   label: string;
   iconSrc: string | null;
+  isMonochrome: boolean;
+  /** Alpha-bounds compensation for bundled compact silhouettes. */
+  monoIconScale?: number;
 }
 
 /** Map provider IDs to their bundled icon assets. */
@@ -45,12 +49,12 @@ const PROVIDER_ICONS: Record<ProviderId, string> = {
   [PROVIDER_IDS.CURSOR]: cursorLogo,
 };
 
-/** Black-on-transparent silhouettes for compact chrome (sidebar, etc.). */
-const PROVIDER_MONO_ICONS: Record<ProviderId, string> = {
-  [PROVIDER_IDS.CLAUDE_CODE]: claudeMonoLogo,
-  [PROVIDER_IDS.CODEX_CLI]: codexMonoLogo,
-  [PROVIDER_IDS.OPENCODE]: opencodeMonoLogo,
-  [PROVIDER_IDS.CURSOR]: cursorMonoLogo,
+/** Bundled silhouettes with scale compensation for their transparent 64px canvases. */
+const PROVIDER_MONO_ICONS: Record<ProviderId, { src: string; scale: number }> = {
+  [PROVIDER_IDS.CLAUDE_CODE]: { src: claudeMonoLogo, scale: 64 / 56 },
+  [PROVIDER_IDS.CODEX_CLI]: { src: codexMonoLogo, scale: 64 / 43 },
+  [PROVIDER_IDS.OPENCODE]: { src: opencodeMonoLogo, scale: 64 / 46 },
+  [PROVIDER_IDS.CURSOR]: { src: cursorMonoLogo, scale: 64 / 56 },
 };
 
 /** Canonical display names for known providers (Anthropic-recommended branding). */
@@ -62,23 +66,32 @@ const PROVIDER_LABELS: Partial<Record<string, string>> = {
 };
 
 /**
- * Get provider metadata. Returns icon from the local asset map and label from
- * the optional catalog data (falls back to the canonical label map, then the
- * provider ID). New providers only need an icon asset + one entry in each map.
+ * Get provider metadata. Built-ins use bundled assets; installed providers use
+ * the connector-owned icon supplied by the runtime catalog. Labels fall back
+ * from catalog data to the canonical built-in map, then to the provider ID.
  */
 export function getProviderMetadata(
   providerId?: string | null,
   catalogLabel?: string | null,
   variant: ProviderIconVariant = "color",
+  catalogMetadata = getCatalogProviderMetadata(providerId),
 ): ProviderMetadata | null {
   if (!providerId) {
     return null;
   }
-  const icons = variant === "mono" ? PROVIDER_MONO_ICONS : PROVIDER_ICONS;
+  const monoIcon = variant === "mono" ? PROVIDER_MONO_ICONS[providerId as ProviderId] : undefined;
+  const bundledIcon = variant === "mono" ? monoIcon?.src : PROVIDER_ICONS[providerId as ProviderId];
   return {
     id: providerId,
-    label: catalogLabel ?? PROVIDER_LABELS[providerId] ?? formatProviderId(providerId),
-    iconSrc: icons[providerId as ProviderId] ?? PROVIDER_ICONS[providerId as ProviderId] ?? null,
+    label:
+      catalogLabel ??
+      catalogMetadata?.label ??
+      PROVIDER_LABELS[providerId] ??
+      formatProviderId(providerId),
+    iconSrc:
+      bundledIcon ?? catalogMetadata?.iconData ?? PROVIDER_ICONS[providerId as ProviderId] ?? null,
+    monoIconScale: monoIcon?.scale,
+    isMonochrome: variant === "mono" && bundledIcon != null,
   };
 }
 

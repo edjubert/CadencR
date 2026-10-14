@@ -58,14 +58,14 @@ You keep the agents you already use. CadencR gives you the surface to supervise 
 | **Orchestrate (Project & Workspace MCP)** | Loop-engineering built in: CadencR's own MCP servers let an agent inspect activity, list projects, compare session history, and **message or spawn sibling sessions** in the current project (Project MCP), and search conversation history across every project (Workspace MCP). Agents that coordinate agents. |
 | **Browser (with Browser MCP)** | A real embedded Chromium pane with per-feature tabs, normal/private cookie modes, and page comments you send to the agent. Over the `cadencr-browser` MCP the agent opens pages, clicks, fills, screenshots, waits for selectors, and reads the console and failed network requests: agent-driven QA before it says "done". |
 | **Git tab** | Review changed files (uncommitted or vs. the target branch) with themed diffs, commit previews before anything lands, and a **commit graph** across sessions × branches with links to the online commit. Commit (`⌘⇧K`), push (`⌘⇧U`), or open a compare/PR (`⌘⇧O`) from the header. |
-| **Editor tab** | A real CodeMirror editor, not a viewer: LSP go-to-definition, references, symbols, diagnostics, and rename; file and content search, split panes and tabs, Git-gutter markers, blame, Markdown preview, multi-cursor, and a read-only large-file mode. |
+| **Editor tab** | A real CodeMirror editor, not a viewer: LSP go-to-definition, references, symbols, diagnostics, and rename; file and content search, split panes and tabs, Git-gutter markers, blame, Markdown preview, multi-cursor, and a read-only large-file mode. Prefer modal editing? Switch to a real Neovim instance per session from Settings. |
 | **Sidebar** | One rail for every project and feature. A global **Pinned** section above the project list keeps hot sessions reachable across projects, activity indicators flag busy features, ordering stays stable, and archived features remain searchable. |
 | **Unified agent list** | Every session at once in a live grid. Filter by name, task, or feature, adjust row density, pin (`⌘⇧P`), and keyboard-navigate, with live status rings so you can read, steer, and review many agents without switching tabs. |
 
 ## Built for how agents actually work
 
 - **Run agents in parallel.** Start several features, fixes, or investigations at once. Each session works on its own branch in its own Git worktree, so one agent can run tests while another explores a bug or prepares a refactor, with no fighting over the same checkout.
-- **A real terminal, next to the agent.** One `xterm.js` PTY per session, rooted at that session's worktree, for the things the agent shouldn't do: ssh, dev servers, ad-hoc scripts. Split the pane freely; a warning flags if the shell drifts out of the worktree.
+- **A real terminal, next to the agent.** One PTY per session, rooted at that session's worktree, for the things the agent shouldn't do: ssh, dev servers, ad-hoc scripts. Split the pane freely; a warning flags if the shell drifts out of the worktree. Rendered with [celeritty](https://github.com/edjubert/celeritty), a WebGPU terminal that reads your `alacritty.toml` for font and colors.
 - **Approvals & permissions.** Plan approvals, tool-permission cards showing the exact command, and multi-choice questions become explicit keyboard checkpoints. Per-provider permission modes (from ask-every-time to auto-accept edits to opt-in bypass/full-access) cycle with `Shift+Tab`.
 - **Custom actions.** Attach reusable shell commands to a project (lint, deploy, seed a database) with `${VARIABLE}` placeholders. Run them on demand from the `+` menu or on a fixed schedule against any feature's worktree.
 - **Steer from a second screen.** Pair a phone, tablet, or second computer by QR code or link and drive the same sessions, terminals, and editor from a browser. Local-first (agents and state stay on your machine), works over your LAN or Tailscale, installs as a PWA, and can send Web Push notifications.
@@ -89,19 +89,29 @@ Or download the latest DMG/ZIP from [GitHub Releases](https://github.com/merkr-s
 
 ### Run from source
 
-Use this path if you want to try the latest code or contribute.
-
-On Linux, follow the [Linux development setup](./docs/LINUX_SETUP.md).
-
-On Windows, use WSL2/WSLg and follow the [Windows / WSL development setup](./docs/WINDOWS_WSL_SETUP.md).
+Use this path if you want to try the latest code or contribute. Linux and
+Windows have their own system-package notes: see the
+[Linux development setup](./docs/LINUX_SETUP.md) and, for WSL2/WSLg, the
+[Windows / WSL development setup](./docs/WINDOWS_WSL_SETUP.md).
 
 #### Requirements
 
-- **Node.js 22.x**: the repo enforces `>=22.19.0 <23.0.0`.
-- **pnpm**: managed through Corepack.
-- **Rust**: install with [rustup](https://rustup.rs/).
-- **cargo-watch**: required by `pnpm dev` for the Rust service watcher. Install with `cargo install cargo-watch`.
+- **Node.js 22.19.0**: pinned in `.nvmrc`; the repo accepts `>=22.19.0 <23.0.0`.
+  With [fnm](https://github.com/Schniz/fnm) (`fnm env --use-on-cd`) or
+  [nvm](https://github.com/nvm-sh/nvm) (`nvm use`), the right version is picked
+  from `.nvmrc` when you enter the repo.
+- **pnpm**: provided by Corepack (`corepack enable`) at the version pinned in
+  `package.json` `packageManager`. Don't install pnpm separately.
+- **Rust** through [rustup](https://rustup.rs/). The toolchain and its
+  `rustfmt` and `clippy` components come from `rust-toolchain.toml`: rustup
+  installs them on first use, or run `rustup toolchain install` in the repo.
+- **watchexec**: `pnpm dev` uses it to restart the Rust service on changes
+  (`brew install watchexec` or `cargo install --locked watchexec-cli`).
+  `cargo-watch` still works as a fallback.
 - At least one local agent CLI you want to use: Claude Code, OpenCode, or Codex.
+
+Using Nix? `nix develop` opens a shell with Node 22, rustup, watchexec, and the
+native libraries; Corepack provides pnpm inside it.
 
 #### Setup
 
@@ -111,42 +121,55 @@ cd CadencR
 
 corepack enable
 pnpm install
-
-cp packages/service/.env.example packages/service/.env
-cp packages/desktop/.env.example packages/desktop/.env
-```
-
-Set the same local token in both env files:
-
-- `CADENCR_AUTH_TOKEN` in `packages/service/.env`
-- `VITE_API_TOKEN` in `packages/desktop/.env`
-
-Then start the app:
-
-```bash
+pnpm setup:dev   # .env files, one shared dev token, Electron binary
+pnpm doctor      # verify Node, pnpm, Rust, watcher, .env files, Electron
 pnpm dev
 ```
 
-If you create Git worktrees through an automated setup hook, add
-`pnpm dev:precompile` after `pnpm install`. It builds the Rust targets used by
-`pnpm dev` without starting the app, so the first launch in that worktree does
-not pay the cold Cargo build cost.
+`pnpm setup:dev` is safe to rerun: it copies `packages/service/.env.example`
+and `packages/desktop/.env.example` only where the `.env` is missing, writes one
+random token to both `CADENCR_AUTH_TOKEN` (service) and `VITE_API_TOKEN`
+(desktop), and installs the Electron binary. It never overwrites a `.env` or
+touches a database. If the two tokens already differ (the classic first-run
+"every request 401s"), it warns; `pnpm setup:dev --fix-token` copies the service
+token into the desktop file. `pnpm setup:dev --precompile` also builds the Rust
+targets so the first `pnpm dev` skips the cold Cargo build.
+
+`pnpm doctor` prints a fix next to each problem and exits non-zero on errors.
+Run it whenever `pnpm dev` misbehaves.
+
+#### Git worktrees
+
+In a linked worktree, run `pnpm dev:configure-worktree` instead of
+`pnpm setup:dev`. It copies the main checkout's `.env` files (so the tokens
+match) and gives the worktree its own renderer, service, and remote ports and
+Electron profile, so it can run next to the main checkout and other worktrees.
+It also seeds the worktree with a copy of the main checkout's dev database when
+there is one. For an automated worktree setup hook, use:
+
+```bash
+pnpm install && pnpm dev:configure-worktree && pnpm dev:precompile
+```
 
 ## Development
 
 ```bash
+pnpm dev                                # desktop + service (+ landing)
 pnpm build                              # build the desktop app
-pnpm test                               # Vitest + Rust tests
-pnpm lint                               # oxlint
+pnpm test                               # Vitest + Rust tests + repo script tests
+pnpm lint                               # oxlint + clippy
 pnpm format                             # oxfmt + cargo fmt
 pnpm --filter @cadencr/desktop ts-check # TypeScript checks
 pnpm --filter @cadencr/desktop knip     # unused export detection
+pnpm doctor                             # check the dev environment
 ```
 
-Rust build artifacts are isolated in each checkout's `target/`. Development
-profiles omit debug information and incremental state to keep each worktree's
-disk footprint bounded; application logs are unaffected. Run
-`pnpm rust:storage` to inspect disk use, or see
+The pre-commit hook runs only the checks your staged files can affect; see
+[CONTRIBUTING.md](./CONTRIBUTING.md#pre-commit-checks).
+
+Rust build artifacts are isolated in each checkout's `target/`, and Cargo's
+incremental cache speeds up rebuilds inside it. Run `pnpm rust:storage` to
+inspect disk use, or see
 [CONTRIBUTING.md](./CONTRIBUTING.md#rust-build-storage) for cleanup commands.
 
 ## How it works

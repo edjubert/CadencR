@@ -28,12 +28,32 @@ import {
 } from "./ws-turn-timing";
 import { blocksPatchWithDerived } from "./ws-block-mutations";
 import { DEFAULT_PROVIDER } from "../shared/models";
+import type { RuntimeSelection } from "../shared/models";
 import { defaultEditModeFor } from "../lib/provider-modes";
 import type { PermissionMode } from "../types/permission-mode";
 import type { AccessMode } from "@/types/access-mode";
 import type { PromptAttachmentPayload } from "@/types/agent-types";
+import type { RuntimeSessionConfigSnapshot } from "@/api/generated";
 
 export type { PermissionMode };
+
+export interface SessionConfigState {
+  sessionConfig: RuntimeSessionConfigSnapshot | null;
+  sessionConfigLoading: boolean;
+  sessionConfigSupported: boolean | null;
+  sessionConfigError: string | null;
+  pendingSessionConfigId: string | null;
+}
+
+export function createSessionConfigState(): SessionConfigState {
+  return {
+    sessionConfig: null,
+    sessionConfigLoading: false,
+    sessionConfigSupported: null,
+    sessionConfigError: null,
+    pendingSessionConfigId: null,
+  };
+}
 
 export interface PendingPlanApproval {
   allowedPrompts?: Array<{ tool: string; prompt: string }>;
@@ -48,12 +68,21 @@ export interface PersistedStatePayload {
   oldestMessageId?: number | null;
   /** Highest DB message id in this snapshot — seeds the resync cursor. */
   maxMessageId?: number | null;
+  /** Mutable-content revision captured with the persisted snapshot. */
+  maxContentRevision?: number | null;
   featureId?: number;
   sessionDbId?: number;
   currentProviderId?: string;
-  currentModelId?: string;
+  currentSelection?: RuntimeSelection;
   currentThinkingEffort?: string;
   currentProfile?: string;
+  runtimeOverrides?: {
+    model: string | null;
+    thinking_effort: string | null;
+    fast_mode: boolean | null;
+  };
+  runtimeOverridesPending?: boolean;
+  currentModelId?: string;
   permissionMode?: PermissionMode;
   accessMode?: AccessMode;
   runtimeProvider?: string | null;
@@ -108,7 +137,13 @@ export function createStreamHealth(): StreamHealth {
 // Per-session state
 // ---------------------------------------------------------------------------
 
-export interface SessionEntry {
+export interface SessionEntry extends SessionConfigState {
+  runtimeOverrides?: {
+    model: string | null;
+    thinking_effort: string | null;
+    fast_mode: boolean | null;
+  };
+  runtimeOverridesPending?: boolean;
   conn: WsConnection | null;
   isConnected: boolean;
   serverSessionId: string;
@@ -154,9 +189,13 @@ export interface SessionEntry {
   pendingManualCompact: boolean;
   /** True while the provider-neutral runtime reports an active compaction turn. */
   runtimeCompacting: boolean;
-  currentProviderId: string;
-  currentModelId: string;
-  runtimeProvider: string;
+  /**
+   * The session's runtime provider/model pair, or `null` while the backend has
+   * not confirmed one. Written whole or not at all — no code path may update
+   * one half, which is what allowed an opencode model to render under a Claude
+   * provider. Never seeded: `null` renders a loading state, not a guess.
+   */
+  currentSelection: RuntimeSelection | null;
   runtimeSessionId: string;
   mcpServers: McpServerStatus[] | null;
   supportsPromptReceipts: boolean;
@@ -194,6 +233,8 @@ export interface SessionEntry {
    * recovered. `null` until the first persisted load supplies one.
    */
   lastAppliedMessageId: number | null;
+  /** Highest mutable-content revision applied by a completed REST snapshot. */
+  lastAppliedContentRevision: number | null;
   featureId: number | null;
   sessionDbId: number | null;
   cwd: string | null;
@@ -233,10 +274,9 @@ export function createSessionEntry(): SessionEntry {
     compactRequestPending: false,
     pendingManualCompact: false,
     runtimeCompacting: false,
-    currentProviderId: "",
-    currentModelId: "",
-    runtimeProvider: "",
+    currentSelection: null,
     runtimeSessionId: "",
+    ...createSessionConfigState(),
     currentProfile: undefined,
     mcpServers: null,
     supportsPromptReceipts: false,
@@ -261,6 +301,7 @@ export function createSessionEntry(): SessionEntry {
     hasMore: false,
     oldestMessageId: null,
     lastAppliedMessageId: null,
+    lastAppliedContentRevision: null,
     featureId: null,
     sessionDbId: null,
     cwd: null,

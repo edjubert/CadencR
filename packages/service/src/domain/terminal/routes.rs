@@ -41,6 +41,10 @@ pub fn terminal_router() -> Router<AppState> {
             get(list_terminal_sessions_handler),
         )
         .route("/api/terminal/kill", post(kill_terminal_sessions_handler))
+        .route(
+            "/api/terminal/alacritty-config",
+            get(alacritty_config_route),
+        )
 }
 
 /// A live terminal session a client can attach to (one PTY).
@@ -98,6 +102,11 @@ pub struct KillTerminalsResponse {
 /// Kill every live shell belonging to a feature. Used when archiving or deleting
 /// a feature so its terminals don't keep running in a worktree that may be about
 /// to be removed.
+///
+/// Shells only: the feature's Neovim PTY is `PtyKind::Neovim` and is left
+/// running, because this route is also the sidebar's "close activity" action on
+/// a feature the user still has open. Neovim teardown belongs to the paths that
+/// actually destroy the worktree (`delete_worktree`, `delete_feature`).
 #[utoipa::path(
     post,
     path = "/api/terminal/kill",
@@ -112,6 +121,24 @@ pub async fn kill_terminal_sessions_handler(
     Json(KillTerminalsResponse {
         killed: killed as u32,
     })
+}
+
+/// `GET /api/terminal/alacritty-config` — the user's parsed Alacritty
+/// config (font, colors, cursor style, scrollback depth), or Alacritty's
+/// own documented defaults when there's nothing to read.
+#[utoipa::path(
+    get,
+    path = "/api/terminal/alacritty-config",
+    responses((status = 200, body = crate::domain::terminal::alacritty_config::AlacrittyConfigResponse))
+)]
+pub async fn alacritty_config_route(
+    State(state): State<AppState>,
+) -> Json<crate::domain::terminal::alacritty_config::AlacrittyConfigResponse> {
+    Json(
+        crate::domain::terminal::alacritty_config::read_alacritty_config_response(
+            state.fallback_palette.clone(),
+        ),
+    )
 }
 
 async fn terminal_ws_handler(
@@ -212,6 +239,7 @@ async fn handle_reconnect(
                     pty_id.to_string(),
                     reconnect.handle,
                     pty_manager.clone(),
+                    reconnect.data_rx,
                 )
                 .await;
             }
@@ -250,12 +278,20 @@ async fn handle_new_pty(
 
     info!(pty_id = %pty_id, cwd = %cwd, "Created new PTY");
 
+    let (scrollback, data_rx) = handle.subscribe_with_scrollback();
     let (mut ws_sink, ws_stream) = socket.split();
     let ready_msg = ServerMessage::Ready {
         pty_id: pty_id.clone(),
         cwd: cwd.clone(),
     };
     if send_msg(&mut ws_sink, &ready_msg).await.is_err() {
+        return;
+    }
+    if !scrollback.is_empty()
+        && send_msg(&mut ws_sink, &ServerMessage::Data { data: scrollback })
+            .await
+            .is_err()
+    {
         return;
     }
 
@@ -265,6 +301,7 @@ async fn handle_new_pty(
         pty_id,
         handle,
         state.pty_manager.clone(),
+        data_rx,
     )
     .await;
 }
@@ -290,7 +327,18 @@ fn spawn_pty_to_ws_forwarder(
                         break;
                     }
                 }
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    let message = ServerMessage::Error {
+                        message: "Terminal output fell behind; reconnect to restore the display"
+                            .to_string(),
+                    };
+                    let _ = sink
+                        .lock()
+                        .await
+                        .send(Message::Text(message.to_json().into()))
+                        .await;
+                    break;
+                }
                 Err(broadcast::error::RecvError::Closed) => break,
             }
         }
@@ -366,13 +414,18 @@ async fn run_pty_ws_loop(
     pty_id: String,
     handle: Arc<PtyHandle>,
     pty_manager: super::service::PtyManager,
+    data_rx: broadcast::Receiver<String>,
 ) {
-    let data_rx = handle.data_tx.subscribe();
     let sink = Arc::new(tokio::sync::Mutex::new(ws_sink));
 
     let mut forward_task = spawn_pty_to_ws_forwarder(Arc::clone(&sink), data_rx);
     let mut write_task = spawn_ws_to_pty_writer(ws_stream, pty_id.clone(), pty_manager);
     let mut exit_task = spawn_exit_watcher(Arc::clone(&sink), pty_id.clone(), Arc::clone(&handle));
+    let tasks = SocketTasks([
+        forward_task.abort_handle(),
+        write_task.abort_handle(),
+        exit_task.abort_handle(),
+    ]);
 
     tokio::select! {
         _ = &mut write_task => {
@@ -380,18 +433,27 @@ async fn run_pty_ws_loop(
         }
         _ = &mut forward_task => {
             info!(pty_id = %pty_id, "PTY broadcast channel closed");
-            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), &mut exit_task).await;
         }
         _ = &mut exit_task => {
             info!(pty_id = %pty_id, "PTY exited");
         }
     }
 
-    write_task.abort();
-    forward_task.abort();
-    exit_task.abort();
+    drop(tasks);
 
     let _ = sink.lock().await.send(Message::Close(None)).await;
+}
+
+/// Dropping a revoked remote connection must stop its independently spawned
+/// reader/writer tasks too; dropping JoinHandle alone would detach them.
+struct SocketTasks([tokio::task::AbortHandle; 3]);
+
+impl Drop for SocketTasks {
+    fn drop(&mut self) {
+        for task in &self.0 {
+            task.abort();
+        }
+    }
 }
 
 async fn send_msg(sink: &mut WsSink, msg: &ServerMessage) -> Result<(), ()> {
@@ -408,4 +470,24 @@ async fn send_error(socket: WebSocket, message: &str) {
         message: message.to_string(),
     };
     let _ = send_msg(&mut sink, &msg).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SocketTasks;
+
+    #[tokio::test]
+    async fn revoked_connection_cancels_all_bridge_tasks() {
+        let forward = tokio::spawn(std::future::pending::<()>());
+        let write = tokio::spawn(std::future::pending::<()>());
+        let exit = tokio::spawn(std::future::pending::<()>());
+        drop(SocketTasks([
+            forward.abort_handle(),
+            write.abort_handle(),
+            exit.abort_handle(),
+        ]));
+        assert!(forward.await.unwrap_err().is_cancelled());
+        assert!(write.await.unwrap_err().is_cancelled());
+        assert!(exit.await.unwrap_err().is_cancelled());
+    }
 }

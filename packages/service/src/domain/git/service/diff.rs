@@ -325,6 +325,9 @@ pub async fn get_file_blob_shas(
         None => return Ok(vec![]),
     };
 
+    if !crate::shared::git_context::has_git_metadata(Path::new(&wt_path)).await? {
+        return Ok(vec![]);
+    }
     let map = commands::get_file_blob_shas(Path::new(&wt_path)).await?;
     Ok(map
         .into_iter()

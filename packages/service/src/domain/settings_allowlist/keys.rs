@@ -8,6 +8,10 @@ pub const FEATURE_ALLOWED_KEYS: &[&str] = &[
     "agent_runtime_session",
     "skip_worktree",
     "layout_state",
+    // Per-feature auto layout override: "on" / "off". Unset follows the
+    // workspace `layout_auto_mode_default`. See
+    // packages/desktop/src/lib/auto-layout/auto-layout-mode.ts.
+    "layout_auto_mode",
     "draft_prompt",
     // Git workflow (per-feature). `worktree_mode` selects how the worktree is
     // provisioned at feature creation: "new" (default), "reuse" (attach to an
@@ -27,8 +31,6 @@ pub const FEATURE_ALLOWED_KEYS: &[&str] = &[
 
 /// Keys writable via `PUT /api/projects/{id}/settings`.
 pub const PROJECT_ALLOWED_KEYS: &[&str] = &[
-    "model_session",
-    "agent_runtime_session",
     "branch_prefix",
     "default_worktree_mode",
     "color",
@@ -56,6 +58,9 @@ pub const PROJECT_ALLOWED_KEYS: &[&str] = &[
 pub const WORKSPACE_ALLOWED_KEYS: &[&str] = &[
     // Active Claude Code env profile name
     "claude_code_active_profile",
+    // Structured Codex app-server profiles and the stable id selected by default.
+    "codex_profiles",
+    "codex_active_profile",
     // Onboarding-set CLI binary paths (consumed by `apply_binary_overrides_from_settings`).
     "claude_cli_path",
     "opencode_cli_path",
@@ -69,8 +74,20 @@ pub const WORKSPACE_ALLOWED_KEYS: &[&str] = &[
     "cursor_access_mode",
     // UI chrome
     "sidebar_left_width",
+    "sidebar_provider_logos",
     "sidebar_collapsed",
     "sidebar_right_collapsed",
+    // Sidebar expansion memory, each a JSON array of ids: expanded project ids,
+    // collapsed parent-conversation ids, project ids with archived shown.
+    "sidebar_expanded_projects",
+    "sidebar_collapsed_subtrees",
+    "sidebar_archived_open_projects",
+    // Saved sidebar views: a JSON array of `{id, name, query}` (queries use the
+    // Agents grid filter language), and the id of the one shown ("" for none).
+    "sidebar_views",
+    "sidebar_active_view",
+    // Sidebar display options (density, row template, filter) live in
+    // `SIDEBAR_DISPLAY_KEYS` below.
     "loader_style",
     // UI zoom is kept per device type: desktop scales via the Electron native
     // zoom factor, mobile (remote browser/PWA) via CSS zoom — independent levels.
@@ -123,14 +140,28 @@ pub const WORKSPACE_ALLOWED_KEYS: &[&str] = &[
     // never live here; they are stored separately in an owner-only file.
     crate::domain::git::forge::FORGE_HOSTS_SETTING,
     // Where agent-finished notifications appear: "native" (system banner),
-    // "in_app" (Sonner toast inside Cadencr), or "off". Mirrors
+    // "in_app" (Sonner toast inside Cadencr), "notch" (the macOS notch
+    // island), or "off". Mirrors
     // NOTIFICATION_MODE_KEY in packages/desktop/src/lib/notification-mode.ts.
     "notification_mode",
-    // Workspace-scope agent defaults. `auto_name` is global-only.
+    // Notch island behavior (notification_mode = "notch"): `always_on` keeps
+    // the compact island visible while agents are tracked, `always_animate`
+    // lets the logo keep moving in the compact state. `notch_default_applied`
+    // records the one-time switch of existing macOS installs to the notch.
+    "notch_always_on",
+    "notch_always_animate",
+    "notch_default_applied",
+    // Workspace-scope agent selection. `*_session` holds the pair the user
+    // last prompted with (written by the backend, not a configured default);
+    // `auto_name` is global-only, with an optional custom system prompt.
     "model_session",
     "model_auto_name",
     "agent_runtime_session",
     "agent_runtime_auto_name",
+    // Custom system prompt for session auto-naming. Free-form; empty or unset
+    // means the built-in default (DEFAULT_AUTO_NAME_SYSTEM_PROMPT in
+    // domain/ws_session/auto_name). Empty write = reset to default.
+    "auto_name_system_prompt",
     // First-run onboarding overlay state.
     // `onboarding_step` is one of the values defined in
     // packages/desktop/src/lib/onboarding-step.ts; missing/unset is treated as
@@ -147,6 +178,10 @@ pub const WORKSPACE_ALLOWED_KEYS: &[&str] = &[
     // Master switch for fluid UI animations. When unset the frontend falls back
     // to the OS `prefers-reduced-motion` media query. Stored as "true" / "false".
     "animations_enabled",
+    // Workspace default for the feature page's auto layout mode (panes follow
+    // the agent and opened links). "true" / "false"; unset means on. Each
+    // feature can override it via `layout_auto_mode`.
+    "layout_auto_mode_default",
     // Monospace font family for the terminal, editor, and code snippets.
     // A missing value means "Default" (see DEFAULT_MONO_STACK in
     // packages/desktop/src/lib/fonts/constants.ts). Stored as the raw family
@@ -164,16 +199,22 @@ pub const WORKSPACE_ALLOWED_KEYS: &[&str] = &[
     // allowlist only gates the write endpoint. See
     // packages/desktop/src/lib/agent-verbosity.ts.
     "agent_stream_summary_mode",
+    // Agent tab "Message navigator" rail (ticks marking each user prompt on
+    // the stream's right edge). Stored as "true" / "false"; unset means
+    // enabled. See packages/desktop/src/lib/agent-message-navigator.ts.
+    "agent_message_navigator_enabled",
     // Plays the welcome-step intro animation exactly once, on the very first
     // open of the onboarding overlay. Set to "true" by `WelcomeIntro` after
     // the animation completes (or the user clicks to skip).
     "onboarding_intro_shown",
     // Browser workspace preferences. `browser_default_mode` is "normal" or
-    // "private" (see packages/desktop/src/lib/browser-settings.ts) and seeds
-    // the Browser tab's first tab + toolbar toggle. `browser_mcp_enabled` is
-    // "true"/"false" (default enabled) and gates whether the `cadencr-browser`
-    // MCP is attached to agent turns — read in the session-prompt spawn path.
+    // "private" and `browser_search_engine` selects the address-bar search
+    // provider (see packages/desktop/src/lib/browser-settings.ts).
+    // `browser_mcp_enabled` is "true"/"false" (default enabled) and gates
+    // whether the `cadencr-browser` MCP is attached to agent turns — read in
+    // the session-prompt spawn path.
     "browser_default_mode",
+    "browser_search_engine",
     // JSON array of domains whose links open in Cadencr's own browser tab
     // (instead of the system browser). Default seeded by the frontend with
     // localhost/127.0.0.1. See packages/desktop/src/lib/link-routing.ts.
@@ -196,6 +237,8 @@ pub const WORKSPACE_ALLOWED_KEYS: &[&str] = &[
     // canonical key constants to keep this allowlist in sync with their source.
     crate::remote::REMOTE_ENABLED_SETTING,
     crate::remote::REMOTE_TUNNEL_HOST_SETTING,
+    // Neovim Power Mode intensity (Phase 1a). One of "off", "basic", "arcade".
+    "editor_vim_mode_level",
 ];
 
 /// Prefixes whose suffix is a free-form `<provider>_<model-id>` identifier.
@@ -208,3 +251,59 @@ pub const WORKSPACE_ALLOWED_KEYS: &[&str] = &[
 /// any non-empty suffix and reject only whitespace/control characters (which no
 /// real model id contains) rather than maintaining a brittle character set.
 pub(super) const WORKSPACE_MODEL_PREFIXES: &[&str] = &["thinking_effort_model_"];
+
+/// Sidebar display options, also writable via `PUT /api/workspace/settings/{key}`.
+/// Every key has a validator in `settings_store::registry::sidebar`, and the
+/// frontend mirrors the value sets in `packages/desktop/src/lib/sidebar-config.ts`.
+pub const SIDEBAR_DISPLAY_KEYS: &[&str] = &[
+    "sidebar_density",
+    "sidebar_font_size",
+    "sidebar_title_lines",
+    "sidebar_title_source",
+    "sidebar_row_status",
+    "sidebar_row_time",
+    "sidebar_row_branch",
+    "sidebar_row_worktree_icon",
+    "sidebar_row_diff",
+    "sidebar_row_pr",
+    "sidebar_row_ports",
+    "sidebar_row_activity",
+    "sidebar_row_label",
+    "sidebar_row_provider",
+    "sidebar_type_to_filter",
+    "sidebar_row_pending_request",
+    "sidebar_project_badges",
+    "sidebar_block_for_me",
+    "sidebar_dormant_after",
+    "sidebar_reveal_active",
+    "sidebar_rail",
+    "sidebar_block_working",
+    "sidebar_block_recent",
+    "sidebar_recent_count",
+    "sidebar_block_counts",
+    "sidebar_hide_empty_blocks",
+    "sidebar_gate_popover",
+    "sidebar_flash_on_change",
+    "sidebar_auto_collapse",
+    "sidebar_lens",
+    "sidebar_conversation_sort",
+    "sidebar_project_sort",
+    "sidebar_sticky_headers",
+    "sidebar_row_preview",
+    "sidebar_row_todos",
+    "sidebar_uniform_rows",
+    "sidebar_compact_rows",
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn editor_vim_mode_level_is_in_workspace_allowlist() {
+        assert!(
+            WORKSPACE_ALLOWED_KEYS.contains(&"editor_vim_mode_level"),
+            "editor_vim_mode_level must be in WORKSPACE_ALLOWED_KEYS"
+        );
+    }
+}

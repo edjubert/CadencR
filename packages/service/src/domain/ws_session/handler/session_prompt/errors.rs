@@ -17,12 +17,6 @@ pub(super) async fn persist_pause_and_send_session_error(
 ) {
     WsSessionPersistence::persist_error_message_static(pool, session_id, message, None).await;
     WsSessionPersistence::mark_paused_static(pool, session_id).await;
-    WsSessionPersistence::broadcast_session_status(
-        session_status_tx,
-        session_id,
-        feature_id,
-        crate::domain::session_status::AgentStatus::Idle,
-        None,
-    );
+    session_status_tx.broadcast_turn_failed(session_id, feature_id);
     send_error(sender, ref_id, code, message);
 }

@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState, type ReactElement, type RefObject } from "react";
-import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
-import { useShortcut } from "@/hooks/useShortcut";
+import { useEffect, useRef, useState, type ReactElement } from "react";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { Settings, PanelLeftClose, Search, Maximize, Minimize, Share } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,7 +12,19 @@ import {
 } from "@/components/ui/dialog";
 import { KbdShortcut } from "@/components/KbdShortcut";
 import { ProjectTree } from "@/components/ProjectTree";
+import { ShortcutHintsProvider } from "@/hooks/useNavShortcutHints";
+import { SidebarConfigProvider } from "@/components/SidebarConfigProvider";
+import { useSidebarOption } from "@/stores/sidebar-config-store";
 import { SidebarPinnedConversations } from "@/components/SidebarPinnedConversations";
+import { SidebarForMeSection } from "@/components/SidebarForMeSection";
+import { SidebarRecentSection } from "@/components/SidebarRecentSection";
+import { SidebarWorkingSection } from "@/components/SidebarWorkingSection";
+import {
+  SidebarAttentionShortcuts,
+  SidebarRenameDialog,
+  useSidebarRowShortcuts,
+} from "@/components/SidebarShortcuts";
+import { handleSidebarTypeToFilter, SidebarFilterInput } from "@/components/SidebarFilterInput";
 import { AppEnvironmentBadge } from "@/components/AppEnvironmentBadge";
 import { CadencrLogo } from "@/components/CadencrLogo";
 import { SchedulesSidebarLink } from "@/components/SchedulesSidebarLink";
@@ -31,8 +42,19 @@ import { SIDEBAR_FOOTER_PILL_CLASS } from "@/lib/changelog";
 import { cn } from "@/lib/utils";
 import { useSidebarCollapsed } from "@/components/SidebarContext";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useRouteFeatureIds } from "@/hooks/useRouteFeatureIds";
 import { useFullscreen } from "@/hooks/useFullscreen";
-import { getFocusedTabForFeature } from "@/lib/feature-focus-handoff";
+import { useSidebarKeyboardNavigation } from "@/hooks/useSidebarKeyboardNavigation";
+import { useBrowserActivityBridge } from "@/hooks/useFeatureActivityCounts";
+import {
+  useSidebarDisplayAttributes,
+  useSidebarHighlightAttribute,
+} from "@/hooks/useSidebarDisplayAttributes";
+import { SidebarSampleBanner } from "@/components/SidebarSampleBanner";
+import { SidebarSampleBlocks } from "@/components/SidebarSampleBlocks";
+import { SampleScope } from "@/components/SidebarSampleProvider";
+import { SidebarSampleProvider } from "@/components/SidebarSampleProvider";
+import { useSidebarShowsSamples } from "@/stores/sidebar-preview-store";
 import { HAS_MAC_WINDOW_CONTROLS } from "@/lib/mac-window-controls";
 
 export function Sidebar({ onSearch }: { onSearch: () => void }) {
@@ -43,50 +65,94 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const [selectedFeatureId, setSelectedFeatureId] = useState<number | null>(null);
   const { activeProjectId, effectiveFeatureId } = useSidebarActiveIds(selectedFeatureId);
   useSidebarKeyboardNavigation(sidebarRef, navigate, effectiveFeatureId);
+  useSidebarRowShortcuts();
+  useBrowserActivityBridge();
+  const displayAttributes = useSidebarDisplayAttributes();
+  useSidebarHighlightAttribute(sidebarRef);
+  const typeToFilter = useSidebarOption("typeToFilter");
+  const showsSamples = useSidebarShowsSamples();
 
   return (
-    <aside
-      data-app-sidebar
-      ref={sidebarRef}
-      aria-hidden={!isMobile && collapsed ? true : undefined}
-      inert={!isMobile && collapsed ? true : undefined}
-      // Safe-area insets pad the content here (not the mobile drawer wrapper) so
-      // `bg-sidebar` reaches the screen edges while the header/footer clear the
-      // notch and home indicator. The `env()` values are 0 on desktop, so this
-      // is a no-op outside fullscreen/standalone mobile.
-      className={cn(
-        "glass-surface flex h-full flex-col border-r border-border/60 bg-sidebar pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)]",
-        !isMobile && "transition-[opacity,transform] duration-[220ms] ease-[var(--ease-fluid)]",
-        !isMobile && collapsed && "pointer-events-none -translate-x-2 opacity-0",
-      )}
-    >
-      <SidebarHeader onCollapse={() => setCollapsed(true)} />
-      {/* Flex column so the tree gets the *remaining* height (not 100%, which
+    <SidebarConfigProvider>
+      <ShortcutHintsProvider enabled={!collapsed}>
+        <aside
+          data-app-sidebar
+          {...displayAttributes}
+          ref={sidebarRef}
+          onKeyDown={typeToFilter ? handleSidebarTypeToFilter : undefined}
+          aria-hidden={!isMobile && collapsed ? true : undefined}
+          inert={!isMobile && collapsed ? true : undefined}
+          // Safe-area insets pad the content here (not the mobile drawer wrapper) so
+          // `bg-sidebar` reaches the screen edges while the header/footer clear the
+          // notch and home indicator. The `env()` values are 0 on desktop, so this
+          // is a no-op outside fullscreen/standalone mobile.
+          className={cn(
+            "glass-surface flex h-full flex-col border-r border-border/60 bg-sidebar pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)]",
+            !isMobile && "transition-[opacity,transform] duration-[220ms] ease-[var(--ease-fluid)]",
+            !isMobile && collapsed && "pointer-events-none -translate-x-2 opacity-0",
+          )}
+        >
+          <SidebarHeader onCollapse={() => setCollapsed(true)} />
+          {/* Flex column so the tree gets the *remaining* height (not 100%, which
           overflows past the search bar and clips the scroll area's bottom). */}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-2">
-        <div className="mb-2 shrink-0 px-1">
-          <SidebarSearchButton onSearch={onSearch} />
-        </div>
-        {/* The unified agents grid is desktop-only — hide its entry on phones.
+          <SidebarSampleProvider enabled={showsSamples}>
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-2">
+              <div className="mb-2 shrink-0 px-1">
+                <SidebarSearchButton onSearch={onSearch} />
+              </div>
+              {/* The unified agents grid is desktop-only — hide its entry on phones.
             Schedules is a plain list, so it works everywhere. */}
-        <div className="mb-2 flex shrink-0 flex-col gap-0.5 px-1">
-          {!isMobile && <UnifiedAgentsSidebarLink />}
-          <SchedulesSidebarLink />
-        </div>
-        <SidebarPinnedConversations
-          activeFeatureId={effectiveFeatureId}
-          onSelectFeature={setSelectedFeatureId}
-        />
-        <div className="min-h-0 flex-1">
-          <ProjectTree
-            activeProjectId={activeProjectId}
-            activeFeatureId={effectiveFeatureId}
-            onSelectFeature={setSelectedFeatureId}
-          />
-        </div>
-      </div>
-      <SidebarFooter />
-    </aside>
+              <div className="mb-2 flex shrink-0 flex-col gap-0.5 px-1">
+                {!isMobile && <UnifiedAgentsSidebarLink />}
+                <SchedulesSidebarLink />
+              </div>
+              <SidebarSampleBanner />
+              {!showsSamples && <SidebarFilterInput />}
+              <SidebarAttentionShortcuts
+                activeFeatureId={effectiveFeatureId}
+                onSelectFeature={setSelectedFeatureId}
+              />
+              {showsSamples ? (
+                <div data-sidebar-sample className="flex shrink-0 flex-col">
+                  <SampleScope>
+                    <SidebarSampleBlocks />
+                  </SampleScope>
+                </div>
+              ) : (
+                <SidebarBlocks
+                  activeFeatureId={effectiveFeatureId}
+                  onSelectFeature={setSelectedFeatureId}
+                />
+              )}
+              <div className="min-h-0 flex-1">
+                <ProjectTree
+                  activeProjectId={activeProjectId}
+                  activeFeatureId={effectiveFeatureId}
+                  onSelectFeature={setSelectedFeatureId}
+                />
+              </div>
+            </div>
+          </SidebarSampleProvider>
+          <SidebarFooter />
+          <SidebarRenameDialog />
+        </aside>
+      </ShortcutHintsProvider>
+    </SidebarConfigProvider>
+  );
+}
+
+/** The blocks above the project list, each hidden while its option is off. */
+function SidebarBlocks(props: {
+  activeFeatureId: number | null;
+  onSelectFeature: (featureId: number) => void;
+}): ReactElement {
+  return (
+    <>
+      <SidebarForMeSection {...props} />
+      <SidebarWorkingSection {...props} />
+      <SidebarRecentSection {...props} />
+      <SidebarPinnedConversations {...props} />
+    </>
   );
 }
 
@@ -94,97 +160,8 @@ function useSidebarActiveIds(selectedFeatureId: number | null): {
   activeProjectId: number | null;
   effectiveFeatureId: number | null;
 } {
-  const routerState = useRouterState();
-  const routeParams = (routerState.location.pathname.match(
-    /\/projects\/(\d+)(?:\/features\/(\d+))?/,
-  ) ?? []) as string[];
-  const activeProjectId = routeParams[1]
-    ? Number(routeParams[1])
-    : routerState.location.search?.projectId
-      ? Number(routerState.location.search.projectId)
-      : null;
-  const activeFeatureId = routeParams[2]
-    ? Number(routeParams[2])
-    : routerState.location.search?.featureId
-      ? Number(routerState.location.search.featureId)
-      : null;
-
-  return { activeProjectId, effectiveFeatureId: activeFeatureId ?? selectedFeatureId };
-}
-
-function useSidebarKeyboardNavigation(
-  sidebarRef: RefObject<HTMLElement | null>,
-  navigate: ReturnType<typeof useNavigate>,
-  activeFeatureId: number | null,
-): void {
-  const getNavItems = (): HTMLElement[] => {
-    if (!sidebarRef.current) return [];
-    return Array.from(sidebarRef.current.querySelectorAll("[data-nav-item]")) as HTMLElement[];
-  };
-
-  const moveFocus = (direction: "up" | "down"): void => {
-    const items = getNavItems();
-    if (items.length === 0) return;
-
-    const currentIndex = items.findIndex((el) => el === document.activeElement);
-    let nextIndex: number;
-    if (currentIndex === -1) {
-      nextIndex = direction === "down" ? 0 : items.length - 1;
-    } else if (direction === "down") {
-      nextIndex = currentIndex >= items.length - 1 ? 0 : currentIndex + 1;
-    } else {
-      nextIndex = currentIndex <= 0 ? items.length - 1 : currentIndex - 1;
-    }
-    items[nextIndex].focus({ focusVisible: true } as FocusOptions);
-  };
-
-  // CMD+OPT+DOWN: move focus down in the sidebar
-  useShortcut("sidebar-focus-down", (e) => {
-    if (getActiveFocusZone() !== "left-sidebar") return;
-    e.preventDefault();
-    moveFocus("down");
-  });
-
-  // CMD+OPT+UP: move focus up in the sidebar
-  useShortcut("sidebar-focus-up", (e) => {
-    if (getActiveFocusZone() !== "left-sidebar") return;
-    e.preventDefault();
-    moveFocus("up");
-  });
-
-  // Enter: navigate to the focused item. `enableOnFormTags: false` so
-  // hitting Enter inside the project rename input commits the rename
-  // instead of stealing the keystroke for navigation.
-  useShortcut(
-    "sidebar-activate",
-    (e) => {
-      if (getActiveFocusZone() !== "left-sidebar") return;
-      const focused = document.activeElement as HTMLElement | null;
-      if (!focused?.hasAttribute("data-nav-item")) return;
-      e.preventDefault();
-
-      const type = focused.getAttribute("data-nav-type");
-      const id = focused.getAttribute("data-nav-id");
-      const projectId = focused.getAttribute("data-nav-project-id");
-
-      if (type === "feature" && id && projectId) {
-        const focusTab = getFocusedTabForFeature(activeFeatureId);
-        void navigate({
-          to: "/projects/$projectId/features/$featureId",
-          params: { projectId, featureId: id },
-          search: focusTab ? { focusTab } : undefined,
-        });
-      } else if (type === "project" && id) {
-        // Toggle expand by clicking the project button
-        focused.click();
-      } else if (type === "agents") {
-        void navigate({ to: "/agents" });
-      } else if (type === "schedules") {
-        void navigate({ to: "/schedules" });
-      }
-    },
-    { enableOnFormTags: false, enableOnContentEditable: false },
-  );
+  const { projectId, featureId } = useRouteFeatureIds();
+  return { activeProjectId: projectId, effectiveFeatureId: featureId ?? selectedFeatureId };
 }
 
 function SidebarSearchButton({ onSearch }: { onSearch: () => void }): ReactElement {

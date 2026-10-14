@@ -46,6 +46,8 @@ export const ClaudeProfileCombobox = memo(function ClaudeProfileCombobox({
   const [open, setOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const options = useProfileOptions(profiles);
+  const selectedLabel =
+    options.find((option) => option.value === value)?.label ?? formatClaudeProfileLabel(value);
 
   if (isLoading) {
     return (
@@ -65,14 +67,14 @@ export const ClaudeProfileCombobox = memo(function ClaudeProfileCombobox({
         <button
           type="button"
           role="combobox"
-          aria-label="Claude profile"
+          aria-label="Profile"
           aria-expanded={open}
-          title={`Claude profile: ${formatClaudeProfileLabel(value)}`}
+          title={`Profile: ${selectedLabel}`}
           className={cn(triggerBaseClassName(variant), triggerClassName)}
         >
           <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
             {label && <span className="text-muted-foreground/80">{label}</span>}
-            <span className="truncate">{formatClaudeProfileLabel(value)}</span>
+            <span className="truncate">{selectedLabel}</span>
           </span>
           <ChevronDownIcon className="size-3 opacity-70" />
         </button>
@@ -86,22 +88,23 @@ export const ClaudeProfileCombobox = memo(function ClaudeProfileCombobox({
           window.setTimeout(() => inputRef.current?.focus(), 0);
         }}
       >
-        <Command shouldFilter>
+        <Command shouldFilter label="Search profiles">
           <CommandInput
             ref={inputRef}
-            aria-label="Search Claude profiles"
+            aria-label="Search profiles"
             placeholder="Search profiles…"
             className="h-9 text-xs"
           />
           <CommandList className="max-h-48">
             <CommandEmpty className="py-3 text-center text-xs">No matching profiles.</CommandEmpty>
-            <CommandGroup heading="Claude profiles">
+            <CommandGroup heading="Profiles">
               {options.map((profile) => {
                 const selected = profile.value === value;
                 return (
                   <CommandItem
                     key={profile.value}
                     value={profile.value}
+                    keywords={[profile.label]}
                     className={cn("text-xs", selected && "font-medium text-foreground")}
                     onSelect={() => {
                       onChange(profile.value);
@@ -160,7 +163,10 @@ function useProfileOptions(profiles: ClaudeCodeProfile[]): ProfileOption[] {
     profiles.forEach((profile) => {
       if (seen.has(profile.name)) return;
       seen.add(profile.name);
-      options.push({ value: profile.name, label: formatClaudeProfileLabel(profile.name) });
+      options.push({
+        value: profile.name,
+        label: profile.label ?? formatClaudeProfileLabel(profile.name),
+      });
     });
     return options;
   }, [profiles]);

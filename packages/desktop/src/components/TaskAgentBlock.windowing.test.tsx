@@ -99,4 +99,15 @@ describe("TaskAgentBlock windowing", () => {
     );
     expect(depths).toEqual(["0", "1"]);
   });
+
+  it("retains header focus when expansion switches to the virtualized timeline", () => {
+    render(<TaskAgentBlock block={taskBlock(100, true)} />);
+    const toggle = screen.getByRole("button", { name: "Expand sub-agent actions" });
+    toggle.focus();
+
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveFocus();
+    expect(screen.getByTestId("subagent-action-timeline")).toBeInTheDocument();
+  });
 });

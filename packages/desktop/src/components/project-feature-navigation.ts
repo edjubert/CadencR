@@ -16,9 +16,13 @@ export function removeFeatureFromCachedLists(queryClient: QueryClient, featureId
   );
 }
 
-export function archiveFeatureInCachedLists(queryClient: QueryClient, featureId: number): void {
+export function archiveFeaturesInCachedLists(
+  queryClient: QueryClient,
+  featureIds: readonly number[],
+): void {
+  const archivedIds = new Set(featureIds);
   queryClient.setQueriesData<Feature[]>({ queryKey: getListFeaturesQueryKey() }, (old) =>
-    archiveFeatureInList(old, featureId),
+    archiveFeaturesInList(old, archivedIds),
   );
 }
 
@@ -30,18 +34,43 @@ function removeFeatureFromList(
   return old.filter((feature) => feature.id !== featureId);
 }
 
-function archiveFeatureInList(
+function archiveFeaturesInList(
   old: Feature[] | undefined,
-  featureId: number,
+  archivedIds: ReadonlySet<number>,
 ): Feature[] | undefined {
   if (!Array.isArray(old)) return old;
   let changed = false;
   const next = old.map((feature) => {
-    if (feature.id !== featureId || feature.status === FeatureStatus.archived) return feature;
+    if (!archivedIds.has(feature.id) || feature.status === FeatureStatus.archived) return feature;
     changed = true;
     return { ...feature, status: FeatureStatus.archived };
   });
   return changed ? next : old;
+}
+
+export function adjacentFeatureOutsideIds(
+  features: readonly Feature[],
+  featureId: number,
+  excludedIds: ReadonlySet<number>,
+): Feature | undefined {
+  const index = features.findIndex((feature) => feature.id === featureId);
+  if (index < 0) return features.find((feature) => !excludedIds.has(feature.id));
+  for (let distance = 1; distance < features.length; distance += 1) {
+    const after = features[index + distance];
+    if (after && !excludedIds.has(after.id)) return after;
+    const before = features[index - distance];
+    if (before && !excludedIds.has(before.id)) return before;
+  }
+  return undefined;
+}
+
+export function archiveNavigationTarget(
+  features: readonly Feature[],
+  activeFeatureId: number | null,
+  archivedIds: ReadonlySet<number>,
+): Feature | null | undefined {
+  if (activeFeatureId == null || !archivedIds.has(activeFeatureId)) return undefined;
+  return adjacentFeatureOutsideIds(features, activeFeatureId, archivedIds) ?? null;
 }
 
 export function adjacentFeature(

@@ -3,18 +3,19 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use tokio::process::ChildStdin;
-use tokio::sync::{broadcast, oneshot, Mutex};
+use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
 
 use crate::client_io::PendingMap;
-use crate::types::{AppServerClientInfo, AppServerEvent};
+use crate::event_queue::EventHub;
+use crate::types::AppServerClientInfo;
 
 pub(crate) struct Inner {
     pub(crate) stdin: Mutex<ChildStdin>,
     pub(crate) next_id: AtomicU64,
     pub(crate) pid: Option<u32>,
     pub(crate) pending: Arc<StdMutex<PendingMap>>,
-    pub(crate) events: broadcast::Sender<AppServerEvent>,
+    pub(crate) events: EventHub,
     pub(crate) reader_task: StdMutex<Option<JoinHandle<()>>>,
     pub(crate) stderr_task: StdMutex<Option<JoinHandle<()>>>,
     pub(crate) reaper_task: StdMutex<Option<JoinHandle<()>>>,

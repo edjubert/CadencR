@@ -213,6 +213,7 @@ mod tests {
         let pool = pool_with_messages().await;
         let dir = tempfile::tempdir().unwrap();
         let inputs = BranchInputs {
+            profile: None,
             db_session_id: 1,
             feature_id: 7,
             message_id: 3,

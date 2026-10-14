@@ -45,7 +45,8 @@ pub async fn resolve_feature_cwd(pool: &SqlitePool, feature_id: i64) -> Result<S
 
 /// Resolve the recorded worktree only when it still exists and is registered
 /// by the owning project repository. Verification failures are surfaced rather
-/// than silently routing work into a different directory.
+/// than silently routing work into a different directory. Plain projects have
+/// no Git worktree; callers keep using the project directory.
 pub async fn resolve_live_worktree(
     pool: &SqlitePool,
     feature_id: i64,
@@ -55,6 +56,12 @@ pub async fn resolve_live_worktree(
         return Ok(None);
     };
     if path.trim().is_empty() {
+        return Ok(None);
+    }
+    if !crate::shared::git_context::has_git_metadata(std::path::Path::new(project_path))
+        .await
+        .map_err(|error| error.to_string())?
+    {
         return Ok(None);
     }
     crate::domain::git::commands::is_live_worktree(
@@ -143,6 +150,22 @@ mod tests {
         .await
         .unwrap();
         pool
+    }
+
+    #[tokio::test]
+    async fn plain_project_ignores_worktree_settings_but_corruption_still_errors() {
+        let pool = make_pool().await;
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().to_str().unwrap();
+        set_setting(&pool, 1, "worktree_path", project)
+            .await
+            .unwrap();
+        assert_eq!(
+            resolve_live_worktree(&pool, 1, project).await.unwrap(),
+            None
+        );
+        std::fs::write(dir.path().join(".git"), "broken metadata").unwrap();
+        assert!(resolve_live_worktree(&pool, 1, project).await.is_err());
     }
 
     #[tokio::test]

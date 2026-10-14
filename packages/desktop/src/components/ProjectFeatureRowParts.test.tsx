@@ -1,18 +1,27 @@
-import { describe, expect, it, vi } from "vitest";
-import type { ReactNode } from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@/test-utils";
-import type { AllocatedPort, Feature, PrStatusSnapshot } from "@/api/generated";
-import { FeatureRowMetaLine, FeatureRowProviderMark } from "./ProjectFeatureRowParts";
+import type {
+  AllocatedPort,
+  Feature,
+  FeatureWorktreeInfo,
+  GitStats,
+  PrStatusSnapshot,
+  TodoProgress,
+} from "@/api/generated";
+import { DEFAULT_SIDEBAR_CONFIG, type SidebarConfig } from "@/lib/sidebar-config";
+import type { RowSummary } from "@/lib/sidebar-row-summary";
+import { useSidebarConfigStore } from "@/stores/sidebar-config-store";
+import { FeatureRowMetaLine } from "./ProjectFeatureRowParts";
 
 vi.mock("@/components/ShortcutTooltip", () => ({
   ShortcutTooltip: ({ children }: { children: unknown }) => children,
 }));
 
-vi.mock("@/components/SidebarPendingGatePopover", () => ({
-  SidebarPendingGatePopover: ({ children }: { children?: ReactNode }) => (
-    <div data-testid="pending-gate">{children ?? "default-gate"}</div>
-  ),
-}));
+function configure(overrides: Partial<SidebarConfig>): void {
+  useSidebarConfigStore.setState({ config: { ...DEFAULT_SIDEBAR_CONFIG, ...overrides } });
+}
+
+beforeEach(() => configure({}));
 
 function feature(overrides: Partial<Feature> = {}): Feature {
   return {
@@ -51,25 +60,39 @@ function port(overrides: Partial<AllocatedPort> = {}): AllocatedPort {
   };
 }
 
-function renderLine(prStatus: PrStatusSnapshot | undefined, ports: readonly AllocatedPort[] = []) {
-  return render(
+function lineElement(
+  prStatus: PrStatusSnapshot | undefined,
+  ports: readonly AllocatedPort[] = [],
+  downloadCount = 0,
+  extra: {
+    feature?: Feature;
+    worktree?: FeatureWorktreeInfo;
+    gitStats?: GitStats;
+    summary?: RowSummary;
+  } = {},
+) {
+  return (
     <FeatureRowMetaLine
-      feature={feature()}
+      feature={extra.feature ?? feature()}
+      worktree={extra.worktree}
       prStatus={prStatus}
-      gitStats={undefined}
+      gitStats={extra.gitStats}
       shellCount={0}
       browserCount={0}
+      downloadCount={downloadCount}
       ports={ports}
-      isEditingLabel={false}
-      labelDraft=""
-      labelSuggestions={[]}
-      isSavingLabel={false}
-      onLabelDraftChange={vi.fn()}
-      onSaveLabel={vi.fn()}
-      onCancelLabelEdit={vi.fn()}
       onOpenPort={vi.fn()}
-    />,
+      summary={extra.summary}
+    />
   );
+}
+
+function renderLine(...args: Parameters<typeof lineElement>) {
+  return render(lineElement(...args));
+}
+
+function withTodos(todos: TodoProgress | null, error: string | null = null) {
+  return lineElement(undefined, [], 0, { summary: { preview: null, todos, error } });
 }
 
 describe("FeatureRowMetaLine", () => {
@@ -105,39 +128,81 @@ describe("FeatureRowMetaLine", () => {
     expect(screen.getByLabelText("Ports 3000, 5173 in use")).toBeInTheDocument();
     expect(screen.getByText("+1")).toBeInTheDocument();
   });
+
+  it("shows active downloads independently from browser tabs", () => {
+    renderLine(undefined, [], 2);
+
+    expect(screen.getByLabelText("2 browser downloads active")).toHaveTextContent("2");
+    expect(screen.queryByLabelText(/browser tabs open/)).not.toBeInTheDocument();
+  });
 });
 
-describe("FeatureRowProviderMark", () => {
-  const mark = (status: "idle" | "agent" | "question", unread = false) =>
-    render(
-      <FeatureRowProviderMark
-        feature={feature({ runtime_provider: "claude_code" })}
-        liveStatus={status}
-        isActive={false}
-        isUnread={unread}
-        onOpenConversation={vi.fn()}
-      />,
-    );
+describe("FeatureRowMetaLine todo progress", () => {
+  it("counts todos only when asked to, and only while some are left", () => {
+    const { rerender } = render(withTodos({ done: 3, total: 7 }));
+    expect(document.querySelector("[data-feature-todos]")).toBeNull();
 
-  it("shows the idle provider mark without a reserved status column", () => {
-    mark("idle");
-    expect(screen.getByRole("img")).toHaveAttribute("data-provider-mark", "idle");
-    expect(screen.queryByTestId("pending-gate")).not.toBeInTheDocument();
+    configure({ todos: true });
+    rerender(withTodos({ done: 3, total: 7 }));
+    expect(screen.getByLabelText("3 of 7 todos done")).toHaveTextContent("3/7");
+
+    rerender(withTodos({ done: 7, total: 7 }));
+    expect(document.querySelector("[data-feature-meta-line]")).toBeNull();
   });
 
-  it("uses the working tinted mark instead of a separate bot icon", () => {
-    mark("agent");
-    const working = screen.getByRole("img", { name: /Working/ });
-    expect(working).toHaveAttribute("data-provider-mark", "working");
-    expect(working).toHaveClass("text-blue-500", "animate-pulse");
-    expect(screen.queryByTestId("pending-gate")).not.toBeInTheDocument();
-  });
+  it("says when the todo progress couldn't load", () => {
+    configure({ todos: true });
+    render(withTodos(null, "Service unreachable"));
 
-  it("wraps the tinted mark in the pending-gate trigger while waiting", () => {
-    mark("question");
-    expect(screen.getByTestId("pending-gate")).toBeInTheDocument();
     expect(
-      screen.getByTestId("pending-gate").querySelector("[data-provider-mark]"),
-    ).toHaveAttribute("data-provider-mark", "waiting");
+      screen.getByLabelText("Todo progress unavailable: Service unreachable"),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("FeatureRowMetaLine display options", () => {
+  const worktree = {
+    feature_id: 5,
+    worktree_path: "/repo/.worktrees/fix-login",
+    worktree_branch: "fix/login",
+    directory_exists: true,
+    is_default_branch: false,
+    is_main_worktree: false,
+    live: true,
+  } satisfies FeatureWorktreeInfo;
+  const stats: GitStats = { insertions: 4, deletions: 2, files_changed: 1 };
+
+  it("shows the branch only when asked to", () => {
+    renderLine(undefined, [], 0, { worktree });
+    expect(document.querySelector("[data-feature-meta-line]")).toBeNull();
+
+    configure({ branch: true });
+    renderLine(undefined, [], 0, { worktree });
+    expect(document.querySelector("[data-feature-branch]")).toHaveTextContent("fix/login");
+  });
+
+  it("drops each hidden element, and the line once nothing is left", () => {
+    configure({ diff: false, ports: false, activity: false, pr: false });
+    renderLine(snapshot({ error: "Bad credentials" }), [port()], 2, { gitStats: stats });
+    expect(document.querySelector("[data-feature-meta-line]")).toBeNull();
+  });
+
+  it("renders the label as a dot or not at all", () => {
+    configure({ label: "dot" });
+    const { unmount } = renderLine(undefined, [], 0, { feature: feature({ label: "bug" }) });
+    expect(screen.getByRole("img", { name: "Label: bug" })).toHaveAttribute("title", "bug");
+    unmount();
+
+    configure({ label: "hidden" });
+    renderLine(undefined, [], 0, { feature: feature({ label: "bug" }) });
+    expect(document.querySelector("[data-feature-meta-line]")).toBeNull();
+  });
+
+  it("names the model on this line when the provider shows logo + model", () => {
+    configure({ provider: "logo_model" });
+    renderLine(undefined, [], 0, {
+      feature: feature({ runtime_provider: "codex_cli", model_session: "gpt-5.4" }),
+    });
+    expect(document.querySelector("[data-feature-model]")).toHaveTextContent("gpt-5.4");
   });
 });

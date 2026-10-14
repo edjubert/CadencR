@@ -6,7 +6,10 @@ import {
   FolderGit2Icon,
   GitBranchIcon,
   GitPullRequestIcon,
+  MailCheckIcon,
+  MailIcon,
   PinIcon,
+  PencilIcon,
   PinOffIcon,
   TagIcon,
   TrashIcon,
@@ -20,6 +23,8 @@ import { closeFeatureActivityNoun } from "@/lib/feature-activity-close";
 import { copyToClipboard } from "@/lib/clipboard";
 import { openPullRequestActionLabel, openPullRequestExternally } from "@/lib/open-pull-request";
 import { archiveActionLabel, pinActionLabel } from "@/components/ProjectFeatureRowParts";
+import { useIsFeatureMarked, useUnreadStore } from "@/stores/unread-store";
+import { useSidebarRenameStore } from "@/stores/sidebar-rename-store";
 
 interface ProjectFeatureContextMenuProps {
   feature: Feature;
@@ -32,10 +37,16 @@ interface ProjectFeatureContextMenuProps {
   hasActivity: boolean;
   shellCount: number;
   browserCount: number;
+  downloadCount: number;
   onNavigate: (feature: Feature) => void;
   onTogglePin: (featureId: number, pinned: boolean) => void;
   onStartLabelEditAfterMenuClose: () => void;
-  onCloseActivity: (featureId: number, shellCount: number, browserCount: number) => void;
+  onCloseActivity: (
+    featureId: number,
+    shellCount: number,
+    browserCount: number,
+    downloadCount: number,
+  ) => void;
   onUnarchive: (featureId: number) => void;
   onArchiveOrDelete: (featureId: number) => void;
 }
@@ -50,6 +61,7 @@ export function ProjectFeatureContextMenu({
   hasActivity,
   shellCount,
   browserCount,
+  downloadCount,
   onNavigate,
   onTogglePin,
   onStartLabelEditAfterMenuClose,
@@ -73,15 +85,22 @@ export function ProjectFeatureContextMenu({
           {pinActionLabel(isPinned)}
         </ContextMenuActionItem>
       )}
+      <ContextMenuActionItem
+        icon={PencilIcon}
+        onSelect={() => useSidebarRenameStore.getState().open(feature.id)}
+      >
+        Rename
+      </ContextMenuActionItem>
+      <MarkReadItem featureId={feature.id} />
       <ContextMenuActionItem icon={TagIcon} onSelect={onStartLabelEditAfterMenuClose}>
         Set label
       </ContextMenuActionItem>
       {hasActivity && (
         <ContextMenuActionItem
           icon={XIcon}
-          onSelect={() => onCloseActivity(feature.id, shellCount, browserCount)}
+          onSelect={() => onCloseActivity(feature.id, shellCount, browserCount, downloadCount)}
         >
-          {`Close ${closeFeatureActivityNoun(shellCount, browserCount)}`}
+          {`Close ${closeFeatureActivityNoun(shellCount, browserCount, downloadCount)}`}
         </ContextMenuActionItem>
       )}
       <ContextMenuSeparator />
@@ -128,5 +147,28 @@ export function ProjectFeatureContextMenu({
         {archiveActionLabel(isArchived)}
       </ContextMenuActionItem>
     </>
+  );
+}
+
+/**
+ * Mark as unread keeps a conversation in "For me" even while it is open: only
+ * opening it again reads it.
+ */
+function MarkReadItem({ featureId }: { featureId: number }): ReactNode {
+  const isMarked = useIsFeatureMarked(featureId);
+  return isMarked ? (
+    <ContextMenuActionItem
+      icon={MailCheckIcon}
+      onSelect={() => useUnreadStore.getState().toggleMarked(featureId)}
+    >
+      Mark as read
+    </ContextMenuActionItem>
+  ) : (
+    <ContextMenuActionItem
+      icon={MailIcon}
+      onSelect={() => useUnreadStore.getState().toggleMarked(featureId)}
+    >
+      Mark as unread
+    </ContextMenuActionItem>
   );
 }

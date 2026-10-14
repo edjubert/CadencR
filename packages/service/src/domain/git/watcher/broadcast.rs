@@ -289,7 +289,9 @@ mod tests {
     #[tokio::test]
     async fn recompute_now_surfaces_refresh_failures_as_status_errors() {
         let mut fixture = subscribed_fixture().await;
-        std::fs::remove_dir_all(fixture.canonical.join(".git")).unwrap();
+        // Missing Git metadata is now an expected empty context. Corruption
+        // inside a repository must still produce a visible refresh error.
+        std::fs::write(fixture.canonical.join(".git/index"), "broken index").unwrap();
         fixture
             .registry
             .recompute_now(&fixture.canonical, &fixture.state)

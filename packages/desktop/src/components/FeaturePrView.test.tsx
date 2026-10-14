@@ -84,6 +84,24 @@ describe("FeaturePrView pinned band", () => {
 
     expect(scroller.scrollTop).toBe(48);
   });
+
+  it.each([180, -180])("keeps a wheel delta of %i over a check out of the comments", (deltaY) => {
+    usePrStatusStore.getState().setStatus({
+      ...snapshot(),
+      fetched_at: 2,
+      ci: { state: "failing", checks: [{ name: "build", state: "failing" }] },
+    });
+    render(<FeaturePrView featureId={42} reviews={REVIEWS} />);
+    const band = screen.getByRole("heading", { name: "Pinned band" }).closest("div.shrink-0")!;
+    const scroller = band.nextElementSibling as HTMLElement;
+    scroller.scrollTop = 240;
+
+    // Even a short check list must own its gesture. Wheel events on a row
+    // used to bubble into the pinned band's manual forwarding handler.
+    fireEvent.wheel(screen.getByText("build"), { deltaY });
+
+    expect(scroller.scrollTop).toBe(240);
+  });
 });
 
 describe("FeaturePrView unresolved chip", () => {

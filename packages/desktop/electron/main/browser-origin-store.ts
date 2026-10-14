@@ -50,6 +50,12 @@ export class BrowserOriginStore {
     return this.load().map((entry) => entry.origin);
   }
 
+  /** Clear the legacy origin suggestions alongside full-page history. */
+  clear(): void {
+    this.write({ origins: [] }, true);
+    this.entries = [];
+  }
+
   private load(): OriginEntry[] {
     if (this.entries) return this.entries;
     this.entries = this.read();
@@ -67,11 +73,12 @@ export class BrowserOriginStore {
     }
   }
 
-  private write(data: PersistedOrigins): void {
+  private write(data: PersistedOrigins, surfaceError = false): void {
     try {
       fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
       fs.writeFileSync(this.filePath, JSON.stringify(data, null, 2));
     } catch (error) {
+      if (surfaceError) throw error;
       // History is a convenience, not correctness — a write failure must not
       // break navigation. Surface it to the main-process log only.
       console.warn("Browser origin history write failed:", error);

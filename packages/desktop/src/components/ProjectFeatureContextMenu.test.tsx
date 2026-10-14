@@ -45,6 +45,7 @@ function renderMenu(pr: PrSummary | null): void {
           hasActivity={false}
           shellCount={0}
           browserCount={0}
+          downloadCount={0}
           onNavigate={vi.fn()}
           onTogglePin={vi.fn()}
           onStartLabelEditAfterMenuClose={vi.fn()}

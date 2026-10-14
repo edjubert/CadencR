@@ -15,4 +15,9 @@ describe("closeFeatureActivityNoun", () => {
     expect(closeFeatureActivityNoun(0, 1)).toBe("browser tab");
     expect(closeFeatureActivityNoun(0, 4)).toBe("browser tabs");
   });
+
+  it("names active downloads without inflating browser tab nouns", () => {
+    expect(closeFeatureActivityNoun(0, 0, 1)).toBe("download");
+    expect(closeFeatureActivityNoun(0, 1, 2)).toBe("browser tab & downloads");
+  });
 });

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cadencr:signed-managed-provider-index:v1",
+  "title": "Cadencr signed managed provider index v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["signed", "signature"],
+  "properties": {
+    "signed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "generated_at", "expires_at", "packages"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "generated_at": { "type": "string", "format": "date-time" },
+        "expires_at": { "type": "string", "format": "date-time" },
+        "packages": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "managed-provider-package-v1.schema.json" }
+        }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "key_id", "value"],
+      "properties": {
+        "algorithm": { "const": "ed25519" },
+        "key_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+        "value": { "type": "string" }
+      }
+    }
+  }
+}

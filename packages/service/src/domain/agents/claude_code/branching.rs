@@ -161,6 +161,7 @@ mod tests {
 
         let ctx = BranchContext {
             cwd: cwd.to_path_buf(),
+            profile: None,
             source_runtime_session_id: "src".to_string(),
             cut_provider_uuid: None,
             cut_user_ordinal: 2, // cut before the 2nd prompt → keep p1, a1
@@ -189,6 +190,7 @@ mod tests {
         let (_home, _home_guard) = set_home(tempfile::tempdir().unwrap());
         let ctx = BranchContext {
             cwd: Path::new("/Users/test/missing").to_path_buf(),
+            profile: None,
             source_runtime_session_id: "nope".to_string(),
             cut_provider_uuid: None,
             cut_user_ordinal: 1,
@@ -220,6 +222,7 @@ mod tests {
 
         let ctx = BranchContext {
             cwd: cwd.to_path_buf(),
+            profile: None,
             source_runtime_session_id: "src".to_string(),
             cut_provider_uuid: Some("p2".to_string()),
             cut_user_ordinal: 2,
@@ -248,6 +251,7 @@ mod tests {
 
         let ctx = BranchContext {
             cwd: cwd.to_path_buf(),
+            profile: None,
             source_runtime_session_id: "src".to_string(),
             cut_provider_uuid: None,
             cut_user_ordinal: 2,

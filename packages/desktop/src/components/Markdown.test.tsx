@@ -1,8 +1,14 @@
 import { StrictMode } from "react";
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@/test-utils";
+import { render, screen, fireEvent } from "@/test-utils";
 import { LinkRoutingContext, type LinkRouting } from "./links/LinkRoutingContext";
 import { Markdown } from "./Markdown";
+import { useOpenDiffInEditor } from "./diff/OpenDiffInEditorContext";
+import { LARGE_CODE_LINE_THRESHOLD } from "./markdown/LargeCodeBlock";
+
+vi.mock("./diff/OpenDiffInEditorContext", () => ({
+  useOpenDiffInEditor: vi.fn(),
+}));
 
 const words = (count: number): string =>
   Array.from({ length: count }, (_, i) => `word${i}`).join(" ");
@@ -108,6 +114,20 @@ describe("Markdown", () => {
     render(<Markdown content={"```\nsome output\n```"} />);
     expect(screen.getByText("text")).toBeInTheDocument();
     expect(screen.getByText("some output")).toBeInTheDocument();
+  });
+
+  it("keeps ordinary fences highlighted and routes threshold-sized fences to the bounded viewer", () => {
+    const ordinary = render(<Markdown content={"```typescript\nconst x = 1;\n```"} />);
+    expect(ordinary.container.querySelector("code.hljs")).toBeInTheDocument();
+    ordinary.unmount();
+
+    const code = Array.from(
+      { length: LARGE_CODE_LINE_THRESHOLD },
+      (_, index) => `line ${index}`,
+    ).join("\n");
+    const large = render(<Markdown content={`\`\`\`typescript\n${code}\n\`\`\``} />);
+    expect(screen.getByText(/large code — virtualized for performance/i)).toBeInTheDocument();
+    expect(large.container.querySelector("code.hljs")).not.toBeInTheDocument();
   });
 
   it("renders inline raw HTML", () => {
@@ -224,6 +244,53 @@ describe("Markdown", () => {
       const spans = animatedSpans(container);
       expect(spans.length).toBeGreaterThan(20);
       expect(spans.filter((span) => span.style.getPropertyValue("--sd-delay") !== "")).toEqual([]);
+    });
+  });
+
+  describe("file references", () => {
+    it("renders a file:line reference as a clickable link", () => {
+      render(<Markdown content="see src/main.rs:42 for details" />);
+      expect(screen.getByText("src/main.rs:42")).toBeInTheDocument();
+    });
+
+    it("opens the file at the referenced line on click", () => {
+      const openInEditor = vi.fn();
+      vi.mocked(useOpenDiffInEditor).mockReturnValue(openInEditor);
+      render(<Markdown content="see src/main.rs:42 for details" />);
+      fireEvent.click(screen.getByText("src/main.rs:42"));
+      expect(openInEditor).toHaveBeenCalledWith("src/main.rs", 42, undefined);
+    });
+
+    // A `<` anywhere in the message routes it through rehype-sanitize, whose
+    // protocol allowlist reads `foo.ts:` or `file:` as an unknown scheme.
+    it.each([
+      ["a bare file:line link", "[main.rs](main.rs:42)", "main.rs", 42],
+      ["a file:// link", "[main.rs](file:///repo/src/main.rs)", "/repo/src/main.rs", undefined],
+      ["a Windows drive link", "[main.rs](C:/repo/main.rs:7)", "C:/repo/main.rs", 7],
+    ])("keeps %s clickable in a message that contains raw HTML", (_, link, path, line) => {
+      const openInEditor = vi.fn();
+      vi.mocked(useOpenDiffInEditor).mockReturnValue(openInEditor);
+      render(<Markdown content={`Returns Vec<T>, see ${link}`} />);
+      fireEvent.click(screen.getByText("main.rs"));
+      expect(openInEditor).toHaveBeenCalledWith(path, line, undefined);
+    });
+
+    it("drops a hand-written envelope that doesn't carry a file link", () => {
+      vi.mocked(useOpenDiffInEditor).mockReturnValue(vi.fn());
+      render(<Markdown content={'<a href="cadencr-agent-file:javascript%3Aalert(1)">x</a>'} />);
+      expect(screen.getByText("x").closest("a")).not.toHaveAttribute("href");
+    });
+
+    it("still strips an unknown scheme that merely contains a slash", () => {
+      vi.mocked(useOpenDiffInEditor).mockReturnValue(vi.fn());
+      render(<Markdown content={"Vec<T> [x](vbscript:run/x.rs)"} />);
+      expect(screen.getByText("x").closest("a")).not.toHaveAttribute("href", "vbscript:run/x.rs");
+    });
+
+    it("does nothing when rendered outside an editor context", () => {
+      vi.mocked(useOpenDiffInEditor).mockReturnValue(undefined);
+      render(<Markdown content="see src/main.rs:42 for details" />);
+      expect(() => fireEvent.click(screen.getByText("src/main.rs:42"))).not.toThrow();
     });
   });
 });

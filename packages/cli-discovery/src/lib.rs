@@ -27,7 +27,7 @@ pub use version::{parse_version_string, query_version};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::version::{contains_ci, probe_version};
+use crate::version::probe_version;
 use crate::walk::{canonicalize_executable, walk_path_var, walk_well_known};
 
 /// Enumerate every candidate binary on disk, in source order.
@@ -48,13 +48,10 @@ pub async fn discover_all(spec: &DiscoverySpec, override_path: Option<&Path>) ->
             // honoring an override that will only fail downstream.
             let probe = probe_version(path, &spec.version_args).await;
             let accept = match (&probe, spec.version_must_contain.as_deref()) {
-                // Filter set: require both the substring and a parsed semver.
-                // The substring alone is too lax — the rustup shim's
-                // "Unknown binary 'rust-analyzer'" error mentions the name
-                // and would pass a contains-only check.
-                (Some((version, raw)), Some(needle)) => {
-                    contains_ci(raw, needle) && version.is_some()
-                }
+                // Filter set: the substring alone is too lax — the rustup
+                // shim's "Unknown binary 'rust-analyzer'" error mentions the
+                // name and would pass a contains-only check.
+                (Some(probe), Some(needle)) => probe.passes_filter(needle),
                 // No filter, or subprocess failed entirely: keep behavior
                 // unchanged (returns a possibly versionless candidate).
                 _ => true,
@@ -63,7 +60,7 @@ pub async fn discover_all(spec: &DiscoverySpec, override_path: Option<&Path>) ->
                 return vec![Candidate {
                     path: path.to_path_buf(),
                     canonical,
-                    version: probe.and_then(|(v, _)| v),
+                    version: probe.and_then(|probe| probe.version),
                     source: CandidateSource::Override,
                 }];
             }
@@ -122,18 +119,16 @@ pub async fn discover_all(spec: &DiscoverySpec, override_path: Option<&Path>) ->
                 // accepted earlier, etc.) → reject. The filter exists
                 // specifically to weed out shims and we can't validate one
                 // without its output.
-                let (version, raw) = match &probe {
-                    Some(parts) => parts,
-                    None => return None,
-                };
-                // Require both substring AND parsed semver — see the doc
-                // comment on `version_must_contain`. A shim's error message
-                // can mention the binary name without producing a version.
-                if !contains_ci(raw, needle) || version.is_none() {
+                // See the doc comment on `version_must_contain`: a shim's
+                // error message can mention the binary name.
+                if !probe
+                    .as_ref()
+                    .is_some_and(|probe| probe.passes_filter(needle))
+                {
                     return None;
                 }
             }
-            candidate.version = probe.and_then(|(v, _)| v);
+            candidate.version = probe.and_then(|probe| probe.version);
             Some(candidate)
         })
         .collect()
@@ -173,11 +168,43 @@ pub fn select_best(candidates: &[Candidate]) -> Option<&Candidate> {
     })
 }
 
+/// Detect whether `nvim` is available on this machine.
+///
+/// Reuses the same discovery pipeline (env `$PATH` + cached login-shell
+/// `$PATH` + well-known dirs) as the agent-CLI probes above, so a `nvim`
+/// only visible from a login shell (e.g. installed via Homebrew but Cadencr
+/// launched from Finder/Dock) is found the same way `NeovimManager::start`
+/// will later resolve it when spawning the headless process.
+pub async fn detect_nvim() -> bool {
+    let spec = DiscoverySpec {
+        bin_name: "nvim".to_string(),
+        well_known_relative_to_home: vec![],
+        well_known_absolute: vec![
+            "/opt/homebrew/bin".to_string(),
+            "/usr/local/bin".to_string(),
+        ],
+        version_args: vec!["--version".to_string()],
+        version_must_contain: Some("NVIM".to_string()),
+    };
+    let candidates = discover_all(&spec, None).await;
+    select_best(&candidates).is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tests_support::{dummy_spec, make_executable_with_body};
     use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn detect_nvim_returns_true_when_binary_available() {
+        let expected = std::process::Command::new("nvim")
+            .arg("--version")
+            .output()
+            .is_ok();
+        let detected = detect_nvim().await;
+        assert_eq!(detected, expected);
+    }
 
     #[test]
     fn select_best_picks_highest_version_then_highest_source() {

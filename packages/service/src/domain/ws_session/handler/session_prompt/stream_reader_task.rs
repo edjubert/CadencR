@@ -335,9 +335,10 @@ impl StreamReaderTask {
         if let Some(query) = query {
             persist_and_close_query(
                 &query,
-                &self.write_pool,
+                &self.app_state,
                 self.db_session_id,
                 &self.runtime_provider,
+                self.feature_id,
             )
             .await;
         }

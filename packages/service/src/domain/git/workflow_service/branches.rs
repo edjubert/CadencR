@@ -17,6 +17,10 @@ pub async fn list_branches(
     let project_path = repository::get_project_path(&state.read_pool, params.project_id).await?;
     let repo = Path::new(&project_path);
 
+    if !crate::shared::git_context::has_git_metadata(repo).await? {
+        return Ok(vec![]);
+    }
+
     // Two separate calls — `git branch -a --format=%(refname:short)` mixes
     // locals and remote-tracking refs into the same column, which breaks
     // dedupe when a local branch contains a `/` (e.g. `feat/a` vs the remote

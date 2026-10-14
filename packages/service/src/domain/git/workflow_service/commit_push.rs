@@ -94,12 +94,15 @@ pub async fn get_uncommitted_files(
     state: &AppState,
     params: GetUncommittedFilesParams,
 ) -> Result<Vec<UncommittedFile>, AppError> {
-    let git_path = resolve_feature_git_path(state, params.feature_id)
+    let path = crate::domain::git::service::resolve_feature_working_path(state, params.feature_id)
         .await?
         .ok_or_else(|| {
             AppError::NotFound(format!("feature {} has no git path", params.feature_id))
         })?;
-    let repo = Path::new(&git_path);
+    let repo = Path::new(&path);
+    if !crate::shared::git_context::has_git_metadata(repo).await? {
+        return Ok(vec![]);
+    }
 
     Ok(commands::get_uncommitted_entries(repo)
         .await?

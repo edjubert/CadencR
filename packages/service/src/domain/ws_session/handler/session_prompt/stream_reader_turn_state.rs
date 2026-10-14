@@ -53,8 +53,9 @@ impl StreamTurnState {
         self.surfaced_error_this_turn
     }
 
-    pub(super) fn mark_error_surfaced(&mut self) {
-        self.surfaced_error_this_turn = true;
+    pub(super) fn mark_error_surfaced(&mut self, parent_tool_use_id: Option<&str>) {
+        // A descendant failure must not suppress a distinct root failure.
+        self.surfaced_error_this_turn |= parent_tool_use_id.is_none();
     }
 
     pub(super) fn mark_fresh_turn_started(&mut self) {
@@ -99,7 +100,7 @@ mod tests {
     fn explicit_turn_start_enters_active_and_resets_turn_error() {
         let mut state = StreamTurnState::new();
 
-        state.mark_error_surfaced();
+        state.mark_error_surfaced(None);
         state.mark_fresh_turn_started();
 
         assert!(!state.is_between_turns());
@@ -137,5 +138,16 @@ mod tests {
         assert!(!state.record_signal_status(AgentStatus::Agent));
         assert_eq!(state.last_signal_status(), Some(AgentStatus::Agent));
         assert!(state.record_signal_status(AgentStatus::Idle));
+    }
+    #[test]
+    fn child_errors_do_not_suppress_root_errors_or_clear_root_deduplication() {
+        let mut state = StreamTurnState::new();
+        state.mark_fresh_turn_started();
+        state.mark_error_surfaced(Some("spawn-child"));
+        assert!(!state.has_error_surfaced_this_turn());
+        state.mark_error_surfaced(None);
+        assert!(state.has_error_surfaced_this_turn());
+        state.mark_error_surfaced(Some("spawn-other"));
+        assert!(state.has_error_surfaced_this_turn());
     }
 }

@@ -2,14 +2,13 @@ use tracing::{debug, info};
 
 use crate::app_state::AppState;
 use crate::domain::agents::adapter::RuntimeSpawnConfig;
-use crate::domain::sessions::user_messages::canonical_user_message_uuid;
 use crate::domain::ws_session::protocol::{PromptSendPayload, WsEnvelope};
 
 use crate::domain::agents::adapter::RuntimeSessionHandle;
 
 use super::super::session_profile::{
     apply_profile_update, desired_profile_name, prompt_profile, resolve_provider_profile,
-    SessionProfileUpdate,
+    validate_resume_profile_state, SessionProfileUpdate,
 };
 use super::super::{parse_session_id, send_error, QueryState, SdkHandle, SdkSessions, WsSender};
 use super::prompt_followup::{handle_followup_prompt, FollowupPromptContext};
@@ -17,6 +16,7 @@ use super::prompt_pending::{handle_pending_prompt, PendingPromptContext};
 use super::prompt_runtime_config::{
     apply_respawn_if_needed, dispatch_changes, log_dispatch_decision,
 };
+use super::prompt_send_entry::{report_prompt_result, PromptedSelection};
 
 pub(super) struct PreparedPrompt {
     pub payload: PromptSendPayload,
@@ -32,7 +32,7 @@ pub(super) async fn prepare_prompt(
 ) -> Option<PreparedPrompt> {
     let mut payload = parse_prompt_payload(envelope, sender)?;
     let db_session_id = parse_prompt_session_id(&payload, envelope, sender)?;
-    if let Err(message) = normalize_prompt_message_uuid(&mut payload) {
+    if let Err(message) = super::prompt_validation::normalize_message_uuid(&mut payload) {
         send_error(sender, &envelope.id, "INVALID_MESSAGE_UUID", &message);
         return None;
     }
@@ -87,6 +87,7 @@ pub(super) async fn dispatch_local_phase(
     log_dispatch_decision(handle, db_session_id, &changes);
 
     if let QueryState::Active { query, .. } = &handle.state {
+        let selection = PromptedSelection::of(handle);
         let context = build_followup_context(
             query.clone(),
             handle.feature_id,
@@ -98,11 +99,8 @@ pub(super) async fn dispatch_local_phase(
             envelope.id.clone(),
         );
         drop(sessions);
-        report_user_message_persist_result(
-            sender,
-            &envelope.id,
-            handle_followup_prompt(context, payload).await,
-        );
+        let result = handle_followup_prompt(context, payload).await;
+        report_prompt_result(sender, &envelope.id, selection, result);
         return None;
     }
     Some(payload)
@@ -128,16 +126,13 @@ pub(super) async fn dispatch_owner_phase(
         .await
         {
             match target {
-                OwnerPromptTarget::Followup(context) => {
-                    report_user_message_persist_result(
-                        sender,
-                        &envelope.id,
-                        handle_followup_prompt(context, payload).await,
-                    );
+                OwnerPromptTarget::Followup(context, selection) => {
+                    let result = handle_followup_prompt(context, payload).await;
+                    report_prompt_result(sender, &envelope.id, selection, result);
                 }
                 OwnerPromptTarget::Pending(owner_sessions) => {
                     spawn_pending_prompt(
-                        &envelope,
+                        envelope,
                         sender,
                         &owner_sessions,
                         app_state,
@@ -189,7 +184,7 @@ fn build_followup_context(
 /// resolved via the active-turn registry. Returns `None` when that connection's
 /// turn is no longer live.
 enum OwnerPromptTarget {
-    Followup(FollowupPromptContext),
+    Followup(FollowupPromptContext, PromptedSelection),
     Pending(SdkSessions),
 }
 
@@ -201,7 +196,7 @@ async fn owner_prompt_target(
     envelope_id: &str,
     profile_update: Option<&SessionProfileUpdate>,
 ) -> Option<OwnerPromptTarget> {
-    let (query, feature_id, provider_id) = {
+    let (query, feature_id, provider_id, selection) = {
         let mut sessions = owner.lock().await;
         let handle = sessions.get_mut(&db_session_id)?;
         let changes = if profile_update.is_some() {
@@ -217,6 +212,7 @@ async fn owner_prompt_target(
                 query.clone(),
                 handle.feature_id,
                 handle.runtime_provider.clone(),
+                PromptedSelection::of(handle),
             ),
             QueryState::Pending(_) => return Some(OwnerPromptTarget::Pending(owner.clone())),
         }
@@ -225,16 +221,19 @@ async fn owner_prompt_target(
         db_session_id,
         "steering live turn owned by another connection (no new agent)"
     );
-    Some(OwnerPromptTarget::Followup(build_followup_context(
-        query,
-        feature_id,
-        db_session_id,
-        provider_id,
-        sender,
-        owner,
-        app_state,
-        envelope_id.to_string(),
-    )))
+    Some(OwnerPromptTarget::Followup(
+        build_followup_context(
+            query,
+            feature_id,
+            db_session_id,
+            provider_id,
+            sender,
+            owner,
+            app_state,
+            envelope_id.to_string(),
+        ),
+        selection,
+    ))
 }
 
 /// First prompt (or respawn after a config change): take the stored spawn
@@ -257,6 +256,7 @@ pub(super) async fn spawn_pending_prompt(
         );
         return;
     };
+    let selection = PromptedSelection::of(handle);
     let spawned_model = handle.desired_model.clone();
     let spawned_thinking_effort = handle.desired_thinking_effort.clone();
     let config = handle.config.clone();
@@ -302,17 +302,8 @@ pub(super) async fn spawn_pending_prompt(
     };
     drop(sessions);
     // Persist user message in the pending helper after releasing sdk_sessions.
-    report_user_message_persist_result(sender, &envelope.id, handle_pending_prompt(context).await);
-}
-
-fn report_user_message_persist_result(
-    sender: &WsSender,
-    envelope_id: &str,
-    result: Result<(), String>,
-) {
-    if let Err(error) = result {
-        send_error(sender, envelope_id, "USER_MESSAGE_PERSIST_FAILED", &error);
-    }
+    let result = handle_pending_prompt(context).await;
+    report_prompt_result(sender, &envelope.id, selection, result);
 }
 
 async fn resolve_prompt_profile_update(
@@ -323,10 +314,7 @@ async fn resolve_prompt_profile_update(
     sender: &WsSender,
     envelope: &WsEnvelope,
 ) -> Result<Option<SessionProfileUpdate>, String> {
-    let Some(profile_name) = prompt_profile(payload) else {
-        return Ok(None);
-    };
-    let (provider, current_profile) = {
+    let (provider, current_profile, cwd) = {
         let sessions = sdk_sessions.lock().await;
         let Some(handle) = sessions.get(&db_session_id) else {
             send_error(
@@ -340,9 +328,22 @@ async fn resolve_prompt_profile_update(
         (
             handle.runtime_provider.clone(),
             desired_profile_name(handle).map(str::to_string),
+            handle.config.cwd.clone(),
         )
     };
-    let update = resolve_provider_profile(app_state, &provider, profile_name).await?;
+    let selected_profile = prompt_profile(payload)
+        .map(ToOwned::to_owned)
+        .or_else(|| current_profile.clone());
+    let Some(profile_name) = selected_profile.as_deref() else {
+        return Ok(None);
+    };
+    let update = resolve_provider_profile(app_state, &provider, profile_name, &cwd).await?;
+    {
+        let sessions = sdk_sessions.lock().await;
+        if let Some(handle) = sessions.get(&db_session_id) {
+            validate_resume_profile_state(handle, &update)?;
+        }
+    }
     if current_profile.as_deref() != Some(update.name.as_str()) {
         crate::domain::ws_session::persistence::WsSessionPersistence::update_profile_static(
             &app_state.write_pool,
@@ -388,12 +389,4 @@ fn parse_prompt_session_id(
             None
         }
     }
-}
-
-fn normalize_prompt_message_uuid(payload: &mut PromptSendPayload) -> Result<(), String> {
-    let message_uuid = canonical_user_message_uuid(payload.message_uuid.as_deref())
-        .map_err(|_| "message_uuid must be a valid UUID".to_string())?
-        .to_string();
-    payload.message_uuid = Some(message_uuid);
-    Ok(())
 }

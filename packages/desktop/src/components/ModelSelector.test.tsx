@@ -5,28 +5,25 @@ import { render, screen, waitFor } from "@/test-utils";
 import { ModelSelector } from "./ModelSelector";
 
 const toastSuccess = vi.fn();
-const toastError = vi.fn();
+const toastErrorSpy = vi.fn();
 const invalidateQueries = vi.fn();
 const workspaceProviderMutate = vi.fn();
-const projectProviderMutate = vi.fn();
+const featureProviderMutate = vi.fn();
+const featureModelMutate = vi.fn();
 
 const {
-  mockGetGlobalSettings,
-  mockGetProjectSettings,
-  mockGetFeatureSettings,
-  mockGetWorkspaceProviderSettings,
-  mockGetProjectProviderSettings,
-  mockGetFeatureProviderSettings,
+  mockUseResolvedSelection,
   mockAgentCatalog,
   workspaceProviderMutationImpl,
-  projectProviderMutationImpl,
+  featureProviderMutationImpl,
 } = vi.hoisted(() => ({
-  mockGetGlobalSettings: vi.fn(() => ({ data: {}, isLoading: false })),
-  mockGetProjectSettings: vi.fn(() => ({ data: {}, isLoading: false })),
-  mockGetFeatureSettings: vi.fn(() => ({ data: {}, isLoading: false })),
-  mockGetWorkspaceProviderSettings: vi.fn(() => ({ data: {}, isLoading: false })),
-  mockGetProjectProviderSettings: vi.fn(() => ({ data: {}, isLoading: false })),
-  mockGetFeatureProviderSettings: vi.fn(() => ({ data: {}, isLoading: false })),
+  mockUseResolvedSelection: vi.fn(
+    (): { data?: unknown; isLoading: boolean; error: unknown | null } => ({
+      data: undefined,
+      isLoading: false,
+      error: null,
+    }),
+  ),
   mockAgentCatalog: vi.fn<() => { data?: unknown; isLoading: boolean; error: unknown | null }>(
     () => ({
       data: {
@@ -63,19 +60,19 @@ const {
       },
     }),
   ),
-  projectProviderMutationImpl: vi.fn(
+  featureProviderMutationImpl: vi.fn(
     (options?: {
       onSuccess?: (
         _data: unknown,
-        vars: { projectId: number; providerType: string; provider: string },
+        vars: { featureId: number; providerType: string; provider: string },
       ) => void;
       onError?: (
         _error: unknown,
-        vars: { projectId: number; providerType: string; provider: string },
+        vars: { featureId: number; providerType: string; provider: string },
       ) => void;
     }) => ({
-      mutate: (variables: { projectId: number; providerType: string; provider: string }) => {
-        projectProviderMutate(variables);
+      mutate: (variables: { featureId: number; providerType: string; provider: string }) => {
+        featureProviderMutate(variables);
         options?.onSuccess?.({}, variables);
       },
     }),
@@ -85,28 +82,24 @@ const {
 vi.mock("sonner", () => ({
   toast: {
     success: (...args: unknown[]) => toastSuccess(...args),
-    error: (...args: unknown[]) => toastError(...args),
+    error: (...args: unknown[]) => toastErrorSpy(...args),
   },
 }));
 
 vi.mock("../api/generated", () => ({
-  useGetWorkspaceModelSettings: () => mockGetGlobalSettings(),
   useSetWorkspaceModelSetting: vi.fn(() => ({ mutate: vi.fn() })),
   getGetWorkspaceModelSettingsQueryKey: vi.fn(() => ["workspace", "model-settings"]),
-  useGetProjectModelSettings: () => mockGetProjectSettings(),
-  useGetProjectSettings: () => ({ data: [], isLoading: false }),
-  useSetProjectModelSetting: vi.fn(() => ({ mutate: vi.fn() })),
-  getGetProjectModelSettingsQueryKey: vi.fn((id: number) => ["project", "model-settings", id]),
-  getGetProjectSettingsQueryKey: vi.fn((id: number) => ["project", "settings", id]),
-  useGetFeatureModelSettings: () => mockGetFeatureSettings(),
-  useGetFeatureSettings: () => ({ data: [], isLoading: false }),
-  useSetFeatureModelSetting: vi.fn(() => ({ mutate: vi.fn() })),
-  getGetWorkspaceSettingQueryKey: vi.fn((key: string) => ["workspace", "setting", key]),
+  useSetFeatureModelSetting: vi.fn(() => ({ mutate: featureModelMutate })),
+  getGetFeatureModelSettingsQueryKey: vi.fn((id: number) => ["features", "model-settings", id]),
+  getGetAgentSelectionQueryKey: vi.fn(() => ["/api/agent-runtime/selection"]),
   useSetWorkspaceSetting: vi.fn(() => ({ mutate: vi.fn() })),
   useSetProjectSetting: vi.fn(() => ({ mutate: vi.fn() })),
   useSetFeatureSetting: vi.fn(() => ({ mutate: vi.fn() })),
-  getGetFeatureModelSettingsQueryKey: vi.fn((id: number) => ["features", "model-settings", id]),
-  getGetFeatureSettingsQueryKey: vi.fn((id: number) => ["features", "settings", id]),
+  getGetWorkspaceSettingQueryKey: vi.fn((key: string) => ["workspace", "setting", key]),
+}));
+
+vi.mock("@/api/agentSelection", () => ({
+  useResolvedSelection: () => mockUseResolvedSelection(),
 }));
 
 vi.mock("@/api/settings", () => ({
@@ -117,14 +110,10 @@ vi.mock("@/api/settings", () => ({
 
 vi.mock("../api/agentRuntime", () => ({
   useAgentCatalog: () => mockAgentCatalog(),
-  useGetWorkspaceProviderSettings: () => mockGetWorkspaceProviderSettings(),
-  useGetProjectProviderSettings: () => mockGetProjectProviderSettings(),
-  useGetFeatureProviderSettings: () => mockGetFeatureProviderSettings(),
   useSetWorkspaceProviderSetting: (options?: unknown) =>
     workspaceProviderMutationImpl(options as never),
-  useSetProjectProviderSetting: (options?: unknown) =>
-    projectProviderMutationImpl(options as never),
-  useSetFeatureProviderSetting: vi.fn(() => ({ mutate: vi.fn() })),
+  useSetFeatureProviderSetting: (options?: unknown) =>
+    featureProviderMutationImpl(options as never),
 }));
 
 vi.mock("@tanstack/react-query", async (importOriginal) => {
@@ -138,30 +127,26 @@ vi.mock("@tanstack/react-query", async (importOriginal) => {
 describe("ModelSelector", () => {
   beforeEach(() => {
     toastSuccess.mockReset();
-    toastError.mockReset();
+    toastErrorSpy.mockReset();
     invalidateQueries.mockReset();
     workspaceProviderMutate.mockReset();
-    projectProviderMutate.mockReset();
+    featureProviderMutate.mockReset();
+    featureModelMutate.mockReset();
     workspaceProviderMutationImpl.mockReset();
-    projectProviderMutationImpl.mockReset();
+    featureProviderMutationImpl.mockReset();
     workspaceProviderMutationImpl.mockImplementation((options) => ({
       mutate: (variables) => {
         workspaceProviderMutate(variables);
         options?.onSuccess?.({}, variables);
       },
     }));
-    projectProviderMutationImpl.mockImplementation((options) => ({
+    featureProviderMutationImpl.mockImplementation((options) => ({
       mutate: (variables) => {
-        projectProviderMutate(variables);
+        featureProviderMutate(variables);
         options?.onSuccess?.({}, variables);
       },
     }));
-    mockGetGlobalSettings.mockReturnValue({ data: {}, isLoading: false });
-    mockGetProjectSettings.mockReturnValue({ data: {}, isLoading: false });
-    mockGetFeatureSettings.mockReturnValue({ data: {}, isLoading: false });
-    mockGetWorkspaceProviderSettings.mockReturnValue({ data: {}, isLoading: false });
-    mockGetProjectProviderSettings.mockReturnValue({ data: {}, isLoading: false });
-    mockGetFeatureProviderSettings.mockReturnValue({ data: {}, isLoading: false });
+    mockUseResolvedSelection.mockReturnValue({ data: undefined, isLoading: false, error: null });
     mockAgentCatalog.mockReturnValue({
       data: {
         default_provider: "claude_code",
@@ -210,41 +195,89 @@ describe("ModelSelector", () => {
     expect(screen.getByText("Failed to load provider catalog.")).toBeInTheDocument();
   });
 
-  it("renders at project level without errors", () => {
-    render(<ModelSelector level="project" projectId={1} />);
-    expect(screen.getByText("Session")).toBeInTheDocument();
+  it("only renders the requested agent types", () => {
+    render(<ModelSelector level="global" agentTypes={["auto_name"]} />);
+    expect(screen.getByText("Auto-naming")).toBeInTheDocument();
+    expect(screen.queryByText("Session")).not.toBeInTheDocument();
   });
 
   it("renders at feature level without errors", () => {
-    render(<ModelSelector level="feature" featureId={1} projectId={1} />);
+    render(<ModelSelector level="feature" featureId={1} />);
     expect(screen.getByText("Session")).toBeInTheDocument();
   });
 
   it("uses mutation callbacks so provider success and error toasts track the actual result", async () => {
     const user = userEvent.setup();
-    mockGetProjectProviderSettings.mockReturnValue({
-      data: { session: "claude_code" },
+    // Provider explicitly set at feature level ("feature" origin); model inherited
+    // from a higher level ("global" origin) — matches the "inherit provider only"
+    // scenario the old settings-diffing code exercised.
+    mockUseResolvedSelection.mockReturnValue({
+      data: {
+        selections: {
+          session: {
+            provider_id: "claude_code",
+            model_id: "opus",
+            provider_origin: "feature",
+            model_origin: "global",
+          },
+        },
+      },
       isLoading: false,
+      error: null,
     });
-    projectProviderMutationImpl.mockImplementation((options) => ({
+    featureProviderMutationImpl.mockImplementation((options) => ({
       mutate: (variables) => {
-        projectProviderMutate(variables);
+        featureProviderMutate(variables);
         options?.onError?.(new Error("failed"), variables);
       },
     }));
 
-    render(<ModelSelector level="project" projectId={42} />);
+    render(<ModelSelector level="feature" featureId={42} />);
     await user.click(screen.getAllByRole("combobox")[0]);
     await user.click(screen.getByText("Inherit selection"));
 
-    expect(projectProviderMutate).toHaveBeenCalledWith({
-      projectId: 42,
+    expect(featureProviderMutate).toHaveBeenCalledWith({
+      featureId: 42,
       providerType: "session",
       provider: "",
     });
-    expect(toastError).toHaveBeenCalledWith("Failed to save provider setting");
+    expect(toastErrorSpy).toHaveBeenCalledWith("Failed to save provider setting");
     expect(toastSuccess).not.toHaveBeenCalled();
   });
+
+  it.each(["feature", "provider_default"])(
+    "clears both stored overrides when inheriting a %s provider and a fallback model",
+    async (providerOrigin) => {
+      mockUseResolvedSelection.mockReturnValue({
+        data: {
+          selections: {
+            session: {
+              provider_id: "claude_code",
+              model_id: "opus",
+              provider_origin: providerOrigin,
+              model_origin: "provider_default",
+            },
+          },
+        },
+        isLoading: false,
+        error: null,
+      });
+      const user = userEvent.setup();
+      render(<ModelSelector level="feature" featureId={42} />);
+      await user.click(screen.getAllByRole("combobox")[0]);
+      await user.click(screen.getByText("Inherit selection"));
+
+      expect(featureProviderMutate).toHaveBeenCalledWith({
+        featureId: 42,
+        providerType: "session",
+        provider: "",
+      });
+      expect(featureModelMutate).toHaveBeenCalledWith({
+        id: 42,
+        data: { model_type: "session", model: "" },
+      });
+    },
+  );
 
   it("hides unavailable and coming soon providers", async () => {
     const user = userEvent.setup();
@@ -256,9 +289,25 @@ describe("ModelSelector", () => {
   });
 
   it("uses the selected provider default model instead of inheriting a Claude model id", () => {
-    mockGetWorkspaceProviderSettings.mockReturnValue({
-      data: { session: "opencode" },
+    mockUseResolvedSelection.mockReturnValue({
+      data: {
+        selections: {
+          session: {
+            provider_id: "opencode",
+            model_id: "default/default",
+            provider_origin: "global",
+            model_origin: "provider_default",
+          },
+          auto_name: {
+            provider_id: "opencode",
+            model_id: "default/default",
+            provider_origin: "global",
+            model_origin: "provider_default",
+          },
+        },
+      },
       isLoading: false,
+      error: null,
     });
     mockAgentCatalog.mockReturnValue({
       data: {

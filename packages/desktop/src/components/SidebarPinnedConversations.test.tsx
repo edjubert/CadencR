@@ -1,6 +1,6 @@
 import React from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Feature } from "@/api/generated";
@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => {
     navigate,
     mutate,
     invalidateByUrlPrefix: vi.fn(),
+    skipProjectAutoExpand: vi.fn(),
     setPinned: (features: Feature[]) => {
       pinned = features;
     },
@@ -56,7 +57,31 @@ vi.mock("@/lib/feature-focus-handoff", () => ({
   getFocusedTabForFeature: () => undefined,
 }));
 
+vi.mock("@/lib/project-auto-expand", () => ({
+  skipProjectAutoExpand: mocks.skipProjectAutoExpand,
+}));
+
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+
+// Ordering, ports, and activity have their own coverage; keep backend order and no badges.
+vi.mock("@/hooks/useStableFeatureOrder", () => ({
+  useStableFeatureOrder: (features: Feature[]) => features,
+}));
+
+vi.mock("@/hooks/useFeaturePorts", () => ({
+  NO_PORTS: [],
+  useFeaturePorts: () => new Map(),
+}));
+
+vi.mock("@/hooks/useLiveFeatureMeta", () => ({ useLiveFeatureMeta: () => ({}) }));
+
+vi.mock("@/hooks/usePinnedActivity", () => ({
+  usePinnedActivity: () => ({
+    shellCountByFeatureId: new Map(),
+    liveWorktreeFeatureIds: new Set(),
+    worktreeByFeatureId: new Map(),
+  }),
+}));
 
 // Stub the row so this suite stays focused on the section's own behavior
 // (fetch → header/empty, navigate, unpin) without wiring every store the row
@@ -79,6 +104,12 @@ vi.mock("@/components/PinnedConversationRow", () => ({
 }));
 
 import { SidebarPinnedConversations } from "./SidebarPinnedConversations";
+import { useSidebarFilterStore } from "@/stores/sidebar-filter-store";
+import { useSidebarSurfaceStore } from "@/stores/sidebar-surface-store";
+import {
+  collectSidebarNavItems,
+  useSidebarKeyboardNavigation,
+} from "@/hooks/useSidebarKeyboardNavigation";
 
 function feature(id: number, projectId: number): Feature {
   return {
@@ -92,11 +123,24 @@ function feature(id: number, projectId: number): Feature {
   } as unknown as Feature;
 }
 
-function renderSection(activeFeatureId: number | null = null) {
+function KeyboardSidebar({ children }: { children: React.ReactNode }): React.ReactElement {
+  const sidebarRef = React.useRef<HTMLElement>(null);
+  useSidebarKeyboardNavigation(sidebarRef, mocks.navigate, null);
+  return (
+    <aside ref={sidebarRef} data-focus-zone="left-sidebar">
+      {children}
+    </aside>
+  );
+}
+
+function renderSection(activeFeatureId: number | null = null, withKeyboard = false) {
   const client = new QueryClient();
+  const section = (
+    <SidebarPinnedConversations activeFeatureId={activeFeatureId} onSelectFeature={vi.fn()} />
+  );
   return render(
     <QueryClientProvider client={client}>
-      <SidebarPinnedConversations activeFeatureId={activeFeatureId} onSelectFeature={vi.fn()} />
+      {withKeyboard ? <KeyboardSidebar>{section}</KeyboardSidebar> : section}
     </QueryClientProvider>,
   );
 }
@@ -106,7 +150,77 @@ describe("SidebarPinnedConversations", () => {
     mocks.navigate.mockClear();
     mocks.mutate.mockClear();
     mocks.invalidateByUrlPrefix.mockClear();
+    mocks.skipProjectAutoExpand.mockClear();
     mocks.setPinned([]);
+    useSidebarFilterStore.getState().close();
+    useSidebarSurfaceStore.setState({
+      expanded: { "for-me": true, working: true, recent: true, pinned: true },
+    });
+    // Fold tests need synchronous mount/unmount (CollapsibleSection).
+    document.documentElement.dataset.animations = "off";
+  });
+
+  afterEach(() => {
+    delete document.documentElement.dataset.animations;
+  });
+
+  it("folds and unfolds the focused header with Enter through sidebar shortcuts", async () => {
+    const user = userEvent.setup();
+    mocks.setPinned([feature(1, 5)]);
+    renderSection(null, true);
+    const header = screen.getByRole("button", { name: /Pinned/ });
+    const click = vi.fn();
+    header.addEventListener("click", click);
+    header.focus();
+
+    await user.keyboard("{Enter}");
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("open-1")).not.toBeInTheDocument();
+    expect(header).toHaveFocus();
+    expect(click).toHaveBeenCalledTimes(1);
+
+    await user.keyboard("{Enter}");
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("open-1")).toBeInTheDocument();
+    expect(click).toHaveBeenCalledTimes(2);
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  it("preserves the folded choice after Enter on a filtered header and clearing the filter", async () => {
+    const user = userEvent.setup();
+    mocks.setPinned([{ ...feature(1, 5), title: "Login bug" }]);
+    useSidebarSurfaceStore.getState().toggleBlock("pinned");
+    useSidebarFilterStore.getState().start("login");
+    renderSection(null, true);
+    const header = screen.getByRole("button", { name: /Pinned/ });
+    const click = vi.fn();
+    header.addEventListener("click", click);
+    header.focus();
+
+    await user.keyboard("{Enter}");
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("open-1")).toBeInTheDocument();
+    expect(useSidebarSurfaceStore.getState().expanded.pinned).toBe(false);
+
+    act(() => useSidebarFilterStore.getState().close());
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("open-1")).not.toBeInTheDocument();
+  });
+
+  it("keeps only the pinned rows the sidebar filter matches", () => {
+    mocks.setPinned([feature(1, 5), { ...feature(2, 9), title: "Login bug" }]);
+    useSidebarFilterStore.getState().start("login");
+    renderSection();
+    expect(screen.getByText("open-2")).toBeInTheDocument();
+    expect(screen.queryByText("open-1")).not.toBeInTheDocument();
+  });
+
+  it("hides the section when the filter matches no pinned row", () => {
+    mocks.setPinned([feature(1, 5)]);
+    useSidebarFilterStore.getState().start("zzz");
+    const { container } = renderSection();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("renders nothing when no conversation is pinned", () => {
@@ -135,6 +249,14 @@ describe("SidebarPinnedConversations", () => {
     );
   });
 
+  it("marks the parent project so the tree does not auto-expand it on navigation", async () => {
+    const user = userEvent.setup();
+    mocks.setPinned([feature(1, 9)]);
+    renderSection();
+    await user.click(screen.getByText("open-1"));
+    expect(mocks.skipProjectAutoExpand).toHaveBeenCalledWith(9);
+  });
+
   it("unpins via the feature pin column and refreshes the feature caches", async () => {
     const user = userEvent.setup();
     mocks.setPinned([feature(1, 5)]);
@@ -145,5 +267,110 @@ describe("SidebarPinnedConversations", () => {
     // onSuccess is the only refresh path — no optimistic mutation.
     mocks.getOptions()?.mutation.onSuccess();
     expect(mocks.invalidateByUrlPrefix).toHaveBeenCalledWith(expect.anything(), "/api/features");
+  });
+
+  it("folds from its header", async () => {
+    const user = userEvent.setup();
+    mocks.setPinned([feature(1, 5), feature(2, 9)]);
+    renderSection();
+    const header = screen.getByRole("button", { name: /Pinned/ });
+    expect(screen.getByText("open-1")).toBeInTheDocument();
+    await user.click(header);
+    expect(screen.queryByText("open-1")).not.toBeInTheDocument();
+    expect(screen.queryByText("open-2")).not.toBeInTheDocument();
+    await user.click(header);
+    expect(screen.getByText("open-1")).toBeInTheDocument();
+    expect(screen.getByText("open-2")).toBeInTheDocument();
+  });
+
+  it("excludes closing rows from keyboard navigation during the close animation", () => {
+    // Animations ON: CollapsibleSection keeps children mounted for 200 ms
+    // under aria-hidden while the close transition runs.
+    delete document.documentElement.dataset.animations;
+    vi.useFakeTimers();
+    try {
+      mocks.setPinned([feature(1, 5)]);
+      const { container } = renderSection();
+      const header = screen.getByRole("button", { name: /Pinned/ });
+
+      // Fold via the store (the header's onClick path) inside act so React
+      // flushes the state change before we inspect the DOM.
+      act(() => {
+        useSidebarSurfaceStore.getState().toggleBlock("pinned");
+      });
+
+      // During the 200 ms close window the row is still mounted but hidden.
+      const closingRow = screen.queryByText("open-1");
+      expect(closingRow).not.toBeNull();
+      expect(closingRow?.closest('[aria-hidden="true"]')).not.toBeNull();
+
+      // Keyboard navigation must skip it: only the header remains reachable.
+      const navItems = collectSidebarNavItems(container);
+      expect(navItems).toContain(header);
+      expect(navItems.some((el) => el.contains(closingRow))).toBe(false);
+
+      // After the animation the row unmounts entirely.
+      act(() => {
+        vi.advanceTimersByTime(250);
+      });
+      expect(screen.queryByText("open-1")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("holds the block open while filtering, without changing the stored fold state", () => {
+    mocks.setPinned([feature(1, 5), { ...feature(2, 9), title: "Login bug" }]);
+    // Start folded: the stored state must stay folded throughout.
+    useSidebarSurfaceStore.setState({
+      expanded: { "for-me": true, working: true, recent: true, pinned: false },
+    });
+    renderSection();
+    // Folded and unfiltered: rows are hidden.
+    expect(screen.queryByText("open-1")).not.toBeInTheDocument();
+
+    // Filtering forces the block open so the matching pinned row is reachable.
+    act(() => {
+      useSidebarFilterStore.getState().start("login");
+    });
+    expect(screen.getByText("open-2")).toBeInTheDocument();
+    expect(screen.queryByText("open-1")).not.toBeInTheDocument();
+    expect(useSidebarSurfaceStore.getState().expanded.pinned).toBe(false);
+
+    // Clearing the filter restores the stored fold state.
+    act(() => {
+      useSidebarFilterStore.getState().close();
+    });
+    expect(screen.queryByText("open-2")).not.toBeInTheDocument();
+    expect(useSidebarSurfaceStore.getState().expanded.pinned).toBe(false);
+  });
+
+  it("does not toggle the stored fold state when the header is clicked while filtering", async () => {
+    const user = userEvent.setup();
+    mocks.setPinned([feature(1, 5), { ...feature(2, 9), title: "Login bug" }]);
+    // Start folded: clicking the open-looking header during filtering must
+    // not flip the stored state.
+    useSidebarSurfaceStore.setState({
+      expanded: { "for-me": true, working: true, recent: true, pinned: false },
+    });
+    renderSection();
+    act(() => {
+      useSidebarFilterStore.getState().start("login");
+    });
+    // The block is held open by the filter.
+    expect(screen.getByText("open-2")).toBeInTheDocument();
+
+    // Clicking the header is a no-op while filtering.
+    await user.click(screen.getByRole("button", { name: /Pinned/ }));
+    expect(useSidebarSurfaceStore.getState().expanded.pinned).toBe(false);
+    // The row stays visible (the filter still holds the block open).
+    expect(screen.getByText("open-2")).toBeInTheDocument();
+
+    // After the filter clears, the stored fold state resumes.
+    act(() => {
+      useSidebarFilterStore.getState().close();
+    });
+    expect(screen.queryByText("open-2")).not.toBeInTheDocument();
+    expect(useSidebarSurfaceStore.getState().expanded.pinned).toBe(false);
   });
 });

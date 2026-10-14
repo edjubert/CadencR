@@ -38,6 +38,7 @@ pub async fn remove_worktree(
     requested_path: &Path,
     force: bool,
 ) -> Result<(), AppError> {
+    crate::shared::git_context::require_git_metadata(repo_path).await?;
     let target = resolve_removal_root(requested_path).await;
     let was_registered = get_worktree_info(repo_path, &target).await?.is_some();
     let managed_root = managed_worktree_root(&target);
@@ -220,6 +221,22 @@ mod tests {
             .await
             .unwrap();
         repo
+    }
+
+    #[tokio::test]
+    async fn removal_rejects_unverifiable_owner_before_inspecting_the_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("project/worktree");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("keep.txt"), "keep").unwrap();
+        for repo in [dir.path().to_path_buf(), dir.path().join("missing")] {
+            let error = remove_worktree(&repo, &target, true).await.unwrap_err();
+            assert!(error.to_string().contains("No Git metadata found"));
+            assert_eq!(
+                std::fs::read_to_string(target.join("keep.txt")).unwrap(),
+                "keep"
+            );
+        }
     }
 
     #[tokio::test]

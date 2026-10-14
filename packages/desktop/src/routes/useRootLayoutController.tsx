@@ -1,27 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
-import type { PanelImperativeHandle } from "react-resizable-panels";
 import { toast } from "sonner";
-import {
-  useCreateFeature,
-  useDeleteFeature,
-  useUpdateFeatureStatus,
-  type Feature,
-} from "@/api/generated";
+import { useCreateFeature, useDeleteFeature, type Feature } from "@/api/generated";
 import { customInstance } from "@/api/client";
-import { SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from "@/components/AppShell";
 import type { ConfirmFeatureAction } from "@/components/RootOverlays";
 import {
-  archiveFeatureInCachedLists,
   closeFeatureSession,
   navigateToFeatureIdOrHome,
   removeFeatureFromCachedLists,
 } from "@/components/project-feature-navigation";
 import { useAppClose } from "@/hooks/useAppClose";
+import { useArchiveFeatureAction } from "@/hooks/useArchiveFeatureAction";
 import { useAutoUpdateBridge } from "@/hooks/useAutoUpdateBridge";
 import { useConnectionWatchdog } from "@/hooks/useConnectionWatchdog";
-import { useDebouncedSetting } from "@/hooks/useDebouncedSetting";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { usePowerBusySignal } from "@/hooks/usePowerBusySignal";
 import { usePowerEvents } from "@/hooks/usePowerEvents";
@@ -29,6 +21,7 @@ import { useRemotePairingToast } from "@/hooks/useRemotePairingToast";
 import { useRemoteSleepGuard } from "@/hooks/useRemoteSleepGuard";
 import { useGlobalShortcutById, useShortcut } from "@/hooks/useShortcut";
 import { useThemeSync } from "@/hooks/useTheme";
+import { useRouteFeatureIds } from "@/hooks/useRouteFeatureIds";
 import { useVisualViewportHeight } from "@/hooks/useVisualViewportHeight";
 import { useZoomHotkeys } from "@/hooks/useZoom";
 import { resolveFeatureArchiveAction } from "@/lib/feature-archive-decision";
@@ -47,6 +40,7 @@ import { isMeaningfulScreenPath, useLastScreenStore } from "@/stores/last-screen
 import { useSessionStatusStore } from "@/stores/session-status-store";
 import { useShortcutsHelpStore } from "@/stores/shortcuts-help-store";
 import { useWsSessionStore } from "@/stores/ws-session-store";
+import { type SidebarController, useSidebarController } from "./useSidebarController";
 
 function useRootEnvironment(isMobile: boolean) {
   useRemotePairingToast();
@@ -73,89 +67,11 @@ function useRootEnvironment(isMobile: boolean) {
   useEffect(() => listenForPushNavigation(navigate, queryClient), [navigate, queryClient]);
 }
 
-function useSidebarController(isMobile: boolean) {
-  const leftWidth = useDebouncedSetting("sidebar_left_width", 300, { immediateCache: false });
-  const collapsedSetting = useDebouncedSetting("sidebar_collapsed", 0);
-  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
-  const leftSidebarRef = useRef<HTMLDivElement>(null);
-  const sidebarPanelRef = useRef<PanelImperativeHandle>(null);
-  const collapsed = isMobile ? !mobileDrawerOpen : collapsedSetting.value === "true";
-  const setCollapsed = useCallback(
-    (nextCollapsed: boolean): void => {
-      if (isMobile) setMobileDrawerOpen(!nextCollapsed);
-      else {
-        // Expand while the Panel is still collapsible; the next render makes
-        // it non-collapsible so pointer and keyboard resizing clamp at minSize.
-        if (!nextCollapsed) sidebarPanelRef.current?.expand();
-        collapsedSetting.setValue(nextCollapsed ? "true" : "false");
-      }
-    },
-    [collapsedSetting, isMobile],
-  );
-  const closeMobileDrawer = useCallback((): void => setMobileDrawerOpen(false), []);
-  useEffect(() => {
-    document.documentElement.dataset.sidebarCollapsed = collapsed ? "true" : "false";
-  }, [collapsed]);
-  // A changed `collapsible` reaches the Panel one render later, so the
-  // `collapse()` riding the same commit no-ops and the sidebar keeps its width.
-  // Retry once it lands; re-setting the same flag bails out instead of looping.
-  const [retryCollapse, setRetryCollapse] = useState(false);
-  useEffect(() => {
-    if (isMobile || collapsedSetting.isLoading) return;
-    const panel = sidebarPanelRef.current;
-    if (!panel || panel.isCollapsed() === collapsed) {
-      setRetryCollapse(false);
-      return;
-    }
-    if (collapsed) panel.collapse();
-    else panel.expand();
-    setRetryCollapse(collapsed && !panel.isCollapsed());
-  }, [collapsed, collapsedSetting.isLoading, isMobile, retryCollapse]);
-  useEffect(() => {
-    leftSidebarRef.current?.focus();
-  }, []);
-  const handleLayoutChanged = useCallback((): void => {
-    const size = sidebarPanelRef.current?.getSize();
-    if (!size || size.inPixels < 50) return;
-    const width = String(Math.round(size.inPixels));
-    if (width !== leftWidth.value) leftWidth.setValue(width);
-  }, [leftWidth]);
-  const savedWidth = leftWidth.value ? Number(leftWidth.value) : null;
-  const clampedWidth =
-    savedWidth != null && Number.isFinite(savedWidth)
-      ? Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, savedWidth))
-      : SIDEBAR_DEFAULT_WIDTH;
-  return useMemo(
-    () => ({
-      closeMobileDrawer,
-      collapsed,
-      defaultLeftSize: `${clampedWidth}px`,
-      handleLayoutChanged,
-      leftSidebarRef,
-      setCollapsed,
-      sidebarPanelRef,
-    }),
-    [clampedWidth, closeMobileDrawer, collapsed, handleLayoutChanged, setCollapsed],
-  );
-}
-
-type SidebarController = ReturnType<typeof useSidebarController>;
-
 function useRootRoute(closeMobileDrawer: () => void) {
   const routerState = useRouterState();
   const pathname = routerState.location.pathname;
   const search = routerState.location.search as Record<string, unknown> | undefined;
-  const routeParams = (pathname.match(/\/projects\/(\d+)(?:\/features\/(\d+))?/) ?? []) as string[];
-  const activeProjectId = routeParams[1]
-    ? Number(routeParams[1])
-    : search?.projectId
-      ? Number(search.projectId)
-      : null;
-  const activeFeatureId = routeParams[2]
-    ? Number(routeParams[2])
-    : search?.featureId
-      ? Number(search.featureId)
-      : null;
+  const { projectId: activeProjectId, featureId: activeFeatureId } = useRouteFeatureIds();
   useEffect(() => {
     if (!isMeaningfulScreenPath(pathname)) return;
     useLastScreenStore.getState().setLastScreen({ pathname, search: search ?? {} });
@@ -175,6 +91,7 @@ function useRootFeatureActions(route: RootRouteState) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [confirmAction, setConfirmAction] = useState<ConfirmFeatureAction | null>(null);
+  const [archiveActiveFeatures, setArchiveActiveFeatures] = useState<Feature[]>([]);
   const deleteNavTargetRef = useRef<number | null>(null);
   const invalidateFeatures = useCallback(
     () => void invalidateByUrlPrefix(queryClient, "/api/features"),
@@ -209,25 +126,11 @@ function useRootFeatureActions(route: RootRouteState) {
       },
     },
   });
-  const archiveMutation = useUpdateFeatureStatus({
-    mutation: {
-      onError: () => toast.error("Failed to archive session"),
-      onSuccess: (_data, variables) => {
-        archiveFeatureInCachedLists(queryClient, variables.id);
-        closeFeatureSession(variables.id);
-        invalidateFeatures();
-        if (route.activeProjectId == null) return;
-        const targetId = deleteNavTargetRef.current;
-        deleteNavTargetRef.current = null;
-        navigateToFeatureIdOrHome(navigate, route.activeProjectId, targetId);
-      },
-    },
+  const archiveFeature = useArchiveFeatureAction({
+    activeFeatureId: route.activeFeatureId,
+    activeFeatures: archiveActiveFeatures,
+    projectId: route.activeProjectId,
   });
-  const archiveFeature = useCallback(
-    (featureId: number): void =>
-      archiveMutation.mutate({ id: featureId, data: { status: "archived" } }),
-    [archiveMutation],
-  );
   const deleteFeature = useCallback(
     (featureId: number): void => deleteMutation.mutate({ id: featureId }),
     [deleteMutation],
@@ -241,6 +144,7 @@ function useRootFeatureActions(route: RootRouteState) {
     deleteFeature,
     deleteNavTargetRef,
     setConfirmAction,
+    setArchiveActiveFeatures,
   };
 }
 
@@ -249,7 +153,11 @@ type RootFeatureActions = ReturnType<typeof useRootFeatureActions>;
 async function prepareFeatureAction(
   projectId: number,
   featureId: number,
-): Promise<{ confirmAction: ConfirmFeatureAction; targetId: number | null } | null> {
+): Promise<{
+  activeFeatures: Feature[];
+  confirmAction: ConfirmFeatureAction;
+  targetId: number | null;
+} | null> {
   const features = await customInstance<Feature[]>({
     method: "GET",
     url: `/api/features?project_id=${projectId}&include_archived=true`,
@@ -261,6 +169,7 @@ async function prepareFeatureAction(
   const remaining = activeFeatures.filter((candidate) => candidate.id !== featureId);
   const target = index > 0 ? activeFeatures[index - 1] : (remaining[0] ?? null);
   return {
+    activeFeatures,
     confirmAction: { action: await resolveFeatureArchiveAction(feature), feature },
     targetId: target?.id ?? null,
   };
@@ -314,13 +223,18 @@ function useRootShortcuts(
   useShortcut("delete-feature", async (event) => {
     event.preventDefault();
     if (route.activeProjectId == null || route.activeFeatureId == null) return;
+    const toastId = `feature-archive-check-${route.activeFeatureId}`;
+    toast.loading("Checking conversation…", { id: toastId });
     try {
       const prepared = await prepareFeatureAction(route.activeProjectId, route.activeFeatureId);
       if (!prepared) return;
       features.deleteNavTargetRef.current = prepared.targetId;
+      features.setArchiveActiveFeatures(prepared.activeFeatures);
       features.setConfirmAction(prepared.confirmAction);
     } catch (error) {
       toastError(error, "Failed to load features");
+    } finally {
+      toast.dismiss(toastId);
     }
   });
 }

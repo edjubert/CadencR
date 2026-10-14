@@ -67,47 +67,47 @@ pub(super) async fn fetch_missing_parents(
     session_id: i64,
     msgs: &[AgentMessageRow],
 ) -> Result<Vec<AgentMessageRow>, AppError> {
-    // Collect tool_use_ids of tool_call rows in this page
-    let tool_call_tuids: HashSet<&str> = msgs
+    let mut known: HashSet<String> = msgs
         .iter()
         .filter(|m| m.message_type == "tool_call")
-        .filter_map(|m| m.tool_use_id.as_deref())
+        .filter_map(|m| m.tool_use_id.clone())
         .collect();
-
-    let mut missing_tool_use_ids: HashSet<&str> = HashSet::new();
-
+    let mut pending = HashSet::new();
     for m in msgs {
-        // Children whose parent_tool_use_id references a tool_call not in this page
-        if let Some(ptuid) = m.parent_tool_use_id.as_deref() {
-            if !tool_call_tuids.contains(ptuid) {
-                missing_tool_use_ids.insert(ptuid);
-            }
-        // tool_results whose tool_use_id has no matching tool_call in this page
-        // (build_blocks nests these via tool_use_id fallback)
-        } else if m.message_type == "tool_result" || m.message_type == "tool_error" {
-            if let Some(tuid) = m.tool_use_id.as_deref() {
-                if !tool_call_tuids.contains(tuid) {
-                    missing_tool_use_ids.insert(tuid);
-                }
-            }
+        if let Some(parent) = &m.parent_tool_use_id {
+            pending.insert(parent.clone());
+        }
+        if matches!(m.message_type.as_str(), "tool_result" | "tool_error") {
+            pending.extend(m.tool_use_id.iter().cloned());
         }
     }
-
-    let missing: Vec<&str> = missing_tool_use_ids.into_iter().collect();
-
-    if missing.is_empty() {
-        return Ok(Vec::new());
+    let mut ancestors = Vec::new();
+    loop {
+        let missing: Vec<String> = pending.drain().filter(|id| !known.contains(id)).collect();
+        if missing.is_empty() {
+            break;
+        }
+        // Mark requested ids before querying: malformed cycles and dangling
+        // references terminate instead of being requested forever.
+        known.extend(missing.iter().cloned());
+        let placeholders = missing.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "{MESSAGE_SELECT} FROM agent_messages WHERE session_id = ? AND message_type = 'tool_call' AND tool_use_id IN ({placeholders}) ORDER BY id ASC"
+        );
+        let mut query = sqlx::query_as::<_, AgentMessageRow>(AssertSqlSafe(sql)).bind(session_id);
+        for tool_use_id in &missing {
+            query = query.bind(tool_use_id);
+        }
+        let fetched = query.fetch_all(pool).await?;
+        pending.extend(
+            fetched
+                .iter()
+                .filter_map(|message| message.parent_tool_use_id.clone()),
+        );
+        ancestors.extend(fetched);
     }
-
-    let placeholders = missing.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let sql = format!(
-        "{MESSAGE_SELECT} FROM agent_messages WHERE session_id = ? AND message_type = 'tool_call' AND tool_use_id IN ({placeholders}) ORDER BY id ASC"
-    );
-    let mut q = sqlx::query_as::<_, AgentMessageRow>(AssertSqlSafe(sql)).bind(session_id);
-    for tuid in &missing {
-        q = q.bind(tuid);
-    }
-    Ok(q.fetch_all(pool).await?)
+    ancestors.sort_by_key(|message| message.id);
+    Ok(ancestors)
 }
 
 #[cfg(test)]
@@ -115,6 +115,68 @@ mod tests {
     use super::super::feature_state::get_feature_agent_state;
     use super::super::test_support::*;
     use super::*;
+
+    #[tokio::test]
+    async fn split_nested_tool_results_fetch_matching_calls_and_task_ancestry() {
+        let pool = setup_test_db().await;
+        let session_id = insert_session(&pool, 1, "completed").await;
+        insert_message(
+            &pool,
+            session_id,
+            "tool_call",
+            "{}",
+            Some("Task"),
+            Some("task-1"),
+            None,
+        )
+        .await;
+        for (name, tool_use_id) in [("Bash", "bash-1"), ("ApplyPatch", "patch-1")] {
+            insert_message(
+                &pool,
+                session_id,
+                "tool_call",
+                "{}",
+                Some(name),
+                Some(tool_use_id),
+                Some("task-1"),
+            )
+            .await;
+        }
+        let mut result_ids = Vec::new();
+        for tool_use_id in ["bash-1", "patch-1"] {
+            result_ids.push(
+                insert_message(
+                    &pool,
+                    session_id,
+                    "tool_result",
+                    "result",
+                    None,
+                    Some(tool_use_id),
+                    Some("task-1"),
+                )
+                .await,
+            );
+        }
+
+        for (result_id, matching_call) in result_ids.into_iter().zip(["bash-1", "patch-1"]) {
+            let page = vec![sqlx::query_as::<_, AgentMessageRow>(AssertSqlSafe(format!(
+                "{MESSAGE_SELECT} FROM agent_messages WHERE id = ?"
+            )))
+            .bind(result_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()];
+            let ancestors = fetch_missing_parents(&pool, session_id, &page)
+                .await
+                .unwrap();
+            let tool_ids: HashSet<_> = ancestors
+                .iter()
+                .filter_map(|message| message.tool_use_id.as_deref())
+                .collect();
+            assert_eq!(tool_ids, HashSet::from(["task-1", matching_call]));
+            assert!(ancestors.iter().all(|message| message.id < result_id));
+        }
+    }
 
     #[test]
     fn test_trim_blocks_to_cap_no_op() {
@@ -196,9 +258,10 @@ mod tests {
 
         let mut before_map = HashMap::new();
         before_map.insert(session_id, before_id);
-        let state = get_feature_agent_state(&pool, feature_id, None, Some(2), Some(before_map))
-            .await
-            .unwrap();
+        let state =
+            get_feature_agent_state(&pool, feature_id, None, None, Some(2), Some(before_map))
+                .await
+                .unwrap();
         let s = &state.sessions[0];
 
         assert_eq!(s.oldest_message_id, Some(first_child_id));
@@ -238,7 +301,7 @@ mod tests {
             .await;
         }
 
-        let state = get_feature_agent_state(&pool, fid.0, None, Some(100), None)
+        let state = get_feature_agent_state(&pool, fid.0, None, None, Some(100), None)
             .await
             .unwrap();
         let session = &state.sessions[0];
@@ -280,7 +343,7 @@ mod tests {
             .await;
         }
 
-        let state = get_feature_agent_state(&pool, fid.0, None, None, None)
+        let state = get_feature_agent_state(&pool, fid.0, None, None, None, None)
             .await
             .unwrap();
         let s = &state.sessions[0];

@@ -1,163 +1,9 @@
-import { useState, type ComponentType, type ReactElement } from "react";
-import {
-  AlertTriangleIcon,
-  EyeOffIcon,
-  CookieIcon,
-  GlobeIcon,
-  Loader2Icon,
-  PlusIcon,
-  XIcon,
-} from "lucide-react";
+import type { ReactElement } from "react";
+import { AlertTriangleIcon, GlobeIcon, Loader2Icon, PlusIcon, XIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { PROFILE_ID, type CookieMode } from "@/lib/browser-settings";
-import type { BrowserTabMetadata } from "@/lib/desktop-bridge";
-import type { BrowserWorkspaceModel } from "./useBrowserWorkspaceModel";
 
-export function BrowserTabStrip({ model }: { model: BrowserWorkspaceModel }): ReactElement {
-  return (
-    <div className="flex items-center gap-1">
-      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
-        {model.state.tabs.map((tab) => (
-          <BrowserTabPill
-            key={tab.id}
-            tab={tab}
-            onActivate={model.activateTab}
-            onClose={model.closeTab}
-          />
-        ))}
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="shrink-0"
-          onClick={() => void model.newTab()}
-          aria-label="New browser tab"
-        >
-          <PlusIcon className="size-4" />
-        </Button>
-      </div>
-      <BrowserModeToggle mode={model.mode} onModeChange={model.setMode} />
-    </div>
-  );
-}
-
-function BrowserModeToggle({
-  mode,
-  onModeChange,
-}: {
-  mode: CookieMode;
-  onModeChange: (mode: CookieMode) => void;
-}): ReactElement {
-  return (
-    <div
-      role="group"
-      aria-label="Cookie mode"
-      className="ml-auto flex shrink-0 items-center rounded-md border bg-muted/50 p-0.5"
-    >
-      <BrowserModeButton
-        active={mode === "normal"}
-        icon={CookieIcon}
-        label="Normal"
-        title="Reuse existing cookies and logins"
-        onClick={() => onModeChange("normal")}
-      />
-      <BrowserModeButton
-        active={mode === "private"}
-        icon={EyeOffIcon}
-        label="Private"
-        title="Start fresh with no cookies"
-        onClick={() => onModeChange("private")}
-      />
-    </div>
-  );
-}
-
-function BrowserModeButton({
-  active,
-  icon: Icon,
-  label,
-  title,
-  onClick,
-}: {
-  active: boolean;
-  icon: ComponentType<{ className?: string }>;
-  label: string;
-  title: string;
-  onClick: () => void;
-}): ReactElement {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      title={title}
-      onClick={onClick}
-      className={`flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors ${active ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground"}`}
-    >
-      <Icon className="size-3.5" />
-      {label}
-    </button>
-  );
-}
-
-function BrowserTabPill({
-  tab,
-  onActivate,
-  onClose,
-}: {
-  tab: BrowserTabMetadata;
-  onActivate: (id: string) => void;
-  onClose: (id: string) => void;
-}): ReactElement {
-  return (
-    <div
-      aria-current={tab.isActive ? "page" : undefined}
-      className={`group/tab flex h-7 max-w-48 shrink-0 items-center gap-1.5 rounded-md pl-2 pr-1 text-xs transition-colors ${tab.isActive ? "bg-primary/15 font-medium text-foreground shadow-xs ring-1 ring-inset ring-primary/60" : "text-muted-foreground hover:bg-muted/70 hover:text-foreground"}`}
-    >
-      <button
-        type="button"
-        className="flex min-w-0 items-center gap-1.5"
-        onClick={() => onActivate(tab.id)}
-        title={tab.title || tab.url}
-      >
-        <BrowserTabIcon tab={tab} />
-        <span className="truncate">{tab.title || "New tab"}</span>
-      </button>
-      <button
-        type="button"
-        aria-label="Close tab"
-        className="flex size-4 shrink-0 items-center justify-center rounded opacity-0 transition-opacity hover:bg-muted-foreground/20 group-hover/tab:opacity-100"
-        onClick={() => onClose(tab.id)}
-      >
-        <XIcon className="size-3" />
-      </button>
-    </div>
-  );
-}
-
-function BrowserTabIcon({ tab }: { tab: BrowserTabMetadata }): ReactElement {
-  if (tab.loading) return <Loader2Icon className="size-3.5 shrink-0 animate-spin text-primary" />;
-  if (tab.sessionProfileId === PROFILE_ID.private)
-    return <EyeOffIcon className="size-3.5 shrink-0 opacity-70" aria-label="Private tab" />;
-  // `key` resets the error fallback whenever the tab loads a different favicon.
-  if (tab.faviconUrl) return <BrowserFavicon key={tab.faviconUrl} url={tab.faviconUrl} />;
-  return <GlobeIcon className="size-3.5 shrink-0 opacity-70" />;
-}
-
-// The page favicon, falling back to the globe glyph if it fails to load (broken
-// URL, blocked request) so a tab never shows a missing-image placeholder.
-function BrowserFavicon({ url }: { url: string }): ReactElement {
-  const [failed, setFailed] = useState(false);
-  if (failed) return <GlobeIcon className="size-3.5 shrink-0 opacity-70" />;
-  return (
-    <img
-      src={url}
-      alt=""
-      className="size-3.5 shrink-0 rounded-sm"
-      onError={() => setFailed(true)}
-    />
-  );
-}
+export { BrowserTabStrip } from "./BrowserTabStrip";
 
 export function BrowserLoading(): ReactElement {
   return (
@@ -172,7 +18,13 @@ export function BrowserLoading(): ReactElement {
   );
 }
 
-export function BrowserEmptyState({ onNewTab }: { onNewTab: () => void }): ReactElement {
+export function BrowserEmptyState({
+  onNewTab,
+  creating = false,
+}: {
+  onNewTab: () => void;
+  creating?: boolean;
+}): ReactElement {
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center">
       <div className="flex size-14 items-center justify-center rounded-full bg-muted text-muted-foreground">
@@ -184,9 +36,13 @@ export function BrowserEmptyState({ onNewTab }: { onNewTab: () => void }): React
           Open a tab to preview your app, then send the page context straight to the agent.
         </p>
       </div>
-      <Button size="sm" onClick={onNewTab}>
-        <PlusIcon className="size-4" />
-        New tab
+      <Button size="sm" onClick={onNewTab} disabled={creating} aria-busy={creating}>
+        {creating ? (
+          <Loader2Icon className="size-4 animate-spin" />
+        ) : (
+          <PlusIcon className="size-4" />
+        )}
+        {creating ? "Opening tab…" : "New tab"}
       </Button>
     </div>
   );

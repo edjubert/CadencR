@@ -11,9 +11,7 @@ use crate::domain::agents::providers::{
 };
 use crate::domain::agents::runtime::runtime_setting_key;
 use crate::domain::schedules::models::ScheduleTarget;
-use crate::domain::schedules::pins::{
-    access_mode_for, model_for, permission_mode_for, profile_for_new_session, trimmed,
-};
+use crate::domain::schedules::pins::{access_mode_for, model_for, permission_mode_for, trimmed};
 use crate::domain::settings;
 use crate::error::AppError;
 
@@ -25,6 +23,7 @@ pub struct ScheduleRuntime {
     pub profile: Option<String>,
     pub permission_mode: Option<String>,
     pub codex_permission_mode: Option<String>,
+    pub overrides: crate::domain::agents::adapter::RuntimeConfigOverrides,
 }
 
 pub async fn resolve(
@@ -37,7 +36,16 @@ pub async fn resolve(
     // A pinned profile wins over the globally active one: that is the whole
     // point of pinning it — a scheduled run can bill against a different
     // account than the one the user happens to be working in today.
-    let profile = trimmed(target.profile.as_deref()).or_else(|| profile_for_new_session(&provider));
+    let adapter = runtime_adapter(&provider)
+        .ok_or_else(|| AppError::BadRequest(format!("provider '{provider}' is unavailable")))?;
+    let profile = adapter
+        .resolve_profile(
+            trimmed(target.profile.as_deref()).as_deref(),
+            std::path::Path::new(project_path),
+        )
+        .await
+        .map_err(|error| AppError::BadRequest(error.to_string()))?
+        .map(|resolved| resolved.identity);
     let model = model_for(
         &state.read_pool,
         Some(project_path),
@@ -55,6 +63,11 @@ pub async fn resolve(
         profile,
         permission_mode,
         codex_permission_mode,
+        overrides: crate::domain::agents::adapter::RuntimeConfigOverrides {
+            model: trimmed(target.model.as_deref()),
+            thinking_effort: trimmed(target.thinking_level.as_deref()),
+            fast_mode: None,
+        },
     })
 }
 

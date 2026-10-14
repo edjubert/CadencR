@@ -2,7 +2,9 @@ import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import type { Feature } from "@/api/generated";
 import {
-  archiveFeatureInCachedLists,
+  adjacentFeatureOutsideIds,
+  archiveNavigationTarget,
+  archiveFeaturesInCachedLists,
   removeFeatureFromCachedLists,
 } from "@/components/project-feature-navigation";
 
@@ -35,10 +37,41 @@ describe("project feature navigation cache helpers", () => {
     const key = ["/api/features", { project_id: 1, include_archived: true }] as const;
     queryClient.setQueryData<Feature[]>(key, [feature(1)]);
 
-    archiveFeatureInCachedLists(queryClient, 1);
+    archiveFeaturesInCachedLists(queryClient, [1]);
 
     expect(queryClient.getQueryData<Feature[]>(key)).toEqual([feature(1, "archived")]);
     queryClient.clear();
+  });
+
+  it("archives every confirmed related conversation in cached feature lists", () => {
+    const queryClient = new QueryClient();
+    const key = ["/api/features", { project_id: 1, include_archived: true }] as const;
+    queryClient.setQueryData<Feature[]>(key, [feature(1), feature(2), feature(3)]);
+
+    archiveFeaturesInCachedLists(queryClient, [1, 3]);
+
+    expect(queryClient.getQueryData<Feature[]>(key)).toEqual([
+      feature(1, "archived"),
+      feature(2),
+      feature(3, "archived"),
+    ]);
+    queryClient.clear();
+  });
+
+  it("selects an adjacent conversation outside the archived group", () => {
+    const features = [feature(1), feature(2), feature(3), feature(4)];
+    expect(adjacentFeatureOutsideIds(features, 2, new Set([1, 2, 3]))?.id).toBe(4);
+    expect(adjacentFeatureOutsideIds(features, 3, new Set([2, 3, 4]))?.id).toBe(1);
+    expect(adjacentFeatureOutsideIds(features, 2, new Set([1, 2, 3, 4]))).toBeUndefined();
+  });
+
+  it("navigates away when the current conversation is archived as a relative", () => {
+    const features = [feature(1), feature(2), feature(3), feature(4)];
+    expect(archiveNavigationTarget(features, 2, new Set([1, 2, 3]))?.id).toBe(4);
+  });
+
+  it("preserves an unrelated current conversation", () => {
+    expect(archiveNavigationTarget([feature(1), feature(2)], 2, new Set([1]))).toBeUndefined();
   });
 
   it("does not touch non-list feature caches", () => {
@@ -61,7 +94,7 @@ describe("project feature navigation cache helpers", () => {
     const archived = [feature(1, "archived")];
     queryClient.setQueryData<Feature[]>(key, archived);
 
-    archiveFeatureInCachedLists(queryClient, 1);
+    archiveFeaturesInCachedLists(queryClient, [1]);
     expect(queryClient.getQueryData<Feature[]>(key)).toBe(archived);
 
     removeFeatureFromCachedLists(queryClient, 2);

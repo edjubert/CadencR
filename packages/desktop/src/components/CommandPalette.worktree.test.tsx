@@ -16,9 +16,13 @@ vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => vi.fn(),
 }));
 
-vi.mock("@/lib/desktop-bridge", () => ({
-  desktopBridge: { pickDirectory: vi.fn() },
-}));
+vi.mock("@/lib/desktop-bridge", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/desktop-bridge")>();
+  return {
+    ...actual,
+    desktopBridge: { ...actual.desktopBridge, pickDirectory: vi.fn() },
+  };
+});
 
 vi.mock("../api/generated", () => ({
   useListProjects: () => ({ data: [{ id: 1, name: "Proj" }] }),

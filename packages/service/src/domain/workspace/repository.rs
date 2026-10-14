@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crate::domain::agents::providers::provider_default_model;
 use crate::domain::agents::runtime::{
-    default_provider_settings, runtime_setting_key, validate_agent_type,
+    default_provider_settings, model_setting_key, runtime_setting_key, validate_agent_type,
 };
 
 const MODEL_KEYS: &[(&str, &str)] = &[
@@ -57,10 +57,12 @@ pub async fn get_model_settings(pool: &SqlitePool) -> Result<ModelSettings, AppE
 
     for (agent_type, provider_id) in provider_by_agent {
         if !defaults_by_provider.contains_key(provider_id) {
-            let default_model = provider_default_model(pool, provider_id)
-                .await
-                .unwrap_or_else(|| "opus".to_string());
-            defaults_by_provider.insert(provider_id.to_string(), default_model);
+            // No fabricated fallback: a provider with no resolvable model is
+            // a real condition the user must see, not one to paper over with a
+            // plausible-looking id that fails later at session start.
+            if let Some(default_model) = provider_default_model(pool, provider_id).await {
+                defaults_by_provider.insert(provider_id.to_string(), default_model);
+            }
         }
         if let Some(default_model) = defaults_by_provider.get(provider_id) {
             models_by_agent.insert(agent_type, default_model.clone());
@@ -90,8 +92,7 @@ pub async fn set_model_setting(
             agent_type
         )));
     }
-    let db_key = format!("model_{}", agent_type);
-    set_setting(pool, &db_key, model_id).await
+    set_setting(pool, &model_setting_key(agent_type), model_id).await
 }
 
 pub async fn get_provider_settings(pool: &SqlitePool) -> Result<AgentProviderSettings, AppError> {
@@ -234,5 +235,17 @@ mod tests {
             .await
             .unwrap();
         assert!(!second); // skipped
+    }
+
+    #[tokio::test]
+    async fn model_settings_surface_the_failure_instead_of_inventing_a_model() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+
+        let settings = get_model_settings(&pool)
+            .await
+            .expect("get_model_settings should not fail against an empty pool");
+
+        // "opus" must never be fabricated as a fallback.
+        assert_ne!(settings.session, "opus", "hardcoded placeholder leaked");
     }
 }

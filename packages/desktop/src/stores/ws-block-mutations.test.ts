@@ -1,7 +1,50 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { BLOCK_CONTENT_MAX_CHARS, TRUNCATION_NOTICE } from "@/lib/block-content-budget";
 import { applyMutations, parseTodosFromBlocks } from "./ws-block-mutations";
 import { createStreamingState } from "./ws-message-processing";
 import type { AgentBlockData } from "@/components/AgentBlock";
+
+function replayLargeToolEnvelope(contentChars: number): {
+  block: AgentBlockData;
+  parseCalls: number;
+  parsedChars: number;
+  payloadLength: number;
+} {
+  const streamState = createStreamingState();
+  const payload = `{"file_path":"/tmp/large","content":"${"x".repeat(contentChars)}"}`;
+  let blocks: AgentBlockData[] = [
+    { id: "write-1", type: "tool_call", content: "", toolName: "Write", toolArgs: "" },
+  ];
+  const parse = vi.spyOn(JSON, "parse");
+  let parseCalls = 0;
+  let parsedChars = 0;
+  try {
+    for (let offset = 0; offset < payload.length; offset += 1024) {
+      blocks = applyMutations(
+        blocks,
+        [
+          {
+            action: "update",
+            block: {
+              id: "write-1",
+              type: "tool_call",
+              content: payload.slice(offset, offset + 1024),
+            },
+          },
+        ],
+        streamState,
+      );
+    }
+    parseCalls = parse.mock.calls.length;
+    parsedChars = parse.mock.calls.reduce(
+      (sum, [value]) => sum + (typeof value === "string" ? value.length : 0),
+      0,
+    );
+  } finally {
+    parse.mockRestore();
+  }
+  return { block: blocks[0], parseCalls, parsedChars, payloadLength: payload.length };
+}
 
 describe("parseTodosFromBlocks", () => {
   it("extracts todos from the last TodoWrite block", () => {
@@ -148,6 +191,30 @@ describe("applyMutations", () => {
     expect(result[0].toolArgs).toBe(result[0].content);
   });
 
+  it("seeds a valid Bash base when toolArgs is initially absent", () => {
+    const streamState = createStreamingState();
+    const base = JSON.stringify({ command: "pwd", status: "running" });
+    const result = applyMutations(
+      [{ id: "bash", type: "tool_call", toolName: "Bash", content: base }],
+      [
+        {
+          action: "update",
+          block: {
+            id: "bash",
+            type: "tool_call",
+            content: JSON.stringify({ output: "/tmp", status: "completed" }),
+          },
+        },
+      ],
+      streamState,
+    );
+    expect(JSON.parse(result[0].toolArgs ?? "")).toEqual({
+      command: "pwd",
+      output: "/tmp",
+      status: "completed",
+    });
+  });
+
   it("merges ApplyPatch object deltas without dropping patch_text", () => {
     const streamState = createStreamingState();
     const previous = JSON.stringify({
@@ -190,7 +257,7 @@ describe("applyMutations", () => {
     expect(result[0].toolArgs).toBe(result[0].content);
   });
 
-  it("recovers latest valid json snapshot for non-Bash concatenated updates", () => {
+  it("publishes only the latest valid snapshot for non-merging tools", () => {
     const streamState = createStreamingState();
     const previous = JSON.stringify({ pattern: "old" });
     const latest = JSON.stringify({ pattern: "new" });
@@ -220,7 +287,7 @@ describe("applyMutations", () => {
       streamState,
     );
 
-    expect(result[0].content).toBe(previous + latest);
+    expect(result[0].content).toBe(latest);
     expect(result[0].toolArgs).toBe(latest);
   });
 
@@ -428,6 +495,105 @@ describe("applyMutations", () => {
 
     expect(result[0].toolArgs).toBe(validArgs);
     expect(result[0].content).toBe('{"description": "Fi');
+  });
+
+  it("parses a large unfinished tool envelope in near-linear total input", () => {
+    const small = replayLargeToolEnvelope(256 * 1024);
+    const large = replayLargeToolEnvelope(1024 * 1024);
+    for (const result of [small, large]) {
+      expect(result.parseCalls).toBe(1);
+      expect(result.parsedChars).toBe(result.payloadLength);
+      expect(result.block.content.length).toBeLessThan(BLOCK_CONTENT_MAX_CHARS + 1_000);
+      expect(result.block.content).toContain(TRUNCATION_NOTICE);
+      expect(result.block.toolArgs).toBe(result.block.content);
+    }
+    expect(large.parsedChars).toBeLessThan(small.parsedChars * 5);
+  });
+
+  it("publishes the same canonical content and args for a large generic tool snapshot", () => {
+    const streamState = createStreamingState();
+    const payload = JSON.stringify({ query: "x".repeat(256 * 1024) });
+    const blocks = applyMutations(
+      [{ id: "mcp-1", type: "tool_call", content: "", toolName: "mcp__search" }],
+      [{ action: "update", block: { id: "mcp-1", type: "tool_call", content: payload } }],
+      streamState,
+    );
+
+    expect(blocks[0].content).toBe(blocks[0].toolArgs);
+    expect(() => JSON.parse(blocks[0].toolArgs ?? "")).not.toThrow();
+    expect(blocks[0].content).toContain(TRUNCATION_NOTICE);
+  });
+
+  it("cleans up a complete stream without replacing an unchanged block", () => {
+    const streamState = createStreamingState();
+    let blocks: AgentBlockData[] = [
+      { id: "write-1", type: "tool_call", content: "", toolName: "Write" },
+    ];
+    blocks = applyMutations(
+      blocks,
+      [
+        {
+          action: "update",
+          block: { id: "write-1", type: "tool_call", content: '{"file_path":"/tmp/a"}' },
+        },
+      ],
+      streamState,
+    );
+    const version = streamState.rootBlocksVersion;
+    const finalized = applyMutations(
+      blocks,
+      [{ action: "finalize", block: { id: "write-1", type: "tool_call", content: "" } }],
+      streamState,
+    );
+
+    expect(finalized).toBe(blocks);
+    expect(streamState.rootBlocksVersion).toBe(version);
+    expect(streamState.structuredToolStreams.has("write-1")).toBe(false);
+  });
+
+  it("keeps the last authoritative args when a malformed stream finalizes", () => {
+    const streamState = createStreamingState();
+    const initial = JSON.stringify({ file_path: "/tmp/original" });
+    let blocks: AgentBlockData[] = [
+      {
+        id: "write-1",
+        type: "tool_call",
+        content: initial,
+        toolName: "Write",
+        toolArgs: initial,
+      },
+    ];
+    blocks = applyMutations(
+      blocks,
+      [{ action: "update", block: { id: "write-1", type: "tool_call", content: '{"bad":' } }],
+      streamState,
+    );
+    blocks = applyMutations(
+      blocks,
+      [{ action: "finalize", block: { id: "write-1", type: "tool_call", content: "" } }],
+      streamState,
+    );
+
+    expect(blocks[0].toolArgs).toBe(initial);
+    expect(streamState.structuredToolStreams.has("write-1")).toBe(false);
+  });
+
+  it("continues scanning an incomplete prefix already present on the block", () => {
+    const streamState = createStreamingState();
+    const prefix = '{"file_path":"/tmp/file","content":"';
+    const blocks = applyMutations(
+      [{ id: "write-1", type: "tool_call", content: prefix, toolName: "Write" }],
+      [
+        { action: "update", block: { id: "write-1", type: "tool_call", content: "hello" } },
+        { action: "update", block: { id: "write-1", type: "tool_call", content: '"}' } },
+      ],
+      streamState,
+    );
+
+    expect(JSON.parse(blocks[0].toolArgs ?? "")).toEqual({
+      file_path: "/tmp/file",
+      content: "hello",
+    });
   });
 });
 

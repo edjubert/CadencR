@@ -48,8 +48,16 @@ async function cdp(
   return dbg.sendCommand(method, params);
 }
 
-export async function captureScreenshot(wc: WebContents, clip?: BrowserBounds): Promise<string> {
-  const result = await cdp(wc, "Page.captureScreenshot", captureScreenshotParams(clip));
+export async function captureScreenshot(
+  wc: WebContents,
+  clip?: BrowserBounds,
+  coordinateScale = 1,
+): Promise<string> {
+  const result = await cdp(
+    wc,
+    "Page.captureScreenshot",
+    captureScreenshotParams(clip, coordinateScale),
+  );
   if (isRecord(result) && typeof result.data === "string") return result.data;
   throw new Error("Browser screenshot did not return image data.");
 }
@@ -62,7 +70,15 @@ export async function captureScreenshot(wc: WebContents, clip?: BrowserBounds): 
  * a debugger. Returns base64 PNG to match `captureScreenshot`.
  */
 export async function capturePageImage(wc: WebContents): Promise<string> {
-  const image = await wc.capturePage();
+  const image = await wc.capturePage().catch((error: unknown) => {
+    // Electron rejects with this exact message before a new tab has produced
+    // its first composited frame. Overlay previews are optional, so treat that
+    // transient state like the empty NativeImage returned for a blank tab.
+    const message = error instanceof Error ? error.message : error;
+    if (message === "Current display surface not available for capture") return null;
+    throw error;
+  });
+  if (!image) return "";
   // A freshly-created or blank tab has nothing composited yet; return "" so the
   // caller shows no preview rather than a broken/empty image.
   return image.isEmpty() ? "" : image.toPNG().toString("base64");
@@ -100,8 +116,9 @@ export async function captureDomOutline(
 export async function captureRegionScreenshot(
   wc: WebContents,
   clip: BrowserBounds,
+  coordinateScale = 1,
 ): Promise<string> {
-  const data = await captureScreenshot(wc, clip);
+  const data = await captureScreenshot(wc, clip, coordinateScale);
   await flashHighlight(wc, clip);
   return data;
 }
@@ -131,9 +148,14 @@ export async function captureElementContext(
   meta: { tabId: string; url: string; title: string; capturedAt: string },
   diagnostics: BrowserElementContext["diagnostics"],
   anchorId: string | null,
+  screenshotCoordinateScale: () => number = () => 1,
 ): Promise<BrowserElementContext> {
   const context = await wc.executeJavaScript(elementContextScript(anchorId), true);
   if (!isElementPayload(context)) throw new Error("Browser element context capture failed.");
-  const screenshotPngBase64 = await captureScreenshot(wc, context.boundingBox);
+  const screenshotPngBase64 = await captureScreenshot(
+    wc,
+    context.boundingBox,
+    screenshotCoordinateScale(),
+  );
   return { ...meta, screenshotPngBase64, element: context, diagnostics };
 }

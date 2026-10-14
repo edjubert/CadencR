@@ -48,6 +48,8 @@ pub enum WsSessionAction {
     ModeChanged,
     #[serde(rename = "profile.changed")]
     ProfileChanged,
+    #[serde(rename = "runtime_overrides.changed")]
+    RuntimeOverridesChanged,
     #[serde(rename = "branch.rewound")]
     BranchRewound,
     #[serde(rename = "branch.forked")]
@@ -87,6 +89,7 @@ impl WsSessionAction {
             Self::FastModeSetOk => "fast_mode.set.ok",
             Self::ModeChanged => "mode.changed",
             Self::ProfileChanged => "profile.changed",
+            Self::RuntimeOverridesChanged => "runtime_overrides.changed",
             Self::BranchRewound => "branch.rewound",
             Self::BranchForked => "branch.forked",
             Self::RuntimeSessionId => "runtime_session_id",
@@ -123,6 +126,7 @@ impl WsSessionAction {
             Self::FastModeSetOk,
             Self::ModeChanged,
             Self::ProfileChanged,
+            Self::RuntimeOverridesChanged,
             Self::BranchRewound,
             Self::BranchForked,
             Self::RuntimeSessionId,

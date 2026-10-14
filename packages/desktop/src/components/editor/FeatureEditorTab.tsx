@@ -1,6 +1,5 @@
 import {
   memo,
-  useEffect,
   useRef,
   useState,
   useCallback,
@@ -37,6 +36,8 @@ import {
   useConfirmedConflictPaths,
 } from "./useAutoConflictResolution";
 import { EditorLeaveDialog } from "./EditorLeaveDialog";
+import { useFeatureEditorEffects } from "./useFeatureEditorEffects";
+import { focusNeovimEditor } from "./neovim/focusNeovimEditor";
 
 interface FeatureEditorTabProps {
   featureId: number;
@@ -53,12 +54,14 @@ export interface FeatureEditorTabHandle {
 
 const EDITOR_SIDEBAR_COLLAPSED_SETTING = "editor_sidebar_collapsed";
 
-function useEditorFocusState(activePaneId: string, isEditorFocused: boolean) {
+function useEditorFocusState(featureId: number, activePaneId: string, isEditorFocused: boolean) {
   const rootRef = useRef<HTMLDivElement>(null);
   const editorViewsRef = useRef<Map<string, EditorView>>(new Map());
   const focusActiveEditor = useCallback((): void => {
-    editorViewsRef.current.get(activePaneId)?.focus();
-  }, [activePaneId]);
+    const editor = editorViewsRef.current.get(activePaneId);
+    if (editor) editor.focus();
+    else focusNeovimEditor(featureId);
+  }, [activePaneId, featureId]);
   const shouldRestoreEditorFocus = useCallback((): boolean => {
     const active = document.activeElement;
     return !(active instanceof HTMLElement && rootRef.current?.contains(active));
@@ -197,35 +200,6 @@ function useEditorNavigationShortcuts({
   usePaneShortcut("editor-nav-pane-down", "down");
 }
 
-function useFeatureEditorEffects({
-  focus,
-  initFeature,
-  isEditorFocused,
-  persistedCollapsed,
-  sidebarVisible,
-  toggleSidebar,
-}: {
-  focus: EditorFocusState;
-  initFeature: () => void;
-  isEditorFocused: boolean;
-  persistedCollapsed: string | null;
-  sidebarVisible: boolean;
-  toggleSidebar: () => void;
-}): void {
-  const initializedRef = useRef(false);
-  useEffect(() => initFeature(), [initFeature]);
-  useEffect(() => {
-    if (!isEditorFocused || !focus.shouldRestoreEditorFocus()) return undefined;
-    const frame = requestAnimationFrame(focus.focusActiveEditor);
-    return () => cancelAnimationFrame(frame);
-  }, [focus, isEditorFocused]);
-  useEffect(() => {
-    if (initializedRef.current || persistedCollapsed === null) return;
-    initializedRef.current = true;
-    if ((persistedCollapsed !== "true") !== sidebarVisible) toggleSidebar();
-  }, [persistedCollapsed, sidebarVisible, toggleSidebar]);
-}
-
 const FeatureEditorTab = memo(
   forwardRef<FeatureEditorTabHandle, FeatureEditorTabProps>(function FeatureEditorTab(props, ref) {
     const layoutFeatureId = useFeatureLayoutContext()?.featureId ?? props.featureId;
@@ -242,7 +216,7 @@ const FeatureEditorTab = memo(
     );
     useFileWatcher(props.projectId, props.featureId);
     const confirmedConflicts = useConfirmedConflictPaths(props.featureId);
-    const focus = useEditorFocusState(editor.activePaneId, isEditorFocused);
+    const focus = useEditorFocusState(props.featureId, editor.activePaneId, isEditorFocused);
     const leave = useEditorLeaveGuard(ref, editor.panes, focus);
     const handleToggleSidebar = useCallback(() => {
       editor.toggleSidebar();
@@ -260,6 +234,7 @@ const FeatureEditorTab = memo(
       isEditorFocused,
       persistedCollapsed,
       sidebarVisible: editor.sidebarVisible,
+      sidebarAutoHidden: editor.sidebarAutoHidden === true,
       toggleSidebar: editor.toggleSidebar,
     });
     const isWorktree = Boolean(useFeatureWorktreePath(props.featureId, props.projectId));

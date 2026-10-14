@@ -8,7 +8,7 @@
  * doesn't re-parse the whole buffer on the main thread.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@/test-utils";
+import { fireEvent, render, screen } from "@/test-utils";
 import userEvent from "@testing-library/user-event";
 
 const parseAnsiMock = vi.fn((text: string) => text);
@@ -26,6 +26,9 @@ vi.mock("@/api/generated", () => ({
   ],
 }));
 
+const useIsTouchDevice = vi.hoisted(() => vi.fn(() => false));
+vi.mock("@/hooks/useIsTouchDevice", () => ({ useIsTouchDevice }));
+
 import { BashBlock } from "./BashBlock";
 
 // Build content long enough to force the collapse toggle (>10 default lines).
@@ -34,6 +37,7 @@ function bigContent(lines: number): string {
 }
 
 beforeEach(() => {
+  useIsTouchDevice.mockReturnValue(false);
   parseAnsiMock.mockClear();
   getMessageFullContentMock.mockReset();
 });
@@ -155,6 +159,35 @@ describe("BashBlock collapsed-header UX", () => {
 });
 
 describe("BashBlock server-truncated output", () => {
+  it("never fetches a short preview on mount or opening the card", async () => {
+    const user = userEvent.setup();
+    getMessageFullContentMock.mockResolvedValue({ content: "earlier\nlast" });
+    render(<BashBlock command="cat log" content="last" messageId={42} truncatedContent />);
+    await user.click(screen.getByRole("button", { name: "Collapse output" }));
+    await user.click(screen.getByRole("button", { name: "Expand output" }));
+    expect(getMessageFullContentMock).not.toHaveBeenCalled();
+  });
+
+  it("loads previous lines explicitly even when fewer than ten lines remain", async () => {
+    const user = userEvent.setup();
+    getMessageFullContentMock.mockResolvedValue({ content: "earlier\nlast" });
+    render(<BashBlock command="cat log" content="last" messageId={42} truncatedContent />);
+    expect(getMessageFullContentMock).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Load previous lines" }));
+    expect(await screen.findByText(/earlier/)).toBeInTheDocument();
+    expect(getMessageFullContentMock).toHaveBeenCalledExactlyOnceWith(42, expect.any(AbortSignal));
+    await user.click(screen.getByRole("button", { name: "Show last 10" }));
+    expect(screen.queryByText(/earlier\nlast/)).not.toBeInTheDocument();
+  });
+
+  it("explains missing identity without pretending the preview is complete", async () => {
+    const user = userEvent.setup();
+    render(<BashBlock command="cat log" content="last" truncatedContent />);
+    await user.click(screen.getByRole("button", { name: "Load previous lines" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Reopen the conversation");
+    expect(getMessageFullContentMock).not.toHaveBeenCalled();
+  });
+
   it("fetches the full message content when expanding server-truncated output", async () => {
     const user = userEvent.setup();
     const truncated = bigContent(20);
@@ -170,14 +203,28 @@ describe("BashBlock server-truncated output", () => {
       <BashBlock command="seq 80" content={truncated} messageId={2585} truncatedContent={true} />,
     );
 
-    await user.click(screen.getByRole("button", { name: /Show all 20/ }));
+    await user.click(screen.getByRole("button", { name: "Load previous lines" }));
 
     expect(await screen.findByText("Loading full output…")).toBeInTheDocument();
+    // Do not expand the cached preview while waiting: the height jump can
+    // unmount the row in Virtuoso and cancel the pending request.
+    expect(screen.getByText(/line-19/).textContent).toBe(
+      truncated.split("\n").slice(-10).join("\n"),
+    );
     resolveFullContent({
       content: JSON.stringify({ aggregatedOutput: fullOutput, status: "completed" }),
     });
     expect(await screen.findByText(/line-79/)).toBeInTheDocument();
     expect(getMessageFullContentMock).toHaveBeenCalledTimes(1);
     expect(getMessageFullContentMock).toHaveBeenCalledWith(2585, expect.any(AbortSignal));
+  });
+
+  it("leaves touch long-press to native selection of the output", () => {
+    useIsTouchDevice.mockReturnValue(true);
+    const { container } = render(<BashBlock command="ls" content="file.txt" />);
+    const block = container.querySelector("[data-bash-block]") as HTMLElement;
+
+    expect(fireEvent.contextMenu(block)).toBe(true);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 });

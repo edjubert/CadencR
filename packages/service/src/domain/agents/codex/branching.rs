@@ -1,8 +1,10 @@
 use async_trait::async_trait;
 use codex_app_server_sdk_rs::{CodexAppServerClient, SdkError, ThreadSnapshot};
 
-use super::app_server_spawn_options;
-use crate::domain::agents::adapter::{BranchContext, BranchError, BranchResult, SessionBranching};
+use super::{profile_runtime::app_server_spawn_options, CodexAdapter};
+use crate::domain::agents::adapter::{
+    AgentRuntimeAdapter, BranchContext, BranchError, BranchResult, SessionBranching,
+};
 
 pub(super) static CODEX_SESSION_BRANCHING: CodexSessionBranching = CodexSessionBranching;
 
@@ -11,9 +13,18 @@ pub(super) struct CodexSessionBranching;
 #[async_trait]
 impl SessionBranching for CodexSessionBranching {
     async fn truncate_before(&self, ctx: &BranchContext) -> Result<BranchResult, BranchError> {
-        let client = CodexAppServerClient::spawn_with_options(app_server_spawn_options(None))
+        let resolved = CodexAdapter
+            .resolve_profile(Some(ctx.profile.as_deref().unwrap_or("default")), &ctx.cwd)
             .await
-            .map_err(branch_surgery)?;
+            .map_err(|error| BranchError::Surgery(error.to_string()))?
+            .expect("Codex always resolves a default profile");
+        let client = CodexAppServerClient::spawn_with_options(app_server_spawn_options(
+            Some(resolved.env),
+            resolved.env_unset,
+            Some(ctx.cwd.clone()),
+        ))
+        .await
+        .map_err(branch_surgery)?;
         let result = truncate_with_client(&client, ctx).await;
         client.shutdown().await;
         result

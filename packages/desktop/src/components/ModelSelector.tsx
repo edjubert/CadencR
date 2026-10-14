@@ -3,18 +3,19 @@ import { AGENT_ICONS } from "@/components/agent-icons";
 import { ModelSelectorRow } from "@/components/ModelSelectorRow";
 import { useModelSelectorState } from "@/hooks/useModelSelectorState";
 import { MODEL_SELECTOR_AGENT_LABELS, type ModelSelectorLevel } from "@/hooks/modelSelectorShared";
+import type { AgentTypeSetting } from "@/shared/models";
 
 interface ModelSelectorProps {
   level: ModelSelectorLevel;
-  projectId?: number;
   featureId?: number;
+  agentTypes?: readonly AgentTypeSetting[];
 }
 
-export function ModelSelector({ level, projectId, featureId }: ModelSelectorProps) {
-  const { isLoading, hasCatalogError, rows } = useModelSelectorState({
+export function ModelSelector({ level, featureId, agentTypes }: ModelSelectorProps) {
+  const { isLoading, hasCatalogError, hasSelectionError, rows } = useModelSelectorState({
     level,
-    projectId,
     featureId,
+    agentTypes,
   });
 
   if (isLoading) {
@@ -23,6 +24,10 @@ export function ModelSelector({ level, projectId, featureId }: ModelSelectorProp
 
   if (hasCatalogError) {
     return <div className="text-sm text-destructive">Failed to load provider catalog.</div>;
+  }
+
+  if (hasSelectionError) {
+    return <div className="text-sm text-destructive">Failed to load the model selection.</div>;
   }
 
   return (

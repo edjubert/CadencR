@@ -33,7 +33,7 @@ function WebSocketSessionPage() {
   // `useDeferredWorkspaceMount`.
   const workspaceReady = useDeferredWorkspaceMount();
   return (
-    <ResolvedModelProvider featureId={featureId} projectId={projectId}>
+    <ResolvedModelProvider featureId={featureId}>
       {workspaceReady ? (
         <WebSocketSessionFeatureBlock
           sessionId={sessionId}

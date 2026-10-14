@@ -1,4 +1,4 @@
-import { memo, useMemo, type ReactElement, type ReactNode } from "react";
+import { memo, useMemo, type ReactElement } from "react";
 import { Loader2Icon, MessageCircleQuestionIcon, ShieldAlertIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -15,6 +15,7 @@ import {
 } from "@/components/sidebar-pending-gate";
 import { useFeaturePendingGate } from "@/hooks/useFeaturePendingGate";
 import { usePendingGatePopoverOpen } from "@/hooks/usePendingGatePopoverOpen";
+import { useSidebarSample } from "@/lib/sidebar-sample-context";
 import { useFeatureStatus } from "@/stores/session-status-selectors";
 import type { FeatureGateDecision, FeaturePendingGateResponse } from "@/api/generated";
 import type { SessionGateKind } from "@/lib/session-gate";
@@ -24,8 +25,6 @@ interface SidebarPendingGatePopoverProps {
   featureId: number;
   allowAutoOpen: boolean;
   onOpenConversation: () => void;
-  /** When set, this visual is the trigger (provider mark). Otherwise the gate icon. */
-  children?: ReactNode;
 }
 
 /** ~10 lines of text-xs / leading-snug before the body scrolls. */
@@ -43,9 +42,8 @@ export const SidebarPendingGatePopover = memo(function SidebarPendingGatePopover
   featureId,
   allowAutoOpen,
   onOpenConversation,
-  children,
 }: SidebarPendingGatePopoverProps): ReactElement {
-  const { open, setOpen, setHovered, hoveredFeatureId } = usePendingGatePopoverOpen(
+  const { open, setOpen, setHovered, hoveredFeatureId, hoverHandlers } = usePendingGatePopoverOpen(
     featureId,
     allowAutoOpen,
   );
@@ -56,6 +54,8 @@ export const SidebarPendingGatePopover = memo(function SidebarPendingGatePopover
   });
   const gateKind = gate ? effectiveGateKind(gate) : null;
   const isPermissionTrigger = triggerPendingKind(livePendingKind, gateKind) === "permission";
+  // A preview sample's popover is part of the preview: using it keeps the display options open.
+  const isSample = useSidebarSample() !== null;
 
   return (
     <Popover
@@ -77,13 +77,13 @@ export const SidebarPendingGatePopover = memo(function SidebarPendingGatePopover
           )}
           onClick={(event) => event.stopPropagation()}
           onPointerDown={(event) => event.stopPropagation()}
+          {...hoverHandlers}
         >
-          {children ??
-            (isPermissionTrigger ? (
-              <ShieldAlertIcon className="size-3.5" />
-            ) : (
-              <MessageCircleQuestionIcon className="size-3.5" />
-            ))}
+          {isPermissionTrigger ? (
+            <ShieldAlertIcon className="sidebar-pending-indicator size-3.5" />
+          ) : (
+            <MessageCircleQuestionIcon className="sidebar-pending-indicator size-3.5" />
+          )}
         </button>
       </PopoverTrigger>
       <PopoverContent
@@ -95,8 +95,10 @@ export const SidebarPendingGatePopover = memo(function SidebarPendingGatePopover
           "w-96 max-w-[min(24rem,calc(100vw-2rem))] bg-popover p-0",
           gateKind === "permission" && "border-amber-500/40",
         )}
+        data-sidebar-sample={isSample ? "" : undefined}
         onClick={(event) => event.stopPropagation()}
         onOpenAutoFocus={(event) => event.preventDefault()}
+        {...hoverHandlers}
         onMouseEnter={() => setHovered(featureId)}
         onMouseLeave={() => {
           if (hoveredFeatureId === featureId) setHovered(null);

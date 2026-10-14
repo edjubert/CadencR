@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 
@@ -105,13 +106,13 @@ describe("useWebSocketSession", () => {
     expect(result.current.isConnected).toBe(true);
   });
 
-  it("keeps currentModelId empty before the backend initializes the session", async () => {
+  it("currentSelection starts null until the backend confirms one", async () => {
     const { result } = renderHook(() => useWebSocketSession("test-id"));
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(result.current.currentModelId).toBe("");
+    expect(result.current.currentSelection).toBeNull();
   });
 
   it("restarts stale local timing when backend live status first reports agent", async () => {
@@ -1075,10 +1076,10 @@ describe("useWebSocketSession", () => {
     expect(result.current.pendingPlanApproval).toBeNull();
     // Chip stays at the pre-approval mode (the FE never observed an
     // EnterPlanMode signal in this test, so it's the post-init default
-    // `acceptEdits`) — the backend bridge owns the post-approval mode
+    // `auto`) — the backend bridge owns the post-approval mode
     // transition and will broadcast `mode.changed` once the live CLI has
     // accepted the new mode.
-    expect(result.current.permissionMode).toBe("acceptEdits");
+    expect(result.current.permissionMode).toBe("auto");
     expect(result.current.status).toBe("agent");
 
     // FE must NOT send `mode.set` — backend bridge does it atomically
@@ -1219,9 +1220,20 @@ describe("useWebSocketSession", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
+    const ws = getWs();
+
+    // mode.changed is validated against the active provider's catalog, so a
+    // confirmed selection must exist first.
+    act(() => {
+      ws.simulateMessage({
+        domain: "session",
+        action: "initialized",
+        payload: { session_id: "srv-1", provider: "claude_code", model: "opus" },
+      });
+    });
 
     act(() => {
-      getWs().simulateMessage({
+      ws.simulateMessage({
         domain: "session",
         action: "initialized",
         payload: { session_id: "srv-1", provider: "claude_code", model: "opus" },

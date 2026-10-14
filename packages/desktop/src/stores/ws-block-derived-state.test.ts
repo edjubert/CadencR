@@ -1,7 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { blocksPatchWithDerived, rebuildDerivedAgentStreamState } from "./ws-block-mutations";
+import {
+  applyMutations,
+  blocksPatchWithDerived,
+  rebuildDerivedAgentStreamState,
+} from "./ws-block-mutations";
 import { createStreamingState } from "./ws-message-processing";
 import type { AgentBlockData } from "@/components/AgentBlock";
+import { createStructuredToolStream } from "./ws-structured-tool-stream";
 
 describe("rebuildDerivedAgentStreamState", () => {
   it("filters out children and indexes tool_result blocks by toolUseId", () => {
@@ -29,6 +34,65 @@ describe("rebuildDerivedAgentStreamState", () => {
     };
     rebuildDerivedAgentStreamState(streamState, [task]);
     expect(streamState.toolUseIdToBlock.get("task-1")).toBe(task);
+  });
+
+  it("drops incomplete live tool buffers when their block is removed", () => {
+    const streamState = createStreamingState();
+    streamState.structuredToolStreams.set("stale", createStructuredToolStream());
+    rebuildDerivedAgentStreamState(streamState, []);
+    expect(streamState.structuredToolStreams.size).toBe(0);
+  });
+
+  it("drops an incomplete buffer when the same block is authoritatively replaced", () => {
+    const streamState = createStreamingState();
+    const stream = createStructuredToolStream();
+    stream.preview = { text: '{"partial":', truncated: false };
+    streamState.structuredToolStreams.set("tool", stream);
+    rebuildDerivedAgentStreamState(streamState, [
+      { id: "tool", type: "tool_call", content: '{"complete":true}' },
+    ]);
+    expect(streamState.structuredToolStreams.size).toBe(0);
+  });
+
+  it("preserves an unchanged incomplete stream across an unrelated rebuild", () => {
+    const streamState = createStreamingState();
+    const prefix = `{"file_path":"/tmp/large","content":"${"x".repeat(140_000)}`;
+    let blocks: AgentBlockData[] = [
+      { id: "write", type: "tool_call", toolName: "Write", content: prefix },
+    ];
+    blocks = applyMutations(
+      blocks,
+      [{ action: "update", block: { id: "write", type: "tool_call", content: "tail" } }],
+      streamState,
+    );
+    const older: AgentBlockData = { id: "older", type: "text", content: "history" };
+    const rebuilt = blocksPatchWithDerived(streamState, [older, ...blocks]).blocks;
+    expect(streamState.structuredToolStreams.has("write")).toBe(true);
+
+    const completed = applyMutations(
+      rebuilt,
+      [{ action: "update", block: { id: "write", type: "tool_call", content: '"}' } }],
+      streamState,
+    );
+    const args = JSON.parse(completed[1].toolArgs ?? "") as Record<string, unknown>;
+    expect(args.file_path).toBe("/tmp/large");
+    expect(String(args.content)).toContain("tail");
+  });
+
+  it("drops a stale raw stream when an authoritative clone has the same preview", () => {
+    const streamState = createStreamingState();
+    let blocks: AgentBlockData[] = [
+      { id: "write", type: "tool_call", toolName: "Write", content: "" },
+    ];
+    blocks = applyMutations(
+      blocks,
+      [{ action: "update", block: { id: "write", type: "tool_call", content: '{"value":' } }],
+      streamState,
+    );
+    expect(streamState.structuredToolStreams.has("write")).toBe(true);
+
+    rebuildDerivedAgentStreamState(streamState, [{ ...blocks[0] }]);
+    expect(streamState.structuredToolStreams.has("write")).toBe(false);
   });
 });
 

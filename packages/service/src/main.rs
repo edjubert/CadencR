@@ -1,12 +1,8 @@
-mod api;
-mod app_state;
-mod config;
-mod dev_env;
-mod domain;
-mod error;
-mod remote;
-mod shared;
-mod shutdown;
+//! Thin binary entry point. Every module lives in the `cadencr_service` lib so
+//! the crate compiles (and its unit tests run) once; declaring them again here
+//! with `mod` would build a second full copy of the service.
+
+use cadencr_service::{api, app_state, config, dev_env, domain, remote, shared, shutdown};
 
 use axum::http::header::{HeaderName, CONTENT_TYPE};
 use axum::http::Method;
@@ -52,6 +48,9 @@ async fn main() -> anyhow::Result<()> {
                 &db_path,
             );
             domain::settings_store::init(settings_dir);
+            domain::agents::providers::installed::managed::trust::initialize_pinned_registry_trust(
+            )
+            .await?;
 
             domain::mcp::stdio::run_mcp_stdio(&db_path, agent_type, *feature_id, *session_id)
                 .await?;
@@ -96,10 +95,11 @@ async fn main() -> anyhow::Result<()> {
             let write_pool = db::create_write_pool(&db_path).await?;
             shared::migrate::run_migrations(&shared::migrate::MigrationContext {
                 pool: &write_pool,
-                db_path: Some(std::path::Path::new(&db_path)),
+                db_path: dev_env::migration_backup_path(std::path::Path::new(&db_path)),
                 app_version: config.app_version.as_deref(),
             })
             .await?;
+            dev_env::consume_fresh_clone_marker(std::path::Path::new(&db_path))?;
             // The one-time image backfill needs its destination before it can
             // run. Production uses `~/.cadencr/blobs`; an ad-hoc/dev database
             // gets an isolated directory named after that exact database.
@@ -161,6 +161,9 @@ async fn main() -> anyhow::Result<()> {
             // CWD-relative `./cadencr-settings/settings.json`.
             let settings_dir = std::fs::canonicalize(&settings_dir).unwrap_or(settings_dir);
             domain::settings_store::init(settings_dir.clone());
+            domain::agents::providers::installed::managed::trust::initialize_pinned_registry_trust(
+            )
+            .await?;
             // Bind the provider registry to that settings dir immediately: it
             // scans `<settings-dir>/providers` exactly once, and a lazy first
             // lookup before this point would cache an empty scan of the
@@ -179,6 +182,13 @@ async fn main() -> anyhow::Result<()> {
                 Ok(true) => info!("pruned legacy per-device UI keys from settings.json"),
                 Ok(false) => {}
                 Err(e) => tracing::warn!("failed to prune ephemeral settings keys: {e}"),
+            }
+            // The macOS notch island became the default notification destination;
+            // move existing installs over once.
+            match domain::settings_store::notch_default::apply_notch_default().await {
+                Ok(true) => info!("switched notifications to the notch island"),
+                Ok(false) => {}
+                Err(e) => tracing::warn!("failed to apply the notch notification default: {e}"),
             }
 
             // Mark any sessions left as 'running' from a previous crash as 'paused'
@@ -224,16 +234,16 @@ async fn main() -> anyhow::Result<()> {
                     data_dir: remote_data_dir.clone(),
                 }));
 
-            let state = AppState::for_server(
-                read_pool,
-                write_pool,
-                db_path.clone(),
-                auth_token,
-                config.frontend_port,
-                config.port,
-                remote_controller,
-                &remote_data_dir,
-            );
+            let state = AppState::for_server()
+                .read_pool(read_pool)
+                .write_pool(write_pool)
+                .db_path(db_path.clone())
+                .auth_token(auth_token)
+                .frontend_port(config.frontend_port)
+                .port(config.port)
+                .remote(remote_controller)
+                .remote_data_dir(&remote_data_dir)
+                .build();
 
             // Watch the settings dir so external edits to the JSON files push a
             // live refresh to connected clients.
@@ -255,6 +265,13 @@ async fn main() -> anyhow::Result<()> {
                 state.theme_events_tx.clone(),
             ));
 
+            // Watch alacritty.toml so external edits push a live refresh to
+            // connected clients, the same way the settings watcher above does
+            // for the settings directory.
+            domain::terminal::alacritty_config::start_watcher(
+                state.alacritty_config_events_tx.clone(),
+            );
+
             // Background Web Push dispatcher: turns agent finished / needs-input
             // transitions into native push for backgrounded remote PWAs. Cheap
             // when no subscriptions exist; runs for the process lifetime.
@@ -264,6 +281,8 @@ async fn main() -> anyhow::Result<()> {
             // process, which needs to honor the override on first launch.
             domain::agents::apply_binary_overrides_from_settings(&state.read_pool).await;
             domain::agents::spawn_runtime_startup_warmups();
+            domain::agents::providers::installed::managed::service::spawn_startup_blocklist_refresh(
+            );
 
             // Reconcile custom-action runs orphaned by the previous exit: their
             // processes died with the old service instance, so finalize them

@@ -50,7 +50,8 @@ pub async fn list_unified_agents(
 
     for feature_id in feature_ids {
         let state =
-            repository::get_feature_agent_state(pool, feature_id, None, Some(limit), None).await?;
+            repository::get_feature_agent_state(pool, feature_id, None, None, Some(limit), None)
+                .await?;
         for session in state.sessions {
             if candidate_session_ids.contains(&session.session_db_id) {
                 states_by_session.insert(session.session_db_id, session);
@@ -195,7 +196,8 @@ mod tests {
                 output_tokens INTEGER,
                 context_window INTEGER,
                 was_compacted INTEGER DEFAULT 0,
-                draft_prompt TEXT
+                draft_prompt TEXT,
+                message_revision INTEGER NOT NULL DEFAULT 0
             )"#,
         )
         .execute(&pool)
@@ -214,7 +216,8 @@ mod tests {
                 tool_use_id TEXT,
                 parent_tool_use_id TEXT,
                 created_at TEXT,
-                model TEXT
+                model TEXT,
+                content_revision INTEGER NOT NULL DEFAULT 0
             )"#,
         )
         .execute(&pool)

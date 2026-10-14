@@ -18,7 +18,7 @@ const INSERT_MESSAGE_SQL: &str =
     "INSERT INTO agent_messages (session_id, role, content, message_type, tool_name, tool_use_id, parent_tool_use_id, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
 
 /// A row from the `agent_sessions` table with the fields needed by the WS handler.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 #[allow(dead_code)]
 pub struct SessionRow {
     pub id: i64,
@@ -37,6 +37,7 @@ pub struct SessionRow {
     pub context_window: Option<i64>,
     pub thinking_effort: Option<String>,
     pub fast_mode: bool,
+    pub runtime_overrides: Option<String>,
 }
 
 impl SessionRow {
@@ -50,22 +51,8 @@ pub struct PersistedMessageRef {
     pub id: i64,
 }
 
-pub fn raw_event_with_agent_message_id(
-    raw: &serde_json::Value,
-    persisted: Option<PersistedMessageRef>,
-) -> serde_json::Value {
-    let Some(message_ref) = persisted else {
-        return raw.clone();
-    };
-    let mut value = raw.clone();
-    if let serde_json::Value::Object(object) = &mut value {
-        object.insert(
-            "agent_message_id".to_string(),
-            serde_json::Value::Number(message_ref.id.into()),
-        );
-    }
-    value
-}
+mod event_identity;
+pub use event_identity::{raw_event_with_agent_message_id, PersistedEventRef};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MergeableMessageType {
@@ -114,6 +101,7 @@ include!("persistence/session_tool_input_buffer.rs");
 include!("persistence/session_mergeable_blocks.rs");
 include!("persistence/session_events/compact.rs");
 include!("persistence/session_events.rs");
+include!("persistence/session_tool_results.rs");
 // session_events' `#[cfg(test)]` suite is too large to keep inline under the
 // 400-line cap; its overflow tests are split into these two included files
 // (same flat module scope as session_events via `include!`).

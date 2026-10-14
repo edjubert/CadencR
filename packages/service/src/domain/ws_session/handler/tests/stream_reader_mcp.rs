@@ -37,7 +37,9 @@ impl AgentRuntimeSession for RefreshingMcpSession {
         Ok(())
     }
 
-    async fn close(&mut self) {}
+    async fn close(&mut self) -> Result<(), RuntimeError> {
+        Ok(())
+    }
 
     async fn set_model(&self, _model: &str) -> Result<(), RuntimeError> {
         Ok(())
@@ -128,6 +130,11 @@ fn make_refreshing_mcp_handle(feature_id: i64) -> SdkHandle {
             allow_bypass_permissions: false,
             claude_profile: None,
             env: None,
+            env_unset: Vec::new(),
+            overrides: Default::default(),
+            runtime_overrides_dirty: false,
+            profile_revision: None,
+            profile_state_identity: None,
         },
         manual_compact_cancel: Arc::new(AtomicBool::new(false)),
         manual_compact_spawn_pending: Arc::new(AtomicBool::new(false)),

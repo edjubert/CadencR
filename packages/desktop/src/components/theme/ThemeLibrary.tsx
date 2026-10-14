@@ -42,9 +42,9 @@ export function ThemeLibrary(): React.JSX.Element {
 
   const createFrom = useCallback(
     (base: ThemeDefinition, label: string): void => {
-      actions.duplicate(base, label, (created) => {
+      actions.duplicate(base, label, (created, workspace) => {
         setCreating(false);
-        open(created);
+        open(created, workspace);
       });
     },
     [actions, open],

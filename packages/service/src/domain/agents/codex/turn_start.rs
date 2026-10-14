@@ -11,7 +11,10 @@ pub(super) struct TurnStartOptions<'a> {
     pub(super) access_mode: Option<&'a RuntimeAccessMode>,
     pub(super) model: Option<String>,
     pub(super) effort: Option<String>,
-    pub(super) fast_mode: bool,
+    pub(super) collaboration_model: Option<String>,
+    pub(super) collaboration_effort: Option<String>,
+    pub(super) summary: Option<String>,
+    pub(super) fast_mode: Option<bool>,
 }
 
 pub(super) fn turn_start_params(
@@ -21,8 +24,8 @@ pub(super) fn turn_start_params(
 ) -> Value {
     let collaboration_mode = collaboration_mode(
         options.permission_mode,
-        options.model.as_deref(),
-        options.effort.as_deref(),
+        options.collaboration_model.as_deref(),
+        options.collaboration_effort.as_deref(),
     );
     let mut params = json!({
         "threadId": thread_id,
@@ -31,7 +34,6 @@ pub(super) fn turn_start_params(
         "approvalPolicy": approval_policy(options.permission_mode, options.access_mode),
         "approvalsReviewer": approvals_reviewer(options.access_mode),
         "sandboxPolicy": sandbox_policy(options.permission_mode, options.access_mode, options.cwd),
-        "summary": "detailed",
     });
     if let Some(model) = options.model {
         params["model"] = Value::String(model);
@@ -39,7 +41,14 @@ pub(super) fn turn_start_params(
     if let Some(effort) = options.effort {
         params["effort"] = Value::String(effort);
     }
-    params["serviceTier"] = super::fast_service_tier_value(options.fast_mode);
+    // Apply the same provider/profile policy to every turn, including turns
+    // sent to resumed threads whose stored defaults may differ.
+    if let Some(summary) = options.summary {
+        params["summary"] = Value::String(summary);
+    }
+    if let Some(fast_mode) = options.fast_mode {
+        params["serviceTier"] = super::fast_service_tier_value(fast_mode);
+    }
     if let Some(collaboration_mode) = collaboration_mode {
         params["collaborationMode"] = collaboration_mode;
     }
@@ -78,10 +87,12 @@ pub(super) fn collaboration_mode(
 #[cfg(test)]
 mod tests {
     use super::{turn_start_params, TurnStartOptions};
+    use crate::domain::agents::codex::native_config::reasoning_summary;
+    use serde_json::json;
     use std::path::Path;
 
     #[test]
-    fn turn_start_requests_detailed_reasoning_summaries_and_effort() {
+    fn turn_start_applies_resolved_summary_and_explicit_effort() {
         let params = turn_start_params(
             "thread",
             vec![serde_json::json!({ "type": "text", "text": "hello" })],
@@ -91,7 +102,10 @@ mod tests {
                 access_mode: None,
                 model: Some("gpt-5.6-sol".to_string()),
                 effort: Some("ultra".to_string()),
-                fast_mode: true,
+                collaboration_model: Some("gpt-5.6-sol".to_string()),
+                collaboration_effort: Some("ultra".to_string()),
+                summary: Some("detailed".to_string()),
+                fast_mode: Some(true),
             },
         );
 
@@ -106,6 +120,44 @@ mod tests {
     }
 
     #[test]
+    fn turn_start_keeps_provider_and_profile_summary_choices() {
+        for (native, expected) in [
+            (json!({}), Some("detailed")),
+            (json!({"model_provider": "openai"}), Some("detailed")),
+            (json!({"model_provider": "amazon-bedrock"}), None),
+            (json!({"model_provider": "custom"}), None),
+            (json!({"model_supports_reasoning_summaries": false}), None),
+            (json!({"model_reasoning_summary": "none"}), Some("none")),
+            (json!({"model_reasoning_summary": "auto"}), Some("auto")),
+            (
+                json!({"model_reasoning_summary": "concise"}),
+                Some("concise"),
+            ),
+        ] {
+            let config_read = json!({"config": native});
+            let params = turn_start_params(
+                "thread",
+                vec![json!({"type": "text", "text": "continue"})],
+                TurnStartOptions {
+                    cwd: Path::new("/tmp/app"),
+                    permission_mode: None,
+                    access_mode: None,
+                    model: None,
+                    effort: None,
+                    collaboration_model: None,
+                    collaboration_effort: None,
+                    summary: reasoning_summary(&config_read).map(ToOwned::to_owned),
+                    fast_mode: None,
+                },
+            );
+            assert_eq!(
+                params.get("summary"),
+                expected.map(serde_json::Value::from).as_ref()
+            );
+        }
+    }
+
+    #[test]
     fn turn_start_maps_plan_mode_to_codex_collaboration_mode() {
         let params = turn_start_params(
             "thread",
@@ -116,7 +168,10 @@ mod tests {
                 access_mode: None,
                 model: Some("gpt-5.5".to_string()),
                 effort: Some("high".to_string()),
-                fast_mode: false,
+                collaboration_model: Some("gpt-5.5".to_string()),
+                collaboration_effort: Some("high".to_string()),
+                summary: None,
+                fast_mode: Some(false),
             },
         );
 
@@ -145,7 +200,10 @@ mod tests {
                 access_mode: None,
                 model: None,
                 effort: Some("high".to_string()),
-                fast_mode: false,
+                collaboration_model: None,
+                collaboration_effort: Some("high".to_string()),
+                summary: None,
+                fast_mode: Some(false),
             },
         );
 
@@ -165,7 +223,10 @@ mod tests {
                 access_mode: None,
                 model: Some("gpt-5.5".to_string()),
                 effort: Some("high".to_string()),
-                fast_mode: false,
+                collaboration_model: Some("gpt-5.5".to_string()),
+                collaboration_effort: Some("high".to_string()),
+                summary: None,
+                fast_mode: Some(false),
             },
         );
 

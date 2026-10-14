@@ -14,6 +14,13 @@ export interface InlineDiffPreview {
 const FILE_CHANGE_TOOLS = new Set(["Write", "Edit", "NotebookEdit", "ApplyPatch"]);
 const TASK_TODO_TOOLS = new Set(["TaskCreate", "TaskUpdate"]);
 const LEGACY_OPENCODE_OUTPUT_KEYS = ["__opencode_output", "__opencode_stdout"] as const;
+export const BASH_OUTPUT_KEYS = new Set<string>([
+  "aggregatedOutput",
+  "output",
+  "stdout",
+  "stderr",
+  ...LEGACY_OPENCODE_OUTPUT_KEYS,
+]);
 const LEGACY_OPENCODE_STATUS_KEY = "__opencode_status";
 
 export function normalizeToolName(toolName: string): string {
@@ -33,6 +40,10 @@ export function isTaskTodoTool(toolName: string | undefined): boolean {
 export function extractBashOutput(toolArgs?: string): string | undefined {
   const args = parseToolArgsObject(toolArgs);
   if (!args) return undefined;
+  return extractBashOutputFromArgs(args);
+}
+
+export function extractBashOutputFromArgs(args: Record<string, unknown>): string | undefined {
   if (typeof args.aggregatedOutput === "string") return args.aggregatedOutput;
   const directStreams = combineOutputStreams(args.stdout, args.stderr);
   if (directStreams !== undefined) return directStreams;

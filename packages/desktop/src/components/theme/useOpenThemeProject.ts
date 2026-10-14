@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
@@ -7,6 +7,7 @@ import {
   useSetFeatureSetting,
   useThemeWorkspace,
   type UserTheme,
+  type ThemeWorkspace,
 } from "@/api/generated";
 import { useSystemAppearance } from "@/hooks/useSystemAppearance";
 import { useTheme } from "@/hooks/useTheme";
@@ -24,8 +25,8 @@ import { THEME_FILE_NAME, themeLayoutState } from "./theme-workspace";
  *
  * A theme isn't edited in a dialog: it has a project of its own, so the file
  * sits in the editor, an agent works beside it and git records what changed,
- * exactly as for any other code. The backend creates that project the first
- * time a theme is opened and hands back its ids.
+ * exactly as for any other code. Creation returns the ready workspace; later
+ * opens resolve those same ids through the idempotent workspace endpoint.
  *
  * Opening also *wears* the theme. The whole reason a theme has a project rather
  * than a modal is that the user keeps using the app while it is being restyled,
@@ -34,7 +35,7 @@ import { THEME_FILE_NAME, themeLayoutState } from "./theme-workspace";
  * are already looking at.
  */
 export interface OpenThemeProject {
-  open: (theme: UserTheme) => void;
+  open: (theme: UserTheme, createdWorkspace?: ThemeWorkspace) => void;
   /** The theme whose project is being resolved, so only its own control waits. */
   openingId: string | null;
 }
@@ -49,9 +50,12 @@ export function useOpenThemeProject(): OpenThemeProject {
   const mutateAsync = workspace.mutateAsync;
 
   const open = useCallback(
-    (theme: UserTheme): void => {
+    (theme: UserTheme, createdWorkspace?: ThemeWorkspace): void => {
       setOpeningId(theme.id);
-      mutateAsync({ id: theme.id })
+      const opening = createdWorkspace
+        ? Promise.resolve(createdWorkspace)
+        : mutateAsync({ id: theme.id });
+      opening
         .then(async (opened) => {
           wear(theme);
           if (opened.created) await arrangePanes(opened.feature_id);
@@ -77,7 +81,7 @@ export function useOpenThemeProject(): OpenThemeProject {
     [arrangePanes, mutateAsync, navigate, queryClient, wear],
   );
 
-  return { open, openingId };
+  return useMemo(() => ({ open, openingId }), [open, openingId]);
 }
 
 /**

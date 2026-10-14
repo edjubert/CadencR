@@ -11,7 +11,7 @@ import { CheckIcon, CopyIcon, InfoIcon, TerminalIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ProviderIcon } from "@/lib/provider-icons";
-import { getProviderMetadata, PROVIDER_IDS } from "@/lib/providers";
+import { getProviderMetadata } from "@/lib/providers";
 import { buildResumeCommand } from "@/lib/provider-resume-command";
 import type { ClaudeCodeProfile } from "@/api/agentRuntime";
 import { DEFAULT_CLAUDE_PROFILE_NAME, formatClaudeProfileLabel } from "@/lib/claude-profiles";
@@ -23,14 +23,14 @@ import { SyncFromCliRow } from "./SyncFromCliRow";
 
 interface SessionInfoChipProps {
   runtimeProvider: string | undefined;
-  runtimeSessionId: string;
+  runtimeSessionId?: string;
   projectPath: string | undefined;
   /** Feature (conversation) id — target of the "Sync from CLI" refresh endpoint. */
   featureId?: number;
   /** WS store key — used to merge the synced events into the live conversation. */
   wsSessionId?: string;
   isRunning: boolean;
-  onPause: () => void;
+  onPause?: () => void;
   chipClass: string;
   claudeProfile?: string;
   claudeProfiles?: ClaudeCodeProfile[];
@@ -38,6 +38,7 @@ interface SessionInfoChipProps {
   claudeProfilesError?: boolean;
   activeClaudeProfile?: string;
   onClaudeProfileChange?: (profile: string) => void;
+  showProfileSelector?: boolean;
 }
 
 const COPY_FEEDBACK_MS = 1500;
@@ -68,6 +69,7 @@ export function SessionInfoChip({
   claudeProfilesError = false,
   activeClaudeProfile,
   onClaudeProfileChange,
+  showProfileSelector = false,
 }: SessionInfoChipProps): ReactElement {
   const [copiedField, setCopiedField] = useState<"id" | "command" | null>(null);
   const timeoutRef = useRef<number | null>(null);
@@ -81,7 +83,7 @@ export function SessionInfoChip({
 
   const resume = buildResumeCommand({
     providerId: runtimeProvider,
-    sessionId: runtimeSessionId,
+    sessionId: runtimeSessionId ?? "",
     cwd: projectPath,
   });
 
@@ -95,11 +97,12 @@ export function SessionInfoChip({
     }, COPY_FEEDBACK_MS);
   };
 
-  const copySessionId = (): Promise<void> => copy("id", runtimeSessionId);
+  const copySessionId = (): Promise<void> =>
+    runtimeSessionId ? copy("id", runtimeSessionId) : Promise.resolve();
 
   const copyLaunchCommand = async (): Promise<void> => {
     if (!resume.supported) return;
-    if (isRunning) onPause();
+    if (isRunning) onPause?.();
     await copy("command", resume.command);
   };
 
@@ -137,6 +140,7 @@ export function SessionInfoChip({
           claudeProfilesError={claudeProfilesError}
           activeClaudeProfile={activeClaudeProfile}
           onClaudeProfileChange={onClaudeProfileChange}
+          showProfileSelector={showProfileSelector}
         />
       </PopoverContent>
     </Popover>
@@ -145,7 +149,7 @@ export function SessionInfoChip({
 
 interface SessionInfoContentProps {
   runtimeProvider: string | undefined;
-  runtimeSessionId: string;
+  runtimeSessionId?: string;
   featureId?: number;
   wsSessionId?: string;
   mcpServers: McpServerStatus[] | null;
@@ -160,6 +164,7 @@ interface SessionInfoContentProps {
   claudeProfilesError: boolean;
   activeClaudeProfile?: string;
   onClaudeProfileChange?: (profile: string) => void;
+  showProfileSelector: boolean;
 }
 
 function SessionInfoContent({
@@ -179,14 +184,15 @@ function SessionInfoContent({
   claudeProfilesError,
   activeClaudeProfile,
   onClaudeProfileChange,
+  showProfileSelector,
 }: SessionInfoContentProps): ReactElement {
   const providerMeta = getProviderMetadata(runtimeProvider);
   return (
     <>
       <ProviderRow providerId={runtimeProvider} providerLabel={providerMeta?.label} />
-      <McpServersRow servers={mcpServers} />
+      {runtimeSessionId && <McpServersRow servers={mcpServers} />}
       <div className="shrink-0 space-y-3">
-        {runtimeProvider === PROVIDER_IDS.CLAUDE_CODE && (
+        {showProfileSelector && (
           <ProfileRow
             profile={claudeProfile}
             profiles={claudeProfiles}
@@ -196,19 +202,27 @@ function SessionInfoContent({
             onProfileChange={onClaudeProfileChange}
           />
         )}
-        <SessionIdRow
-          runtimeSessionId={runtimeSessionId}
-          copied={copiedField === "id"}
-          onCopy={onCopySessionId}
-        />
-        <LaunchCommandRow
-          copied={copiedField === "command"}
-          supported={resumeSupported}
-          isRunning={isRunning}
-          onCopy={onCopyLaunchCommand}
-        />
-        {featureId != null && wsSessionId && (
-          <SyncFromCliRow featureId={featureId} wsSessionId={wsSessionId} isRunning={isRunning} />
+        {runtimeSessionId && (
+          <>
+            <SessionIdRow
+              runtimeSessionId={runtimeSessionId}
+              copied={copiedField === "id"}
+              onCopy={onCopySessionId}
+            />
+            <LaunchCommandRow
+              copied={copiedField === "command"}
+              supported={resumeSupported}
+              isRunning={isRunning}
+              onCopy={onCopyLaunchCommand}
+            />
+            {featureId != null && wsSessionId && (
+              <SyncFromCliRow
+                featureId={featureId}
+                wsSessionId={wsSessionId}
+                isRunning={isRunning}
+              />
+            )}
+          </>
         )}
       </div>
     </>
@@ -315,17 +329,17 @@ function ProfileRow({
   onProfileChange?: (profile: string) => void;
 }): ReactElement {
   const selectedProfile = profile ?? DEFAULT_CLAUDE_PROFILE_NAME;
+  const selectedLabel = resolveProfileLabel(selectedProfile, profiles);
+  const activeLabel = activeProfile ? resolveProfileLabel(activeProfile, profiles) : undefined;
   // Compare labels, not raw names: the backend spells the default profile
   // several ways ("default", "default (recommended)"), and a raw comparison
   // would claim the active profile differs from a selection that *is* it.
-  const overridesActive =
-    !!activeProfile &&
-    formatClaudeProfileLabel(activeProfile) !== formatClaudeProfileLabel(selectedProfile);
+  const overridesActive = !!activeProfile && activeLabel !== selectedLabel;
 
   if (onProfileChange) {
     return (
       <div className="space-y-1.5">
-        <div className="text-[11px] font-medium text-muted-foreground">Claude profile</div>
+        <div className="text-[11px] font-medium text-muted-foreground">Profile</div>
         <ClaudeProfileCombobox
           value={selectedProfile}
           profiles={profiles}
@@ -337,8 +351,7 @@ function ProfileRow({
         />
         <p className="text-[11px] text-muted-foreground">
           Applies to the next prompt. Current running turn is not restarted.
-          {overridesActive &&
-            ` “${formatClaudeProfileLabel(activeProfile)}” stays the active profile.`}
+          {overridesActive && ` “${activeLabel}” stays the active profile.`}
         </p>
       </div>
     );
@@ -346,14 +359,21 @@ function ProfileRow({
 
   return (
     <div className="flex items-center justify-between gap-2">
-      <span className="text-[11px] font-medium text-muted-foreground">Claude profile</span>
+      <span className="text-[11px] font-medium text-muted-foreground">Profile</span>
       {isLoading && <span className="h-3 w-16 animate-pulse rounded bg-muted/60" />}
       {isError && <span className="text-[11px] text-destructive">Failed to load</span>}
       {!isLoading && !isError && (
         <span className="rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[11px] text-foreground">
-          {formatClaudeProfileLabel(selectedProfile)}
+          {selectedLabel}
         </span>
       )}
     </div>
+  );
+}
+
+function resolveProfileLabel(profileId: string, profiles: ClaudeCodeProfile[]): string {
+  return (
+    profiles.find((profile) => profile.name === profileId)?.label ??
+    formatClaudeProfileLabel(profileId)
   );
 }

@@ -1,6 +1,100 @@
 use super::support::*;
 
 #[tokio::test]
+async fn stream_reader_suppresses_operational_events_without_consuming_message_seq() {
+    let app_state = make_test_app_state().await;
+    let sdk_sessions: SdkSessions = Arc::new(Mutex::new(HashMap::new()));
+    let (ws_tx, mut ws_rx) = mpsc::unbounded_channel();
+    let db_session_id = 142i64;
+    let feature_id = 1i64;
+    let (msg_tx, msg_rx) = mpsc::channel::<Result<RuntimeEvent, RuntimeError>>(3);
+
+    msg_tx
+        .send(Ok(RuntimeEvent::new(
+            crate::domain::agents::adapter::RuntimeEventMetadata {
+                session_id: Some("runtime-init".to_string()),
+                context_window: Some(8_192),
+                raw: serde_json::json!({ "type": "session.init" }),
+                ..Default::default()
+            },
+            RuntimeEventKind::Init(crate::domain::agents::adapter::RuntimeInitEvent {
+                model: Some("model".to_string()),
+                mcp_servers: vec![RuntimeMcpServerStatus {
+                    name: "test-mcp".to_string(),
+                    status: "connected".to_string(),
+                }],
+                context_window: Some(8_192),
+            }),
+        )))
+        .await
+        .unwrap();
+    msg_tx
+        .send(Ok(RuntimeEvent::new(
+            crate::domain::agents::adapter::RuntimeEventMetadata {
+                session_id: Some("runtime-init".to_string()),
+                raw: serde_json::json!({ "sessionId": "runtime-init" }),
+                ..Default::default()
+            },
+            RuntimeEventKind::Other,
+        )))
+        .await
+        .unwrap();
+    msg_tx
+        .send(Ok(RuntimeEvent::new(
+            crate::domain::agents::adapter::RuntimeEventMetadata {
+                session_id: Some("runtime-init".to_string()),
+                raw: serde_json::json!({ "type": "stream_event", "event": {
+                    "type": "message_start", "message": { "model": "model" }
+                }}),
+                ..Default::default()
+            },
+            RuntimeEventKind::StreamEvent {
+                event: crate::domain::agents::adapter::RuntimeStreamEvent::MessageStart {
+                    model: Some("model".to_string()),
+                    input_tokens: None,
+                },
+                parent_tool_use_id: None,
+            },
+        )))
+        .await
+        .unwrap();
+    drop(msg_tx);
+
+    spawn_test_stream_reader(
+        &app_state,
+        db_session_id,
+        feature_id,
+        msg_rx,
+        ws_tx,
+        sdk_sessions,
+        crate::domain::agents::runtime::DEFAULT_PROVIDER,
+    );
+
+    let mut actions = Vec::new();
+    let mut message_seq = None;
+    while let Ok(Some(Message::Text(text))) =
+        tokio::time::timeout(std::time::Duration::from_secs(2), ws_rx.recv()).await
+    {
+        let envelope: WsEnvelope = serde_json::from_str(&text).unwrap();
+        actions.push(envelope.action.clone());
+        if envelope.action == "message" {
+            message_seq = envelope.payload.get("seq").and_then(Value::as_u64);
+        }
+        if envelope.action == "ended" {
+            break;
+        }
+    }
+
+    assert!(actions.contains(&"runtime_session_id".to_string()));
+    assert!(actions.contains(&"mcp_servers".to_string()));
+    assert_eq!(
+        actions.iter().filter(|action| *action == "message").count(),
+        1
+    );
+    assert_eq!(message_seq, Some(1));
+}
+
+#[tokio::test]
 async fn test_stream_reader_transitions_active_to_pending_on_stream_close() {
     let app_state = make_test_app_state().await;
     let sdk_sessions: SdkSessions = Arc::new(Mutex::new(HashMap::new()));
@@ -8,7 +102,7 @@ async fn test_stream_reader_transitions_active_to_pending_on_stream_close() {
 
     let db_session_id = 42i64;
     let feature_id = 1i64;
-    let cli_session_id = "cli-sess-for-resume".to_string();
+    let cli_session_id = "019fc2bc-6c05-7db2-8933-46942a31af27".to_string();
 
     {
         let mut sessions = sdk_sessions.lock().await;

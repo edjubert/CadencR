@@ -40,6 +40,7 @@ export interface MetaBarSecondaryProps extends WorktreeChipProps {
   claudeProfilesError?: boolean;
   activeClaudeProfile?: string;
   onClaudeProfileChange?: (profile: string) => void;
+  showProfileSelector?: boolean;
 }
 
 export const MetaBarSecondary = memo(function MetaBarSecondary({
@@ -61,6 +62,7 @@ export const MetaBarSecondary = memo(function MetaBarSecondary({
   claudeProfilesError = false,
   activeClaudeProfile,
   onClaudeProfileChange,
+  showProfileSelector = false,
   worktreeMode,
   onWorktreeModeChange,
   worktreeProjectId,
@@ -72,7 +74,7 @@ export const MetaBarSecondary = memo(function MetaBarSecondary({
   enableModeShortcut,
 }: MetaBarSecondaryProps) {
   const hasTodos = todos && todos.length > 0;
-  const hasInfo = runtimeSessionId && onPause;
+  const hasInfo = showProfileSelector || !!(runtimeSessionId && onPause);
   if (!showWorktreeChip && !showAutoScrollChip && !hasTodos && !hasInfo) return null;
 
   return (
@@ -114,6 +116,7 @@ export const MetaBarSecondary = memo(function MetaBarSecondary({
             claudeProfilesError={claudeProfilesError}
             activeClaudeProfile={activeClaudeProfile}
             onClaudeProfileChange={onClaudeProfileChange}
+            showProfileSelector={showProfileSelector}
           />
         </div>
       )}

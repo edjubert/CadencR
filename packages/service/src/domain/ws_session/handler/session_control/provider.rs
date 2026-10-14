@@ -3,61 +3,44 @@ use tracing::error;
 
 use super::super::super::protocol::*;
 use super::super::helpers::{parse_session_id, send_error};
-use super::super::types::{QueryState, SdkSessions, WsSender};
+use super::super::types::{SdkSessions, WsSender};
 use super::session_has_messages;
 use crate::app_state::AppState;
-use crate::domain::agents::adapter::access_mode_wire;
 use crate::domain::agents::runtime_adapter;
 
-async fn persist_provider_selection(
-    pool: &sqlx::SqlitePool,
-    session_id: i64,
-    provider: &str,
-    codex_permission_mode: Option<&str>,
-    permission_mode: &str,
-) -> Result<(), sqlx::Error> {
-    if let Some(codex_mode) = codex_permission_mode {
-        sqlx::query(
-            "UPDATE agent_sessions SET runtime_provider = ?, codex_permission_mode = ?, permission_mode = ?, fast_mode = 0 WHERE id = ?",
-        )
-        .bind(provider)
-        .bind(codex_mode)
-        .bind(permission_mode)
-        .bind(session_id)
-        .execute(pool)
-        .await?;
-    } else {
-        sqlx::query(
-            "UPDATE agent_sessions SET runtime_provider = ?, permission_mode = ?, fast_mode = 0 WHERE id = ?",
-        )
-        .bind(provider)
-        .bind(permission_mode)
-        .bind(session_id)
-        .execute(pool)
-        .await?;
+mod persistence;
+mod selection;
+mod switch;
+pub(crate) use persistence::{read_persisted_selection, restore_persisted_selection};
+use selection::SwitchSelection;
+use switch::ProviderSetError;
+
+/// Reject the switch before the first prompt is even possible: unparseable
+/// payloads, unknown providers, and sessions that already have history.
+async fn validate_provider_set(
+    payload: &ProviderSetPayload,
+    db_session_id: i64,
+    app_state: &AppState,
+) -> Result<(), ProviderSetError> {
+    if runtime_adapter(&payload.provider).is_none() {
+        return Err(ProviderSetError::new(
+            "UNSUPPORTED_PROVIDER",
+            format!(
+                "Runtime provider '{}' is not implemented yet",
+                payload.provider
+            ),
+        ));
+    }
+    let has_messages = session_has_messages(&app_state.read_pool, db_session_id)
+        .await
+        .map_err(|error| {
+            error!(db_session_id, %error, "failed to verify session history before provider change");
+            ProviderSetError::new("DB_ERROR", "Failed to verify session history")
+        })?;
+    if has_messages {
+        return Err(ProviderSetError::locked());
     }
     Ok(())
-}
-
-fn send_provider_set_ok(
-    sender: &WsSender,
-    envelope_id: &str,
-    provider: &str,
-    supports_prompt_receipts: bool,
-    codex_permission_mode: Option<&str>,
-) {
-    let reply = WsEnvelope::session_reply(
-        envelope_id,
-        WsSessionAction::ProviderSetOk,
-        ProviderSetOkPayload {
-            provider: provider.to_string(),
-            supports_prompt_receipts,
-            codex_permission_mode: codex_permission_mode.map(ToOwned::to_owned),
-            access_mode: codex_permission_mode.map(ToOwned::to_owned),
-        },
-    )
-    .expect("provider set payload should serialize");
-    let _ = sender.send(Message::Text(String::from(reply).into()));
 }
 
 /// Handle session.provider.set: change the provider before the first prompt only.
@@ -74,190 +57,106 @@ pub(crate) async fn handle_provider_set(
             return;
         }
     };
-
-    let db_session_id = match parse_session_id(&payload.session_id) {
-        Some(id) => id,
-        None => {
-            send_error(
-                sender,
-                &envelope.id,
-                "INVALID_SESSION_ID",
-                "Invalid session_id",
-            );
-            return;
-        }
-    };
-
-    let Some(adapter) = runtime_adapter(&payload.provider) else {
+    let Some(db_session_id) = parse_session_id(&payload.session_id) else {
         send_error(
             sender,
             &envelope.id,
-            "UNSUPPORTED_PROVIDER",
-            &format!(
-                "Runtime provider '{}' is not implemented yet",
-                payload.provider
-            ),
+            "INVALID_SESSION_ID",
+            "Invalid session_id",
         );
         return;
     };
-    let supports_prompt_receipts = adapter.supports_prompt_receipts();
 
-    let has_messages = match session_has_messages(&app_state.read_pool, db_session_id).await {
-        Ok(value) => value,
-        Err(error) => {
-            error!(db_session_id, %error, "failed to verify session history before provider change");
-            send_error(
-                sender,
-                &envelope.id,
-                "DB_ERROR",
-                "Failed to verify session history",
-            );
-            return;
-        }
-    };
-
-    if has_messages {
-        send_error(
-            sender,
-            &envelope.id,
-            "PROVIDER_LOCKED",
-            "Provider cannot be changed after the conversation starts",
-        );
-        return;
-    }
-
-    let provider_changed = {
-        let mut sessions = sdk_sessions.lock().await;
-        let handle = match sessions.get_mut(&db_session_id) {
-            Some(h) => h,
-            None => {
-                send_error(
-                    sender,
-                    &envelope.id,
-                    "SESSION_NOT_FOUND",
-                    "Session not found",
-                );
-                return;
-            }
-        };
-        match &handle.state {
-            QueryState::Pending(_) => handle.runtime_provider != payload.provider,
-            QueryState::Active { .. } => {
-                send_error(
-                    sender,
-                    &envelope.id,
-                    "PROVIDER_LOCKED",
-                    "Provider cannot be changed after the conversation starts",
-                );
-                return;
-            }
-        }
-    };
-
-    if !provider_changed {
-        send_provider_set_ok(
-            sender,
-            &envelope.id,
-            &payload.provider,
-            supports_prompt_receipts,
-            None,
-        );
-        return;
-    }
-
-    let configured_access_mode = adapter.configured_access_mode(&app_state.read_pool).await;
-    let configured_access_wire = configured_access_mode.as_ref().map(access_mode_wire);
-    let new_mode_wire = adapter.default_permission_mode_wire();
-    let new_mode_wire = new_mode_wire.as_ref();
-    if let Err(error) = persist_provider_selection(
-        &app_state.write_pool,
+    if let Err(error) = apply_provider_set(
+        &envelope,
+        sender,
+        sdk_sessions,
+        app_state,
+        &payload,
         db_session_id,
-        &payload.provider,
-        configured_access_wire,
-        new_mode_wire,
     )
     .await
     {
-        error!(
-            db_session_id,
-            runtime_provider = %payload.provider,
-            %error,
-            "failed to persist runtime provider selection"
-        );
-        send_error(
-            sender,
-            &envelope.id,
-            "DB_ERROR",
-            "Failed to persist runtime provider selection",
-        );
-        return;
+        send_error(sender, &envelope.id, error.code, &error.message);
     }
+}
 
-    let next_access_mode = configured_access_mode;
-    let feature_id = {
-        let mut sessions = sdk_sessions.lock().await;
-        let handle = match sessions.get_mut(&db_session_id) {
-            Some(h) => h,
-            None => {
-                send_error(
-                    sender,
-                    &envelope.id,
-                    "SESSION_NOT_FOUND",
-                    "Session not found",
-                );
-                return;
-            }
-        };
-        let QueryState::Pending(options) = &mut handle.state else {
-            send_error(
-                sender,
-                &envelope.id,
-                "PROVIDER_LOCKED",
-                "Provider cannot be changed after the conversation starts",
-            );
-            return;
-        };
-        handle.runtime_provider = payload.provider.clone();
-        handle.resume_session_id = None;
-        options.resume_session_id = None;
-        handle.desired_permission_mode = None;
-        handle.config.permission_mode = None;
-        options.permission_mode = None;
-        handle.desired_access_mode = next_access_mode.clone();
-        handle.config.access_mode = next_access_mode.clone();
-        options.access_mode = next_access_mode;
-        handle.config.fast_mode = false;
-        options.fast_mode = false;
-        handle.feature_id
-    };
-
-    // Mirror to other devices viewing this feature so their provider/mode chips
-    // stay in sync (provider can only change before the first prompt).
+async fn apply_provider_set(
+    envelope: &WsEnvelope,
+    sender: &WsSender,
+    sdk_sessions: &SdkSessions,
+    app_state: &AppState,
+    payload: &ProviderSetPayload,
+    db_session_id: i64,
+) -> Result<(), ProviderSetError> {
+    validate_provider_set(payload, db_session_id, app_state).await?;
+    let snapshot = switch::snapshot(sdk_sessions, db_session_id).await?;
+    if snapshot.unchanged(payload) {
+        let reply = WsEnvelope::session_reply(
+            &envelope.id,
+            WsSessionAction::ProviderSetOk,
+            selection::reply(&payload.provider, &snapshot.into_runtime()),
+        )
+        .expect("provider selection serializes");
+        let _ = sender.send(Message::Text(String::from(reply).into()));
+        return Ok(());
+    }
+    let selection = selection::resolve(app_state, payload, snapshot).await?;
+    let reply = selection::reply(&selection.provider, &selection.runtime);
+    let mode = selection
+        .provider_changed
+        .then(|| selection.permission_mode_wire.clone());
+    let feature_id =
+        persist_and_commit_switch(app_state, sdk_sessions, db_session_id, selection).await?;
     super::reply_and_broadcast(
         app_state,
         sender,
         &envelope.id,
         feature_id,
         WsSessionAction::ProviderSetOk,
-        ProviderSetOkPayload {
-            codex_permission_mode: (payload.provider == crate::domain::agents::codex::PROVIDER_ID)
-                .then(|| configured_access_wire.map(ToOwned::to_owned))
-                .flatten(),
-            access_mode: configured_access_wire.map(ToOwned::to_owned),
-            provider: payload.provider,
-            supports_prompt_receipts,
-        },
+        reply,
     )
     .await;
-    super::reply_and_broadcast(
-        app_state,
-        sender,
-        &envelope.id,
-        feature_id,
-        WsSessionAction::ModeChanged,
-        ModeChangedPayload {
-            mode: new_mode_wire.to_string(),
-        },
-    )
-    .await;
+    if let Some(mode) = mode {
+        super::reply_and_broadcast(
+            app_state,
+            sender,
+            &envelope.id,
+            feature_id,
+            WsSessionAction::ModeChanged,
+            ModeChangedPayload { mode },
+        )
+        .await;
+    }
+    Ok(())
+}
+
+/// Database first, then the live handle. Restore every written column if a
+/// prompt starts during persistence and the in-memory commit is rejected.
+async fn persist_and_commit_switch(
+    app_state: &AppState,
+    sdk_sessions: &SdkSessions,
+    db_session_id: i64,
+    selection: SwitchSelection,
+) -> Result<i64, ProviderSetError> {
+    switch::ensure_still_pending(sdk_sessions, db_session_id).await?;
+    let previous = read_persisted_selection(&app_state.read_pool, db_session_id)
+        .await
+        .map_err(|error| {
+            error!(db_session_id, %error, "failed to read runtime selection");
+            ProviderSetError::new("DB_ERROR", "Failed to read the current runtime selection")
+        })?;
+    persistence::persist(&app_state.write_pool, db_session_id, &selection)
+        .await
+        .map_err(|error| {
+            error!(db_session_id, %error, "failed to persist runtime selection");
+            ProviderSetError::new("DB_ERROR", "Failed to persist runtime provider selection")
+        })?;
+    match switch::commit_switch(sdk_sessions, db_session_id, selection).await {
+        Ok(feature_id) => Ok(feature_id),
+        Err(rejection) => {
+            restore_persisted_selection(&app_state.write_pool, db_session_id, &previous).await?;
+            Err(rejection)
+        }
+    }
 }

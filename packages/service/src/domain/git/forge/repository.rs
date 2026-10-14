@@ -109,7 +109,7 @@ pub async fn detected_project_remotes(state: &AppState) -> Result<Vec<RemoteInfo
     let mut remotes = Vec::new();
     let mut seen = HashSet::new();
     for remote in discovered {
-        let Some(remote) = remote else {
+        let Some(remote) = remote? else {
             continue;
         };
         let key = format!("{}:{}/{}", remote.hostname, remote.owner, remote.repo);
@@ -124,11 +124,14 @@ async fn try_resolve_feature_target(
     state: &AppState,
     feature_id: i64,
 ) -> Result<(Option<String>, Option<RemoteInfo>), AppError> {
-    let path = service::resolve_feature_git_path(state, feature_id)
+    let path = service::resolve_feature_working_path(state, feature_id)
         .await?
         .ok_or_else(|| {
             AppError::NotFound(format!("No repository found for feature {feature_id}"))
         })?;
+    if !crate::shared::git_context::has_git_metadata(Path::new(&path)).await? {
+        return Ok((None, None));
+    }
     // The branch the feature is *bound to*, not whatever the resolved
     // repository happens to have checked out: a feature whose worktree was
     // removed, or one created by the worktree-free "From branch" flow, both
@@ -136,10 +139,13 @@ async fn try_resolve_feature_target(
     // branch. Matching PRs against that would report the wrong proposal.
     let branch =
         service::resolve_feature_branch(&state.read_pool, feature_id, Path::new(&path)).await?;
-    let remote = remote_for_path(Path::new(&path)).await;
+    let remote = detect_origin_remote(Path::new(&path)).await;
     Ok((branch, remote))
 }
 
-async fn remote_for_path(path: &Path) -> Option<RemoteInfo> {
-    detect_origin_remote(path).await
+async fn remote_for_path(path: &Path) -> Result<Option<RemoteInfo>, AppError> {
+    if !crate::shared::git_context::has_git_metadata(path).await? {
+        return Ok(None);
+    }
+    Ok(detect_origin_remote(path).await)
 }

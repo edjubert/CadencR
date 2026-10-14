@@ -162,33 +162,39 @@ export function mergeIncrementalBlocks(acc: AccumulatedSession, newBlocks: Agent
   }
 }
 
-/**
- * Apply in-place updates to tool_call blocks whose content was updated
- * via input_json_delta after the initial insert (invisible to incremental fetch).
- * Returns true if any block was updated.
- */
+const NO_TRUNCATED_TOOL_UPDATES: ReadonlySet<string> = new Set();
+
+/** Apply persisted in-place tool-call revisions without mutating held state. */
 export function applyToolCallUpdates(
   blocks: AgentBlockData[],
-  updates: Record<string, string>,
-): boolean {
+  updates: Record<string, string | null> | null | undefined,
+  truncatedIds: ReadonlySet<string> = NO_TRUNCATED_TOOL_UPDATES,
+): AgentBlockData[] {
+  if (!updates || Object.keys(updates).length === 0) return blocks;
   let changed = false;
-  function walk(list: AgentBlockData[]) {
-    for (const b of list) {
-      if (b.id in updates) {
-        // `content` and `toolArgs` hold the same JSON envelope here, so clamp
-        // once and assign it to both rather than budgeting a throwaway copy of
-        // the block (which would parse the same megabytes twice).
-        const clamped = clampJsonText(updates[b.id]);
-        if (b.content !== clamped.text) {
-          b.content = clamped.text;
-          b.toolArgs = clamped.text;
-          if (clamped.truncated) b.truncatedContent = true;
-          changed = true;
-        }
-      }
-      if (b.childBlocks) walk(b.childBlocks);
-    }
-  }
-  walk(blocks);
-  return changed;
+  const mapped = blocks.map((block) => {
+    const children = block.childBlocks
+      ? applyToolCallUpdates(block.childBlocks, updates, truncatedIds)
+      : block.childBlocks;
+    const persistedId = block.messageDbId == null ? undefined : `msg-${block.messageDbId}`;
+    const updateId = block.id in updates ? block.id : persistedId;
+    const candidate = block.type === "tool_call" && updateId ? updates[updateId] : undefined;
+    const clamped = typeof candidate === "string" ? clampJsonText(candidate) : undefined;
+    const truncated = clamped?.truncated || truncatedIds.has(updateId ?? "") ? true : undefined;
+    const contentChanged =
+      clamped != null &&
+      (block.content !== clamped.text ||
+        block.toolArgs !== clamped.text ||
+        block.truncatedContent !== truncated);
+    if (!contentChanged && children === block.childBlocks) return block;
+    changed = true;
+    return {
+      ...block,
+      ...(contentChanged
+        ? { content: clamped.text, toolArgs: clamped.text, truncatedContent: truncated }
+        : {}),
+      ...(children === block.childBlocks ? {} : { childBlocks: children }),
+    };
+  });
+  return changed ? mapped : blocks;
 }

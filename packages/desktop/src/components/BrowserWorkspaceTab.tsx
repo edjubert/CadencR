@@ -1,10 +1,21 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
-import { desktopBridge, type BrowserTabMetadata } from "@/lib/desktop-bridge";
+import { desktopBridge, isDesktopShell, type BrowserTabMetadata } from "@/lib/desktop-bridge";
 import { useBrowserDefaultMode, type CookieMode } from "@/lib/browser-settings";
 import { useSuppressBrowserView } from "@/lib/browser-suppression";
 import { BrowserAddressBar } from "./browser/BrowserAddressBar";
 import { BrowserCommentDock } from "./browser/BrowserCommentDock";
 import { BrowserCommentOverlay } from "./browser/BrowserCommentOverlay";
+import { BrowserFindToolbar } from "./browser/BrowserFindToolbar";
+import { BrowserDownloadsPanel } from "./browser/BrowserDownloadsPanel";
+import { BrowserPermissionPrompt } from "./browser/BrowserPermissionPrompt";
+import { BrowserPopupNotice } from "./browser/BrowserPopupNotice";
+import { BrowserResponsiveToolbar } from "./browser/BrowserResponsiveToolbar";
+import {
+  BrowserResponsiveFrame,
+  BrowserSnapshot,
+  useBrowserResponsiveGeometry,
+} from "./browser/BrowserResponsiveViewport";
+import { BrowserSiteInformation } from "./browser/BrowserSiteInformation";
 import {
   BrowserEmptyState,
   BrowserError,
@@ -28,7 +39,20 @@ interface BrowserWorkspaceTabProps {
   onSendContext: (message: string, images?: Array<{ base64: string; mimeType: string }>) => void;
 }
 
-export const BrowserWorkspaceTab = memo(function BrowserWorkspaceTab({
+export const BrowserWorkspaceTab = memo(function BrowserWorkspaceTab(
+  props: BrowserWorkspaceTabProps,
+): ReactElement {
+  if (!isDesktopShell()) {
+    return (
+      <div className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
+        The embedded browser is only available in the desktop app.
+      </div>
+    );
+  }
+  return <DesktopBrowserWorkspaceTab {...props} />;
+});
+
+const DesktopBrowserWorkspaceTab = memo(function DesktopBrowserWorkspaceTab({
   scopeId,
   onSendContext,
 }: BrowserWorkspaceTabProps): ReactElement {
@@ -52,107 +76,178 @@ const BrowserWorkspaceTabReady = memo(function BrowserWorkspaceTabReady({
 }: BrowserWorkspaceTabProps & { defaultMode: CookieMode }): ReactElement {
   const model = useBrowserWorkspaceModel(defaultMode, scopeId);
   const comments = useBrowserComments({ runForActive: model.runForActive, onSend: onSendContext });
-  useBrowserKeyboard(model, comments.addComment);
   if (model.loading) return <BrowserLoading />;
-  return <BrowserWorkspaceView model={model} comments={comments} />;
+  return <BrowserWorkspaceView scopeId={scopeId} model={model} comments={comments} />;
 });
 
 type CommentsController = ReturnType<typeof useBrowserComments>;
 
 function BrowserWorkspaceView({
+  scopeId,
   model,
   comments,
 }: {
+  scopeId: number;
   model: BrowserWorkspaceModel;
   comments: CommentsController;
 }): ReactElement {
-  const newTab = useCallback((): void => void model.newTab(), [model]);
+  const newTab = useCallback((): void => void model.newTab(), [model.newTab]);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const [siteOpen, setSiteOpen] = useState(false);
+  const [tabMenuOpen, setTabMenuOpen] = useState(false);
+  const [permissionPromptOpen, setPermissionPromptOpen] = useState(false);
+  const [downloadsOpen, setDownloadsOpen] = useState(false);
+  const [responsiveMenuOpen, setResponsiveMenuOpen] = useState(false);
+  const responsiveGeometry = useBrowserResponsiveGeometry(containerRef, model.activeTab);
+  const toggleDownloads = useCallback((): void => setDownloadsOpen((value) => !value), []);
+  useBrowserKeyboard(model, comments.addComment, toggleDownloads);
   // Freeze the native view (and show a snapshot) whenever a renderer overlay
   // needs to sit over the page region: the URL suggestions or a comment form.
-  const overlayActive = suggestionsOpen || comments.draft !== null;
+  const overlayActive =
+    suggestionsOpen ||
+    siteOpen ||
+    tabMenuOpen ||
+    permissionPromptOpen ||
+    downloadsOpen ||
+    responsiveMenuOpen ||
+    comments.draft !== null;
   const snapshot = useSuppressedBrowserSnapshot(overlayActive, model.activeTab);
   useSuppressBrowserView(snapshot.suppressNativeView);
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <BrowserToolbar
         model={model}
+        scopeId={scopeId}
         onAddComment={comments.addComment}
         onSuggestionOverlayOpenChange={setSuggestionsOpen}
+        onSiteOverlayOpenChange={setSiteOpen}
+        onChromeOverlayOpenChange={setTabMenuOpen}
+        downloadsOpen={downloadsOpen}
+        onDownloadsOpenChange={setDownloadsOpen}
+        responsiveDisplayScale={responsiveGeometry?.displayScale ?? null}
+        onResponsiveOverlayOpenChange={setResponsiveMenuOpen}
       />
+      {model.find.open ? <BrowserFindToolbar find={model.find} /> : null}
       {model.state.error ? (
         <BrowserError message={model.state.error} onDismiss={model.clearError} />
       ) : null}
+      <BrowserPopupNotice scopeId={scopeId} activeTabId={model.state.activeTabId} />
       <BrowserCommentDock
         count={comments.comments.length}
         picking={comments.picking}
         onSend={comments.send}
         onDiscardAll={comments.discardAll}
       />
-      <div ref={containerRef} className="relative min-h-0 flex-1">
+      <div
+        ref={containerRef}
+        className={`relative min-h-0 flex-1 ${responsiveGeometry ? "bg-muted/30" : ""}`}
+      >
         {model.activeTab?.loading ? (
           <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-0.5 overflow-hidden bg-primary/15">
             <div className="h-full w-1/3 animate-[browser-progress_1.1s_ease-in-out_infinite] bg-primary" />
           </div>
         ) : null}
-        <div ref={model.viewportRef} className="h-full w-full" />
+        <BrowserResponsiveFrame geometry={responsiveGeometry} />
+        <div ref={model.viewportRef} className="absolute inset-0" />
         {overlayActive && snapshot.src ? (
-          <img
-            alt=""
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0 h-full w-full"
-            src={snapshot.src}
-          />
+          <BrowserSnapshot src={snapshot.src} geometry={responsiveGeometry} />
         ) : null}
         {comments.draft ? (
           <BrowserCommentOverlay
             draft={comments.draft}
             containerRef={containerRef}
+            pageGeometry={responsiveGeometry}
             onSave={comments.saveDraft}
             onCancel={comments.cancelDraft}
             onToggleScreenshot={comments.toggleDraftScreenshot}
             onRemove={comments.removeComment}
           />
         ) : null}
-        {model.activeTab ? null : <BrowserEmptyState onNewTab={newTab} />}
+        {model.activeTab ? null : (
+          <BrowserEmptyState onNewTab={newTab} creating={model.creatingMode !== null} />
+        )}
       </div>
+      <BrowserPermissionPrompt scopeId={scopeId} onOpenChange={setPermissionPromptOpen} />
     </div>
   );
 }
 
 function BrowserToolbar({
   model,
+  scopeId,
   onAddComment,
   onSuggestionOverlayOpenChange,
+  onSiteOverlayOpenChange,
+  onChromeOverlayOpenChange,
+  downloadsOpen,
+  onDownloadsOpenChange,
+  responsiveDisplayScale,
+  onResponsiveOverlayOpenChange,
 }: {
   model: BrowserWorkspaceModel;
+  scopeId: number;
   onAddComment: () => void;
   onSuggestionOverlayOpenChange: (open: boolean) => void;
+  onSiteOverlayOpenChange: (open: boolean) => void;
+  onChromeOverlayOpenChange: (open: boolean) => void;
+  downloadsOpen: boolean;
+  onDownloadsOpenChange: (open: boolean) => void;
+  responsiveDisplayScale: number | null;
+  onResponsiveOverlayOpenChange: (open: boolean) => void;
 }): ReactElement {
   return (
     // z-30 lifts the toolbar's stacking context (created by backdrop-blur) above
     // the page region, so the suggestions dropdown — trapped inside it — paints
     // over the (suppressed) viewport instead of behind its click-catching div.
     <div className="relative z-30 flex shrink-0 flex-col gap-1.5 border-b bg-card/95 px-2 pb-2 pt-1.5 backdrop-blur supports-[backdrop-filter]:bg-card/80">
-      <BrowserTabStrip model={model} />
+      <BrowserTabStrip model={model} onChromeOverlayOpenChange={onChromeOverlayOpenChange} />
       <BrowserAddressBar
         urlInput={model.urlInput}
         pending={model.pending}
         activeTab={model.activeTab}
-        knownOrigins={model.knownOrigins}
+        tabs={model.state.tabs}
         inputRef={model.urlInputRef}
         onUrlChange={model.setUrlInput}
         onUrlEditingChange={model.setUrlEditing}
         onNavigate={(url) => void model.navigate(url)}
+        onActivateTab={model.activateTab}
         onBack={model.back}
         onForward={model.forward}
         onReload={model.reload}
         onStop={model.stop}
+        onZoomIn={model.zoomIn}
+        onZoomOut={model.zoomOut}
+        onZoomReset={model.zoomReset}
+        onFind={model.find.openFind}
         onDevTools={model.devTools}
+        onOpenExternal={model.openExternal}
         onAddComment={onAddComment}
+        onResponsive={model.responsive.toggle}
         onSuggestionOverlayOpenChange={onSuggestionOverlayOpenChange}
+        downloadsControl={
+          <BrowserDownloadsPanel
+            scopeId={scopeId}
+            open={downloadsOpen}
+            onOpenChange={onDownloadsOpenChange}
+          />
+        }
+        siteControl={
+          <BrowserSiteInformation
+            activeTab={model.activeTab}
+            onOverlayOpenChange={onSiteOverlayOpenChange}
+          />
+        }
       />
+      {model.activeTab?.responsive.enabled || model.activeTab?.responsive.status === "error" ? (
+        <BrowserResponsiveToolbar
+          tab={model.activeTab}
+          pending={model.pending}
+          displayScale={responsiveDisplayScale}
+          onApply={model.responsive.apply}
+          onOverlayOpenChange={onResponsiveOverlayOpenChange}
+        />
+      ) : null}
     </div>
   );
 }
@@ -201,8 +296,12 @@ function useSuppressedBrowserSnapshot(
         setSuppressNativeView(true);
       })
       .catch((error: unknown) => {
+        // Closing the overlay or navigating invalidates an in-flight native
+        // capture. Its rejection belongs to the obsolete snapshot request,
+        // not the now-visible page, so it must not surface as a user error.
+        if (!alive) return;
         showBrowserError(error, "Could not preview Browser page");
-        if (alive) setSuppressNativeView(true);
+        setSuppressNativeView(true);
       });
     return () => {
       alive = false;

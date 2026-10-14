@@ -8,7 +8,7 @@ use crate::app_state::AppState;
 use crate::domain::git::git_status::{self, GitStatusSnapshot, SharedFeatureRef};
 use crate::domain::git::models::{CompareUrlResponse, GetCompareUrlParams, GetGitStatusParams};
 use crate::domain::git::repository;
-use crate::domain::git::service::resolve_feature_git_path;
+use crate::domain::git::service::resolve_feature_working_path;
 use crate::error::AppError;
 
 use super::target_branch::resolve_target_branch;
@@ -21,7 +21,7 @@ pub async fn get_git_status(
     state: &AppState,
     params: GetGitStatusParams,
 ) -> Result<GitStatusSnapshot, AppError> {
-    let git_path = resolve_feature_git_path(state, params.feature_id)
+    let git_path = resolve_feature_working_path(state, params.feature_id)
         .await?
         .ok_or_else(|| {
             AppError::NotFound(format!("feature {} has no git path", params.feature_id))

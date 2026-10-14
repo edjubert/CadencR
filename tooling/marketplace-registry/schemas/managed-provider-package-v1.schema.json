@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cadencr:managed-provider-package:v1",
+  "title": "Cadencr managed provider package v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["agent", "host"],
+  "properties": {
+    "agent": {
+      "type": "object",
+      "required": ["id", "name", "version", "description", "distribution"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string" },
+        "description": { "type": "string", "minLength": 1 },
+        "authors": { "type": "array", "items": { "type": "string" } },
+        "license": { "type": "string" },
+        "repository": { "type": "string", "format": "uri" },
+        "website": { "type": "string", "format": "uri" },
+        "icon": { "type": "string" },
+        "distribution": { "$ref": "#/$defs/distribution" }
+      }
+    },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["publisher", "compatibility", "assets"],
+      "properties": {
+        "publisher": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+        "compatibility": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["min_app_version"],
+          "properties": {
+            "min_app_version": { "type": "string" },
+            "max_app_version": { "type": "string" }
+          }
+        },
+        "assets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["icon"],
+          "properties": {
+            "icon": { "type": "string", "minLength": 1, "maxLength": 1024 },
+            "readme": { "type": "string", "minLength": 1, "maxLength": 1024 },
+            "license": { "type": "string", "minLength": 1, "maxLength": 1024 }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "distribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["binary"],
+      "properties": {
+        "binary": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "enum": [
+              "darwin-aarch64",
+              "darwin-x86_64",
+              "linux-aarch64",
+              "linux-x86_64",
+              "windows-aarch64",
+              "windows-x86_64"
+            ]
+          },
+          "additionalProperties": { "$ref": "#/$defs/binaryTarget" }
+        },
+        "npx": { "$ref": "#/$defs/packageDistribution" },
+        "uvx": { "$ref": "#/$defs/packageDistribution" }
+      }
+    },
+    "binaryTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["archive", "cmd", "sha256"],
+      "properties": {
+        "archive": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "cmd": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "env": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+    "packageDistribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["package"],
+      "properties": {
+        "package": { "type": "string", "minLength": 1 },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "env": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    }
+  }
+}
