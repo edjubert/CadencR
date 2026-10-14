@@ -270,4 +270,33 @@ describe("SidebarPinnedConversations", () => {
     expect(screen.queryByText("open-2")).not.toBeInTheDocument();
     expect(useSidebarSurfaceStore.getState().expanded.pinned).toBe(false);
   });
+
+  it("does not toggle the stored fold state when the header is clicked while filtering", async () => {
+    const user = userEvent.setup();
+    mocks.setPinned([feature(1, 5), { ...feature(2, 9), title: "Login bug" }]);
+    // Start folded: clicking the open-looking header during filtering must
+    // not flip the stored state.
+    useSidebarSurfaceStore.setState({
+      expanded: { "for-me": true, working: true, recent: true, pinned: false },
+    });
+    renderSection();
+    act(() => {
+      useSidebarFilterStore.getState().start("login");
+    });
+    // The block is held open by the filter.
+    expect(screen.getByText("open-2")).toBeInTheDocument();
+
+    // Clicking the header is a no-op while filtering.
+    await user.click(screen.getByRole("button", { name: /Pinned/ }));
+    expect(useSidebarSurfaceStore.getState().expanded.pinned).toBe(false);
+    // The row stays visible (the filter still holds the block open).
+    expect(screen.getByText("open-2")).toBeInTheDocument();
+
+    // After the filter clears, the stored fold state resumes.
+    act(() => {
+      useSidebarFilterStore.getState().close();
+    });
+    expect(screen.queryByText("open-2")).not.toBeInTheDocument();
+    expect(useSidebarSurfaceStore.getState().expanded.pinned).toBe(false);
+  });
 });

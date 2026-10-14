@@ -74,8 +74,9 @@ export function SidebarPinnedConversations({
   // While filtering, hold the block open so a matching pinned conversation
   // stays reachable — pinned rows are excluded from the project tree, so a
   // folded Pinned would hide the only place the match renders. The stored
-  // fold state is left untouched; it resumes once the filter clears.
-  const foldWhileFiltering = filtering ? { expanded: true, toggle: fold.toggle } : fold;
+  // fold state is left untouched (the toggle is disabled) and resumes once
+  // the filter clears.
+  const foldWhileFiltering = filtering ? { expanded: true, toggle: () => {} } : fold;
 
   return (
     <SidebarBlock
