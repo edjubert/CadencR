@@ -390,7 +390,9 @@ app.on("window-all-closed", () => {
 
 app.on("activate", () => {
   // The notch island is a window too, but never a reason not to reopen the app.
-  const appWindows = BrowserWindow.getAllWindows().filter((win) => win !== notch?.window);
+  const appWindows = BrowserWindow.getAllWindows().filter(
+    (win) => notch?.windowForSender(win.webContents.id) !== win,
+  );
   if (appWindows.length === 0) {
     mainWindow = createWindow();
     wireMainProcess();

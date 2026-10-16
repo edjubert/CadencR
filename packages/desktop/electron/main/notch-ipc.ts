@@ -19,7 +19,7 @@ export function registerNotchIpc(getMainWindow: () => BrowserWindow | null): Not
   const controller = new NotchController({ getMainWindow });
 
   const fromIsland = (event: IpcMainInvokeEvent): void =>
-    assertTrustedSender(event, () => controller.window);
+    assertTrustedSender(event, () => controller.windowForSender(event.sender.id));
 
   ipcMain.handle("notch:capabilities", (event) => {
     assertTrustedSender(event, getMainWindow);
@@ -40,11 +40,11 @@ export function registerNotchIpc(getMainWindow: () => BrowserWindow | null): Not
 
   ipcMain.handle("notch:ready", (event) => {
     fromIsland(event);
-    return controller.markReady();
+    return controller.markReady(event.sender.id);
   });
   ipcMain.handle("notch:hot-rect", (event, rect: unknown) => {
     fromIsland(event);
-    controller.setHotRect(notchHotRectSchema.parse(rect));
+    controller.setHotRect(event.sender.id, notchHotRectSchema.parse(rect));
   });
   ipcMain.handle("notch:open-feature", (event, ref: unknown) => {
     fromIsland(event);

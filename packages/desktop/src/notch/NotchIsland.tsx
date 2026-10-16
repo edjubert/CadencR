@@ -1,32 +1,40 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { NotchAgent, NotchGeometry, NotchSnoozeMinutes } from "@/shared/notch";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import type {
+  NotchAgent,
+  NotchGeometry,
+  NotchNotification,
+  NotchPrimaryStyle,
+  NotchSnoozeMinutes,
+} from "@/shared/notch";
 import { IndexDotsOrb } from "./IndexDotsOrb";
+import { NotchActivityStrip } from "./NotchActivityStrip";
 import { ambientAgents, compactDots } from "./notch-ambient";
 import { notchBridge } from "./notch-bridge";
+import {
+  EAR_WIDTH,
+  islandRadius,
+  islandSize,
+  isStripStyle,
+  type IslandMode,
+  type IslandSize,
+} from "./notch-island-layout";
 import { aggregateOrbState, NotchPanel, PanelEars } from "./NotchPanel";
-import { NotchPeek, PeekEars, peekTone } from "./NotchPeek";
+import { NotchPeek, PeekEars, peekTone, type NotchTone } from "./NotchPeek";
 import { useNotchFeed, type NotchFeed } from "./useNotchFeed";
 
-type IslandMode = "idle" | "compact" | "peek" | "expanded";
-
-const EAR_WIDTH = 56;
-const PEEK_WIDTH = 440;
-const PANEL_WIDTH = 540;
-const RADII: Record<IslandMode, number> = { idle: 10, compact: 13, peek: 24, expanded: 28 };
 /** Slack around the drawn shape the pointer may stray into before the island lets go. */
 const HOT_SLACK = 10;
-
-interface IslandSize {
-  width: number;
-  height: number;
-}
 
 /**
  * Peek wins over the list unless the user was already browsing it; a peek the
  * pointer lands on is *held* (countdown paused, clickable) rather than swapped
  * for the list under the cursor.
  */
-function useIslandMode(feed: NotchFeed, hasAmbient: boolean): { mode: IslandMode; held: boolean } {
+function useIslandMode(
+  feed: NotchFeed,
+  hasAmbient: boolean,
+  statusHidden: boolean,
+): { mode: IslandMode; held: boolean } {
   const { engaged, peek, prefs, snoozedUntil } = feed;
   // Only the moment of engagement decides between holding a peek and browsing.
   // Decided while rendering, so the panel never flashes in for a frame first.
@@ -41,33 +49,12 @@ function useIslandMode(feed: NotchFeed, hasAmbient: boolean): { mode: IslandMode
   }
 
   const held = peek != null && holdPeekId === peek.id;
-  if (peek && (!engaged || held)) return { mode: "peek", held };
+  if (peek && (statusHidden || !engaged || held)) return { mode: "peek", held };
+  if (statusHidden) return { mode: "idle", held: false };
   if (engaged) return { mode: "expanded", held: false };
   // Out while something needs a glance; "always on" off or a snooze tucks it away between peeks.
   const ambient = prefs.alwaysOn && hasAmbient && snoozedUntil == null;
   return { mode: ambient ? "compact" : "idle", held: false };
-}
-
-interface BodyHeights {
-  peek: number;
-  panel: number;
-}
-
-function islandSize(mode: IslandMode, geometry: NotchGeometry, bodies: BodyHeights): IslandSize {
-  const { notchWidth, notchHeight } = geometry;
-  switch (mode) {
-    case "idle":
-      return { width: notchWidth, height: notchHeight };
-    case "compact":
-      return { width: notchWidth + EAR_WIDTH * 2, height: notchHeight };
-    case "peek":
-      return { width: Math.max(PEEK_WIDTH, notchWidth + 200), height: notchHeight + bodies.peek };
-    case "expanded":
-      return {
-        width: Math.max(PANEL_WIDTH, notchWidth + 300),
-        height: Math.min(geometry.windowHeight - 24, notchHeight + bodies.panel),
-      };
-  }
 }
 
 /** Tell the main process where the pointer counts as "on the island" (in points). */
@@ -75,18 +62,19 @@ function useHotRect(
   size: IslandSize,
   viewportWidth: number,
   onError: (error: unknown) => void,
+  slack: number,
 ): void {
   const { width, height } = size;
   useEffect(() => {
     notchBridge()
       .setHotRect({
-        x: (viewportWidth - width) / 2 - HOT_SLACK,
+        x: (viewportWidth - width) / 2 - slack,
         y: 0,
-        width: width + HOT_SLACK * 2,
-        height: height + HOT_SLACK,
+        width: width + slack * 2,
+        height: height + slack,
       })
       .catch(onError);
-  }, [height, width, viewportWidth, onError]);
+  }, [height, width, viewportWidth, onError, slack]);
 }
 
 /** Aggregate orb (or the plain logo when still) + one dot per agent. */
@@ -118,21 +106,42 @@ function CompactEars({
   );
 }
 
+function compactEars(
+  agents: readonly NotchAgent[],
+  still: boolean,
+  style: NotchPrimaryStyle,
+): React.ReactNode {
+  if (style === "none") return null;
+  return isStripStyle(style) ? (
+    <NotchActivityStrip agents={agents} still={still} />
+  ) : (
+    <CompactEars agents={agents} still={still} />
+  );
+}
+
 function Layer({
   active,
   width,
   bandHeight,
   ears,
   children,
+  flat = false,
 }: {
   active: boolean;
   width: number;
   bandHeight: number;
   ears: React.ReactNode;
   children?: React.ReactNode;
+  flat?: boolean;
 }): React.JSX.Element {
   return (
-    <div className="layer" data-active={active} style={{ width }} aria-hidden={!active}>
+    <div
+      className="layer"
+      data-active={active}
+      data-flat={flat}
+      style={{ width }}
+      aria-hidden={!active}
+    >
       <div className="ears" style={{ height: bandHeight }}>
         {ears}
       </div>
@@ -140,6 +149,68 @@ function Layer({
     </div>
   );
 }
+
+/** Keep peek controls stable while the background agent feed updates. */
+const PeekLayer = memo(function PeekLayer({
+  active,
+  notification,
+  agent,
+  width,
+  bandHeight,
+  paused,
+  tone,
+  error,
+  onOpen,
+  onDrop,
+  onClose,
+  onSnooze,
+  onHeight,
+}: {
+  active: boolean;
+  notification: NotchNotification | null;
+  agent: NotchAgent | undefined;
+  width: number;
+  bandHeight: number;
+  paused: boolean;
+  tone: NotchTone;
+  error: string | null;
+  onOpen: (featureId: number | null, projectId: number | null) => void;
+  onDrop: (id: string) => void;
+  onClose: () => void;
+  onSnooze: (minutes: NotchSnoozeMinutes | null) => void;
+  onHeight: (height: number) => void;
+}): React.JSX.Element {
+  return (
+    <Layer
+      active={active}
+      width={width}
+      bandHeight={bandHeight}
+      ears={notification ? <PeekEars notification={notification} tone={tone} /> : null}
+    >
+      {notification ? (
+        <NotchPeek
+          key={notification.id}
+          notification={notification}
+          agent={agent}
+          paused={paused}
+          tone={tone}
+          error={error}
+          onOpen={() => {
+            onOpen(notification.featureId, notification.projectId);
+            onDrop(notification.id);
+          }}
+          onExpire={() => onDrop(notification.id)}
+          onClose={() => {
+            onDrop(notification.id);
+            onClose();
+          }}
+          onSnooze={onSnooze}
+          onHeight={onHeight}
+        />
+      ) : null}
+    </Layer>
+  );
+});
 
 /** Opening and snoozing close the island in main; `settle` then skips the leave grace. */
 function useIslandActions({ reportError, settle }: NotchFeed) {
@@ -203,7 +274,10 @@ function IslandView({
 }): React.JSX.Element {
   const { snapshot, peek, dropPeek, release, reportError } = feed;
   const ambient = useMemo(() => ambientAgents(snapshot.agents), [snapshot.agents]);
-  const { mode, held } = useIslandMode(feed, ambient.length > 0);
+  const style = geometry.hardware ? "builtin" : feed.prefs.primaryStyle;
+  const statusHidden = style === "none";
+  const flatActivity = isStripStyle(style);
+  const { mode, held } = useIslandMode(feed, ambient.length > 0, statusHidden);
   const [panelHeight, setPanelHeight] = useState(120);
   const [peekHeight, setPeekHeight] = useState(104);
   const bodies = { peek: peekHeight, panel: panelHeight };
@@ -212,8 +286,15 @@ function IslandView({
   // the mode, so the compact layer keeps the logo while it fades out under a peek or panel.
   const still = !feed.prefs.alwaysAnimate;
 
-  const size = islandSize(mode, geometry, bodies);
-  useHotRect(size, geometry.windowWidth, reportError);
+  const lowProfile = flatActivity && (mode === "compact" || mode === "idle");
+  const size = islandSize(mode, geometry, bodies, style);
+  const compactSize = islandSize("compact", geometry, bodies, style);
+  useHotRect(
+    size,
+    geometry.windowWidth,
+    reportError,
+    lowProfile || size.height === 0 ? 0 : HOT_SLACK,
+  );
   const shrinking = useShrinking(size.width * size.height);
 
   const band = geometry.notchHeight;
@@ -227,13 +308,15 @@ function IslandView({
     <div
       className="island"
       data-mode={mode}
+      data-hardware={geometry.hardware}
+      data-flat={lowProfile}
       data-shrinking={shrinking}
       data-hidden={mode === "idle" && !geometry.hardware}
       style={
         {
           "--iw": `${size.width}px`,
           "--ih": `${size.height}px`,
-          "--ir": `${RADII[mode]}px`,
+          "--ir": `${islandRadius(mode, style)}px`,
           "--ear-w": `${EAR_WIDTH}px`,
           "--tone": `var(--n-${tone})`,
         } as CSSProperties
@@ -246,41 +329,29 @@ function IslandView({
 
       <Layer
         active={mode === "compact"}
-        width={islandSize("compact", geometry, bodies).width}
+        width={compactSize.width}
+        bandHeight={compactSize.height}
+        flat={flatActivity}
+        ears={compactEars(ambient, still, style)}
+      />
+      <PeekLayer
+        active={mode === "peek"}
+        notification={peek}
+        agent={peekAgent}
+        width={islandSize("peek", geometry, bodies, style).width}
         bandHeight={band}
-        ears={<CompactEars agents={ambient} still={still} />}
+        paused={held}
+        tone={tone}
+        error={feed.error}
+        onOpen={open}
+        onDrop={dropPeek}
+        onClose={release}
+        onSnooze={snooze}
+        onHeight={setPeekHeight}
       />
       <Layer
-        active={mode === "peek"}
-        width={islandSize("peek", geometry, bodies).width}
-        bandHeight={band}
-        ears={peek ? <PeekEars notification={peek} tone={tone} /> : null}
-      >
-        {peek ? (
-          <NotchPeek
-            key={peek.id}
-            notification={peek}
-            agent={peekAgent}
-            paused={held}
-            tone={tone}
-            error={feed.error}
-            onOpen={() => {
-              open(peek.featureId, peek.projectId);
-              dropPeek(peek.id);
-            }}
-            onClose={() => {
-              dropPeek(peek.id);
-              release();
-            }}
-            onSnooze={snooze}
-            onExpire={() => dropPeek(peek.id)}
-            onHeight={setPeekHeight}
-          />
-        ) : null}
-      </Layer>
-      <Layer
         active={mode === "expanded"}
-        width={islandSize("expanded", geometry, bodies).width}
+        width={islandSize("expanded", geometry, bodies, style).width}
         bandHeight={band}
         ears={<PanelEars agents={snapshot.agents} />}
       >

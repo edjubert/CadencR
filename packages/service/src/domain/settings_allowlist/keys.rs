@@ -148,8 +148,11 @@ pub const WORKSPACE_ALLOWED_KEYS: &[&str] = &[
     // the compact island visible while agents are tracked, `always_animate`
     // lets the logo keep moving in the compact state. `notch_default_applied`
     // records the one-time switch of existing macOS installs to the notch.
+    // `display_mode` selects the built-in display, both, or the primary display.
     "notch_always_on",
     "notch_always_animate",
+    "notch_display_mode",
+    "notch_primary_style",
     "notch_default_applied",
     // Workspace-scope agent selection. `*_session` holds the pair the user
     // last prompted with (written by the backend, not a configured default);

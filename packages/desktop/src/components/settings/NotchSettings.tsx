@@ -7,6 +7,8 @@ import { apiErrorMessage } from "@/lib/api-errors";
 import { desktopBridge } from "@/lib/desktop-bridge";
 import { IconTile } from "./IconTile";
 import { NotchBehaviorSettings } from "./NotchBehaviorSettings";
+import { NotchDisplaySetting } from "./NotchDisplaySetting";
+import { NotchPrimaryStyleSetting } from "./NotchPrimaryStyleSetting";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSubsection } from "./SettingsSubsection";
 
@@ -41,6 +43,8 @@ export function NotchSettings(): React.JSX.Element | null {
 
   return (
     <SettingsSubsection padded={false}>
+      <NotchDisplaySetting />
+      <NotchPrimaryStyleSetting />
       <NotchBehaviorSettings />
       <SettingsRow
         icon={

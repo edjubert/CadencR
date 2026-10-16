@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({ app: {}, BrowserWindow: class {}, screen: {} }));
 
-import { notchPageUrl } from "./notch-window";
+import { notchPageUrl } from "./notch-island-window";
 
 describe("notchPageUrl", () => {
   it("loads the island from the other loopback name so it never shares the app's zoom", () => {

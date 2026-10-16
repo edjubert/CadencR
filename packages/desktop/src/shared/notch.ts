@@ -99,8 +99,18 @@ export const notchHotRectSchema = z.object({
 });
 export type NotchHotRect = z.infer<typeof notchHotRectSchema>;
 
+/** Display targets for the island; built-in mode falls back to primary when disconnected. */
+export const notchDisplayModeSchema = z.enum(["builtin_always", "both", "primary"]);
+export type NotchDisplayMode = z.infer<typeof notchDisplayModeSchema>;
+
+/** Compact appearance on displays without a hardware cutout; peeks keep their full size. */
+export const notchPrimaryStyleSchema = z.enum(["none", "strip_4", "strip_8", "builtin"]);
+export type NotchPrimaryStyle = z.infer<typeof notchPrimaryStyleSchema>;
+
 /** The user's notch settings, pushed by the app renderer that reads them. */
 export const notchPrefsSchema = z.object({
+  displayMode: notchDisplayModeSchema.default("builtin_always"),
+  primaryStyle: notchPrimaryStyleSchema.default("strip_8"),
   /** Keep the compact island (ears) out while agents are tracked; off → hover and peeks only. */
   alwaysOn: z.boolean(),
   /** Keep the logo moving in the compact island; off → it only animates while open. */
@@ -109,6 +119,8 @@ export const notchPrefsSchema = z.object({
 export type NotchPrefs = z.infer<typeof notchPrefsSchema>;
 
 export const DEFAULT_NOTCH_PREFS: NotchPrefs = {
+  displayMode: "builtin_always",
+  primaryStyle: "strip_8",
   alwaysOn: true,
   alwaysAnimate: false,
 };
@@ -118,11 +130,13 @@ export const notchConfigSchema = z.object({ enabled: z.boolean(), prefs: notchPr
 export type NotchConfig = z.infer<typeof notchConfigSchema>;
 
 export interface NotchGeometry {
+  /** Virtual compact width in DIP, matching the built-in cutout's physical pixels. */
+  compactWidth?: number;
   /** Width of the cutout (or of the virtual notch drawn on a notchless screen). */
   notchWidth: number;
   /** Height of the cutout — equal to the menu bar on notched displays. */
   notchHeight: number;
-  /** False when no notched display is connected and the island is virtual. */
+  /** False when this display has no hardware notch and the island is virtual. */
   hardware: boolean;
   windowWidth: number;
   windowHeight: number;

@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import type { Display, Rectangle } from "electron";
 import { z } from "zod";
+import type { NotchDisplayMode } from "../../src/shared/notch";
 
 /**
  * Where the notch island lives: which display, and the cutout it hugs.
@@ -29,6 +30,7 @@ export interface NotchPlacement {
   notchWidth: number;
   notchHeight: number;
   hardware: boolean;
+  compactWidth?: number;
 }
 
 const VIRTUAL_NOTCH_WIDTH = 184;
@@ -114,39 +116,55 @@ function matchesCocoaFrame(bounds: Rectangle, primary: Rectangle, probed: Probed
   );
 }
 
-export function resolveNotchPlacement(
-  displays: readonly Display[],
+function placementForDisplay(
+  display: Display,
   primary: Display,
   probed: readonly ProbedNotch[] | null,
 ): NotchPlacement {
-  for (const display of displays) {
-    const match = probed?.find((p) => matchesCocoaFrame(display.bounds, primary.bounds, p));
-    if (match) {
-      return {
-        display,
-        notchWidth: match.notchWidth,
-        notchHeight: match.notchHeight,
-        hardware: true,
-      };
-    }
+  const match = probed?.find((p) => matchesCocoaFrame(display.bounds, primary.bounds, p));
+  if (match) {
+    return {
+      display,
+      notchWidth: match.notchWidth,
+      notchHeight: match.notchHeight,
+      hardware: true,
+    };
   }
-  if (probed === null) {
-    const notched = displays.find(
-      (display) => display.internal && menuBarHeight(display) >= NOTCHED_MENU_BAR_MIN,
-    );
-    if (notched) {
-      return {
-        display: notched,
-        notchWidth: HEURISTIC_NOTCH_WIDTH,
-        notchHeight: menuBarHeight(notched),
-        hardware: true,
-      };
-    }
+  if (probed === null && display.internal && menuBarHeight(display) >= NOTCHED_MENU_BAR_MIN) {
+    return {
+      display,
+      notchWidth: HEURISTIC_NOTCH_WIDTH,
+      notchHeight: menuBarHeight(display),
+      hardware: true,
+    };
   }
   return {
-    display: primary,
+    display,
     notchWidth: VIRTUAL_NOTCH_WIDTH,
-    notchHeight: Math.max(24, menuBarHeight(primary)),
+    notchHeight: Math.max(24, menuBarHeight(display)),
     hardware: false,
   };
+}
+
+/** Select the built-in and/or primary display once, then measure each island independently. */
+export function resolveNotchPlacements(
+  displays: readonly Display[],
+  primary: Display,
+  probed: readonly ProbedNotch[] | null,
+  mode: NotchDisplayMode,
+): NotchPlacement[] {
+  const builtIn = displays.find((display) => display.internal) ?? primary;
+  const targets = mode === "primary" ? [primary] : mode === "both" ? [builtIn, primary] : [builtIn];
+  const unique = [...new Map(targets.map((display) => [display.id, display])).values()];
+  const reference = placementForDisplay(builtIn, primary, probed);
+  return unique.map((display) => {
+    const placement = placementForDisplay(display, primary, probed);
+    const sourceScale = builtIn.scaleFactor > 0 ? builtIn.scaleFactor : 1;
+    const targetScale = display.scaleFactor > 0 ? display.scaleFactor : 1;
+    const compactWidth =
+      reference.hardware && !placement.hardware
+        ? Math.round((reference.notchWidth * sourceScale) / targetScale)
+        : placement.notchWidth;
+    return { ...placement, compactWidth };
+  });
 }

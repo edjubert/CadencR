@@ -119,6 +119,14 @@ pub fn workspace_spec(key: &str) -> Option<SettingSpec> {
             ValueKind::Enum(&["native", "in_app", "notch", "off"]),
             Some("native"),
         ),
+        "notch_display_mode" => SettingSpec::new(
+            ValueKind::Enum(&["builtin_always", "both", "primary"]),
+            Some("builtin_always"),
+        ),
+        "notch_primary_style" => SettingSpec::new(
+            ValueKind::Enum(&["none", "strip_4", "strip_8", "builtin"]),
+            Some("strip_8"),
+        ),
         "browser_default_mode" => {
             SettingSpec::new(ValueKind::Enum(&["normal", "private"]), Some("normal"))
         }
@@ -212,6 +220,26 @@ mod tests {
         assert!(spec.is_valid("native"));
         assert!(spec.is_valid("notch"));
         assert!(!spec.is_valid("loud"));
+    }
+
+    #[test]
+    fn notch_display_mode_validates_and_preserves_the_builtin_default() {
+        let spec = workspace_spec("notch_display_mode").unwrap();
+        for mode in ["builtin_always", "both", "primary"] {
+            assert!(spec.is_valid(mode));
+        }
+        assert!(!spec.is_valid("all"));
+        assert_eq!(spec.default, Some("builtin_always"));
+    }
+
+    #[test]
+    fn notch_primary_style_validates_and_keeps_the_current_strip_by_default() {
+        let spec = workspace_spec("notch_primary_style").unwrap();
+        for style in ["none", "strip_4", "strip_8", "builtin"] {
+            assert!(spec.is_valid(style));
+        }
+        assert!(!spec.is_valid("strip_5"));
+        assert_eq!(spec.default, Some("strip_8"));
     }
 
     #[test]
