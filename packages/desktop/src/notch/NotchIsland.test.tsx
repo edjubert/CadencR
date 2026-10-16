@@ -279,6 +279,44 @@ describe("NotchIsland compact ears", () => {
     expect(width).toBe(200);
   });
 
+  it.each([
+    ["strip_4", 9, 9, 0],
+    ["strip_4", 10, 7, 3],
+    ["strip_4", 24, 6, 18],
+    ["strip_8", 9, 9, 0],
+    ["strip_8", 10, 7, 3],
+    ["strip_8", 24, 6, 18],
+  ] as const)(
+    "keeps urgent dots visible in a narrow %s strip with %i sessions",
+    async (primaryStyle, count, visible, extra) => {
+      const agents = Array.from({ length: count }, (_, index) => agent(index + 1, "running"));
+      agents[0] = agent(1, "question");
+      agents[1] = { ...agent(2, "question"), pendingKind: "question" };
+      agents[2] = { ...agent(3, "done"), unread: true };
+      const bridge = installBridge({ ...DEFAULT_NOTCH_PREFS, primaryStyle }, false, agents);
+      const ready = bridge.ready;
+      bridge.ready = async () => {
+        const state = await ready();
+        if (!state.geometry) throw new Error("Missing test geometry");
+        return { ...state, geometry: { ...state.geometry, compactWidth: 184 } };
+      };
+      const { container } = render(<NotchIsland />);
+      await waitFor(() => expect(container.querySelector(".activity-strip")).not.toBeNull());
+      const dots = [...container.querySelectorAll(".activity-segment")];
+      expect(dots).toHaveLength(visible);
+      expect(dots.slice(0, 3).map((dot) => dot.getAttribute("data-status"))).toEqual([
+        "question",
+        "question",
+        "done",
+      ]);
+      expect(dots[0]?.getAttribute("data-kind")).toBe("permission");
+      expect(dots[1]?.getAttribute("data-kind")).toBe("question");
+      expect(container.querySelector(".activity-count")?.textContent ?? null).toBe(
+        extra > 0 ? `+${extra}` : null,
+      );
+    },
+  );
+
   it.each<NotchPrimaryStyle>(["none", "strip_4", "strip_8", "builtin"])(
     "keeps notification peeks at their existing size with primary style %s",
     async (primaryStyle) => {

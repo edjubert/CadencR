@@ -45,3 +45,30 @@ The comparison combines actual Electron renderer captures at the same scale.
 Focused tests cover display geometry, distinct-display selection, shared
 snapshot and snooze delivery, notification queues, preference parsing, and
 compact rendering. Existing snooze, panel, and overflow behavior is retained.
+
+## Thin-strip overflow regression
+
+Verified in the same isolated Electron development profile after the Greptile
+review. Snapshots were delivered through the real Electron IPC bridge. A
+92 px strip was simulated by updating the renderer's geometry state to the
+external-only fallback, without disconnecting the physical displays.
+
+The first sessions were a permission request, a question, and an unread reply,
+followed by running sessions.
+
+| Strip height | Sessions | Visible dots | Overflow |
+| --- | --- | --- | --- |
+| 4 px | 9 | 9 | None |
+| 4 px | 10 | 7 | `+3` |
+| 4 px | 24 | 6 | `+18` |
+| 8 px | 9 | 9 | None |
+| 8 px | 10 | 7 | `+3` |
+| 8 px | 24 | 6 | `+18` |
+
+- [x] Permission, question, and unread-reply dots remain first and fully visible.
+- [x] All dots and the full overflow count fit horizontally and vertically.
+- [x] The accessibility label includes all sessions and the overflow count.
+- [x] Restoring the actual 185 px geometry shows all 24 dots and removes the count.
+- [x] No renderer console errors occurred.
+
+The six narrow-strip cases are also covered by renderer regression tests.

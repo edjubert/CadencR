@@ -110,10 +110,11 @@ function compactEars(
   agents: readonly NotchAgent[],
   still: boolean,
   style: NotchPrimaryStyle,
+  size: IslandSize,
 ): React.ReactNode {
   if (style === "none") return null;
   return isStripStyle(style) ? (
-    <NotchActivityStrip agents={agents} still={still} />
+    <NotchActivityStrip agents={agents} still={still} width={size.width} height={size.height} />
   ) : (
     <CompactEars agents={agents} still={still} />
   );
@@ -332,7 +333,7 @@ function IslandView({
         width={compactSize.width}
         bandHeight={compactSize.height}
         flat={flatActivity}
-        ears={compactEars(ambient, still, style)}
+        ears={compactEars(ambient, still, style, compactSize)}
       />
       <PeekLayer
         active={mode === "peek"}
