@@ -112,6 +112,29 @@ describe("shared Neovim file navigation", () => {
     },
   );
 
+  it("shows the backend explanation when a file-open request is rejected", async () => {
+    mocks.open.mockRejectedValueOnce(
+      Object.assign(new Error("Request failed with status code 400"), {
+        isAxiosError: true,
+        response: { data: { error: "Bad request: Path is outside the project directory" } },
+      }),
+    );
+    const reveal = vi.fn();
+    const { result } = renderHook(() => useOpenFileInNeovim(2));
+
+    await act(async () => result.current?.("/docs/report.md", undefined, undefined, reveal));
+
+    expect(mocks.open).toHaveBeenCalledWith({
+      featureId: "2",
+      data: { path: "/docs/report.md", line: undefined, col: undefined },
+    });
+    expect(mocks.error).toHaveBeenCalledWith("Could not open /docs/report.md in Neovim", {
+      description: "Bad request: Path is outside the project directory",
+    });
+    expect(mocks.dismiss).toHaveBeenCalledWith("pending");
+    expect(reveal).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["0", false],
     ["1", false],

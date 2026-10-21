@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { startRoute, useOpenFileRoute } from "@/api/generated";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useVimModeLevel } from "@/hooks/useVimModeLevel";
+import { apiErrorMessage } from "@/lib/api-errors";
 import { focusNeovimEditor } from "./focusNeovimEditor";
 
 /**
@@ -46,7 +47,7 @@ export function useOpenFileInNeovim(
           requestAnimationFrame(() => focusNeovimEditor(featureId));
         } catch (error: unknown) {
           toast.error(`Could not open ${filePath} in Neovim`, {
-            description: error instanceof Error ? error.message : String(error),
+            description: apiErrorMessage(error, "Cannot open file"),
           });
         } finally {
           toast.dismiss(pending);
