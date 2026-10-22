@@ -4,13 +4,10 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
-import { compareAsset } from "../src/assets.mjs";
 import { markBody } from "../src/svg/mark.mjs";
 import { outlinedText, TAGLINE, WORDMARK } from "../src/svg/wordmark.mjs";
 import { EMERALD, GROUND, HAIRLINE, INK, SOFT, STANDARD_CUT } from "../src/tokens.mjs";
-
-// Keep checked-in screenshots stable across ARM and x64 libvips SIMD paths.
-sharp.simd(false);
+import { rawPixels } from "../src/encode/raster.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const source = path.join(root, ".github/assets/readme/source/v0.14.1");
@@ -89,6 +86,30 @@ async function review() {
   return framed("conversation.webp");
 }
 
+async function compareReadmeImage(expected, actual) {
+  const [a, b] = await Promise.all([rawPixels(expected), rawPixels(actual)]);
+  if (a.width !== b.width || a.height !== b.height || a.channels !== b.channels) {
+    return `expected ${a.width}x${a.height}x${a.channels}, found ${b.width}x${b.height}x${b.channels}`;
+  }
+  let absoluteDifference = 0;
+  let visiblyDifferentPixels = 0;
+  for (let offset = 0; offset < a.data.length; offset += a.channels) {
+    let maxChannelDifference = 0;
+    for (let channel = 0; channel < a.channels; channel++) {
+      const difference = Math.abs(a.data[offset + channel] - b.data[offset + channel]);
+      absoluteDifference += difference;
+      maxChannelDifference = Math.max(maxChannelDifference, difference);
+    }
+    if (maxChannelDifference > 8) visiblyDifferentPixels++;
+  }
+  const meanDifference = absoluteDifference / a.data.length;
+  const visiblyDifferentRatio = visiblyDifferentPixels / (a.width * a.height);
+  // libvips resize/composite rounding varies slightly between macOS ARM and
+  // Linux x64. Bound both the average channel drift and the affected area.
+  if (meanDifference <= 2 && visiblyDifferentRatio <= 0.005) return null;
+  return `pixels differ (mean channel delta ${meanDifference.toFixed(3)}, pixels with delta > 8: ${(visiblyDifferentRatio * 100).toFixed(3)}%)`;
+}
+
 // Both sides of --check are decoded to pixels, like the other brand assets.
 // Encoder changes across platforms must not produce false drift failures.
 const recipes = [
@@ -107,7 +128,7 @@ for (const [name, render] of recipes) {
     continue;
   }
   try {
-    const reason = await compareAsset("png", expected, await readFile(file));
+    const reason = await compareReadmeImage(expected, await readFile(file));
     if (reason) drift.push(`${name}: ${reason}`);
   } catch (error) {
     drift.push(`${name}: ${error.message}`);
