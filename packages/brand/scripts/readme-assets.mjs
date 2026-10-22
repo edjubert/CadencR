@@ -9,6 +9,9 @@ import { markBody } from "../src/svg/mark.mjs";
 import { outlinedText, TAGLINE, WORDMARK } from "../src/svg/wordmark.mjs";
 import { EMERALD, GROUND, HAIRLINE, INK, SOFT, STANDARD_CUT } from "../src/tokens.mjs";
 
+// Keep checked-in screenshots stable across ARM and x64 libvips SIMD paths.
+sharp.simd(false);
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const source = path.join(root, ".github/assets/readme/source/v0.14.1");
 const output = path.join(root, ".github/assets/readme");
