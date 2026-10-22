@@ -203,6 +203,7 @@ async fn pending_spawn_config(
             thinking_effort: spawned_thinking_effort,
             fast_mode: handle.config.fast_mode,
             system_prompt: handle.config.system_prompt.clone(),
+            purpose: None,
             resume_session_id,
             allow_bypass_permissions: handle.config.allow_bypass_permissions,
             mcp_servers: pending.mcp_servers.clone(),

@@ -7,7 +7,7 @@ use sqlx::SqlitePool;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-use crate::domain::agents::adapter::{RuntimePermissionMode, RuntimeSpawnConfig};
+use crate::domain::agents::adapter::{RuntimePermissionMode, RuntimePurpose, RuntimeSpawnConfig};
 use crate::domain::agents::providers::runtime_adapter;
 use crate::domain::features::repository::update_generated_title;
 use crate::domain::features::title::GeneratedTitlePolicy;
@@ -313,6 +313,7 @@ async fn build_spawn_config(
         thinking_effort: None,
         fast_mode: false,
         system_prompt: Some(system_prompt),
+        purpose: Some(RuntimePurpose::AutoName),
         resume_session_id: None,
         allow_bypass_permissions: false,
         mcp_servers: None,

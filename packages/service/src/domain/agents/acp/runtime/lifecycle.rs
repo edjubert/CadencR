@@ -24,6 +24,7 @@ use serde_json::Value;
 
 use super::provider_hooks::AcpProviderHooks;
 use super::session_config::snapshot_from_options;
+use super::session_task::session_meta;
 use crate::domain::agents::acp::runtime::mcp::build_stdio_mcp_payload;
 use crate::domain::agents::acp::AcpClient;
 use crate::domain::agents::adapter::{
@@ -166,7 +167,7 @@ async fn handshake(
         });
     }
     let (session_id, current_mode, session_config) =
-        start_new_session(client, &config.cwd, &mcp_servers, hooks).await?;
+        start_new_session(client, config, &mcp_servers, hooks).await?;
 
     Ok(NegotiatedSession {
         session_id,
@@ -254,14 +255,16 @@ fn initialize_request(client: &AcpClient, hooks: &dyn AcpProviderHooks) -> Initi
 
 async fn start_new_session(
     client: &AcpClient,
-    cwd: &Path,
+    config: &RuntimeSpawnConfig,
     mcp_servers: &Value,
     hooks: &dyn AcpProviderHooks,
 ) -> Result<(String, Option<String>, RuntimeSessionConfigSnapshot), RuntimeError> {
-    let request = NewSessionRequest::new(cwd.to_path_buf()).mcp_servers(
-        serde_json::from_value::<Vec<McpServer>>(mcp_servers.clone())
-            .map_err(|e| RuntimeError::new(format!("ACP MCP server config invalid: {e}")))?,
-    );
+    let request = NewSessionRequest::new(config.cwd.clone())
+        .mcp_servers(
+            serde_json::from_value::<Vec<McpServer>>(mcp_servers.clone())
+                .map_err(|e| RuntimeError::new(format!("ACP MCP server config invalid: {e}")))?,
+        )
+        .meta(session_meta(config));
     let result = client
         .send_request_typed(request, SESSION_SETUP_TIMEOUT)
         .await

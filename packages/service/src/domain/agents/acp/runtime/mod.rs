@@ -45,6 +45,7 @@ pub mod session_permissions;
 pub mod session_spawn;
 #[cfg(test)]
 mod session_spawn_integration_tests;
+mod session_task;
 pub(crate) mod slash_command_snapshots;
 mod spawn_initial_config;
 mod spawn_initial_mode;

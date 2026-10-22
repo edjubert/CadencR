@@ -16,8 +16,8 @@ pub use branching::{BranchContext, BranchError, BranchResult, SessionBranching};
 pub use config::{
     access_mode_wire, parse_access_mode_wire, static_config_paths, ResolvedRuntimeProfile,
     RuntimeAccessMode, RuntimeConfigOverrides, RuntimeEffectiveConfig, RuntimeMcpServerConfig,
-    RuntimeMcpServerStatus, RuntimePermissionMode, RuntimeSpawnConfig, RuntimeTokenUsage,
-    RuntimeTokenUsageEntry, RuntimeUsage,
+    RuntimeMcpServerStatus, RuntimePermissionMode, RuntimePurpose, RuntimeSpawnConfig,
+    RuntimeTokenUsage, RuntimeTokenUsageEntry, RuntimeUsage,
 };
 pub use error::RuntimeError;
 pub use event::RuntimeStreamScope;

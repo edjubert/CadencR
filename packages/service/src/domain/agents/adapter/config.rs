@@ -250,6 +250,12 @@ pub struct RuntimeEffectiveConfig {
     pub fast_mode: bool,
 }
 
+/// One-shot work performed by a runtime instead of an interactive coding turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimePurpose {
+    AutoName,
+}
+
 pub struct RuntimeSpawnConfig {
     pub cwd: PathBuf,
     pub permission_mode: Option<RuntimePermissionMode>,
@@ -258,6 +264,8 @@ pub struct RuntimeSpawnConfig {
     pub thinking_effort: Option<String>,
     pub fast_mode: bool,
     pub system_prompt: Option<String>,
+    /// Optional task hint for runtimes that support specialized launch modes.
+    pub purpose: Option<RuntimePurpose>,
     pub resume_session_id: Option<String>,
     /// Allows a provider process to switch into its dangerous Bypass mode
     /// later without starting in that mode. Providers that do not have a
@@ -289,6 +297,7 @@ impl Default for RuntimeSpawnConfig {
             thinking_effort: None,
             fast_mode: false,
             system_prompt: None,
+            purpose: None,
             resume_session_id: None,
             allow_bypass_permissions: false,
             mcp_servers: None,
