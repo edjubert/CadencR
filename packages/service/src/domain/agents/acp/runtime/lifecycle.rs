@@ -326,7 +326,8 @@ mod tests {
         build_in_memory_client, read_request, send_response,
     };
     use crate::domain::agents::adapter::{
-        RuntimeError, RuntimeMcpServerConfig, RuntimePermissionMode, RuntimeSpawnConfig,
+        RuntimeError, RuntimeMcpServerConfig, RuntimePermissionMode, RuntimePurpose,
+        RuntimeSpawnConfig,
     };
     use agent_client_protocol::schema::v1::AgentCapabilities as ProtocolAgentCapabilities;
     use serde_json::{json, Value};
@@ -376,6 +377,56 @@ mod tests {
                 panic!("resume negotiation timed out, likely waiting on an unexpected fallback request");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn new_session_handshake_sends_auto_name_metadata() {
+        let (client, mut stdout, mut stdin) = build_in_memory_client().await;
+        let config = RuntimeSpawnConfig {
+            cwd: std::env::temp_dir().join("cadencr-acp-auto-name-test"),
+            system_prompt: Some("Return a concise session title.".to_string()),
+            purpose: Some(RuntimePurpose::AutoName),
+            ..RuntimeSpawnConfig::default()
+        };
+        let expected_cwd = config.cwd.to_string_lossy().into_owned();
+        let mut task =
+            tokio::spawn(
+                async move { negotiate_session(&client, &config, None, &ResumeHooks).await },
+            );
+
+        let init = read_request(&mut stdin).await;
+        assert_eq!(init["method"], "initialize");
+        send_response(
+            &mut stdout,
+            init["id"].clone(),
+            json!({ "protocolVersion": 1, "agentCapabilities": {} }),
+        )
+        .await;
+
+        let new_session = read_request(&mut stdin).await;
+        assert_eq!(new_session["method"], "session/new");
+        assert_eq!(
+            new_session["params"],
+            json!({
+                "cwd": expected_cwd,
+                "mcpServers": [],
+                "_meta": {
+                    "com.cadencr": {
+                        "purpose": "auto_name",
+                        "systemPrompt": "Return a concise session title."
+                    }
+                }
+            })
+        );
+        send_response(
+            &mut stdout,
+            new_session["id"].clone(),
+            json!({ "sessionId": "ses_auto_name" }),
+        )
+        .await;
+
+        let negotiated = await_negotiation(&mut task).await.unwrap();
+        assert_eq!(negotiated.session_id, "ses_auto_name");
     }
 
     #[tokio::test]
