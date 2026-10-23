@@ -276,8 +276,8 @@ importers:
         specifier: 1.1.3
         version: 1.1.3
       celeritty:
-        specifier: 1.2.5
-        version: 1.2.5
+        specifier: 1.2.6
+        version: 1.2.6
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -4970,8 +4970,8 @@ packages:
   ccount@2.0.1:
     resolution: {integrity: sha512-eyrF0jiFpY+3drT6383f1qhkbGsLSifNAjA61IUjZjmLCWjItY6LB9ft9YhoDgwfmclB2zhu51Lc7+95b8NRAg==}
 
-  celeritty@1.2.5:
-    resolution: {integrity: sha512-0UqmwMvSOS8V0nf+ziXiUdEAadno6epaYC4Yrnwoi6wYwgVia1a/vjSG1+mwYgMPJjZvp1Gr9ODEd3NEz3ID7Q==}
+  celeritty@1.2.6:
+    resolution: {integrity: sha512-9rvZSz/sug4xOgn0LGFHDX2ez8nR66txOMwe19c62zg/2Y8Dd/IjDoJIUkPmUR/NdxGeA6E4dYW0L1DrgiM0PA==}
     engines: {node: '>=22.18.0 <25.0.0'}
 
   chai@6.2.2:
@@ -12754,7 +12754,7 @@ snapshots:
 
   ccount@2.0.1: {}
 
-  celeritty@1.2.5: {}
+  celeritty@1.2.6: {}
 
   chai@6.2.2: {}
 
