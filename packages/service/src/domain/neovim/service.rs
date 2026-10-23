@@ -17,6 +17,7 @@ use super::protocol::NeovimStartResponse;
 
 mod file;
 mod lifecycle;
+mod startup;
 pub use lifecycle::nvim_available;
 use lifecycle::{nvim_version, wait_for_socket, StartupPty};
 
@@ -220,14 +221,7 @@ impl NeovimManager {
             .map(|handle| handle.cwd.clone())
             .ok_or(AppError::NeovimProcessNotRunning)?;
         let path = file::resolve_file_path(&cwd, path)?;
-        tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            file::open_file(&socket, &path, line, col),
-        )
-        .await
-        .map_err(|_| AppError::NeovimSpawnError {
-            detail: "Neovim file-open request timed out".to_string(),
-        })?
+        file::open_file(&socket, &path, line, col).await
     }
 
     /// Current cursor position as Neovim reports it: (1-indexed line,

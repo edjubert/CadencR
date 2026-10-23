@@ -1,5 +1,9 @@
+use std::time::Duration;
+
 use crate::error::AppError;
 use nvim_rs::rpc::handler::Dummy;
+
+use super::startup::wait_until_ready;
 
 pub(super) struct RpcTask(pub(super) tokio::task::AbortHandle);
 impl Drop for RpcTask {
@@ -43,18 +47,27 @@ pub(super) async fn open_file(
     line: Option<u32>,
     col: Option<u32>,
 ) -> Result<(), AppError> {
-    let (nvim, io) = nvim_rs::create::tokio::new_path(socket, Dummy::new())
-        .await
-        .map_err(|e| AppError::NeovimSpawnError {
-            detail: format!("control socket unavailable: {e}"),
-        })?;
+    let request_timeout = Duration::from_secs(10);
+    let (nvim, io) = tokio::time::timeout(
+        request_timeout,
+        nvim_rs::create::tokio::new_path(socket, Dummy::new()),
+    )
+    .await
+    .map_err(|_| AppError::NeovimSpawnError {
+        detail: "Neovim control socket connection timed out".to_string(),
+    })?
+    .map_err(|e| AppError::NeovimSpawnError {
+        detail: format!("control socket unavailable: {e}"),
+    })?;
     let _io = RpcTask(io.abort_handle());
+    wait_until_ready(&nvim, Duration::from_secs(90)).await?;
 
     // One RPC keeps scheduled BufEnter/plugin callbacks from changing focus
     // between opening the file and positioning its cursor. All arguments stay
     // msgpack values; fnameescape remains the authority for Ex path grammar.
-    let opened = nvim
-        .exec_lua(
+    let opened = tokio::time::timeout(
+        request_timeout,
+        nvim.exec_lua(
             r#"
                 local path, line, col = ...
                 if vim.fn.filereadable(path) ~= 1 then return false end
@@ -74,11 +87,15 @@ pub(super) async fn open_file(
                 nvim_rs::Value::from(line.unwrap_or(1).max(1)),
                 nvim_rs::Value::from(col.unwrap_or(1).max(1) - 1),
             ],
-        )
-        .await
-        .map_err(|error| AppError::NeovimSpawnError {
-            detail: format!("failed to open file and position cursor: {error}"),
-        })?;
+        ),
+    )
+    .await
+    .map_err(|_| AppError::NeovimSpawnError {
+        detail: "Neovim file-open request timed out".to_string(),
+    })?
+    .map_err(|error| AppError::NeovimSpawnError {
+        detail: format!("failed to open file and position cursor: {error}"),
+    })?;
     if opened.as_bool() != Some(true) {
         return Err(AppError::NeovimFileNotFound {
             path: path.to_string(),

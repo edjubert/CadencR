@@ -8,13 +8,14 @@ import { focusNeovimEditor } from "./focusNeovimEditor";
 
 /**
  * Opens a path in the feature's Neovim session, at an optional 1-indexed line.
- * `onOpened` runs once Neovim confirms the open, e.g. to reveal the Editor.
+ * `revealEditor` runs once the PTY exists, so startup prompts remain accessible
+ * while the file-open request waits for Neovim's initialization.
  */
 export type OpenInNeovim = (
   filePath: string,
   line?: number,
   col?: number,
-  onOpened?: () => void,
+  revealEditor?: () => void,
 ) => void;
 
 /**
@@ -32,18 +33,18 @@ export function useOpenFileInNeovim(
   const { mutateAsync } = useOpenFileRoute();
 
   const openInNeovim = useCallback<OpenInNeovim>(
-    (filePath, line, col, onOpened) => {
+    (filePath, line, col, revealEditor) => {
       const pending = toast.loading(`Opening ${filePath} in Neovim…`);
       void (async () => {
         try {
           // Diff links can reach the editor before its pane has ever mounted.
           if (ensureStarted) await startRoute(featureId);
+          revealEditor?.();
           await mutateAsync({
             featureId: String(featureId),
             data: { path: filePath, line, col },
           });
-          onOpened?.();
-          // Allow a newly revealed pane to mount before transferring focus.
+          // Transfer focus once the requested file is ready for interaction.
           requestAnimationFrame(() => focusNeovimEditor(featureId));
         } catch (error: unknown) {
           toast.error(`Could not open ${filePath} in Neovim`, {

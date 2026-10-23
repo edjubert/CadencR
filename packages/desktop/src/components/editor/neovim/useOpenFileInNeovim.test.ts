@@ -74,11 +74,17 @@ describe("shared Neovim file navigation", () => {
     expect(mocks.dismiss).toHaveBeenCalledWith("pending");
   });
 
-  it("waits for startup, opens, then reveals and focuses the newly mounted editor", async () => {
+  it("reveals the PTY before file opening finishes, then focuses the editor", async () => {
     let resolveStart!: () => void;
+    let resolveOpen!: () => void;
     mocks.start.mockReturnValueOnce(
       new Promise<void>((resolve) => {
         resolveStart = resolve;
+      }),
+    );
+    mocks.open.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveOpen = resolve;
       }),
     );
     const reveal = vi.fn(() => {
@@ -92,12 +98,14 @@ describe("shared Neovim file navigation", () => {
     await act(async () => resolveStart());
     expect(mocks.open).toHaveBeenCalledOnce();
     expect(reveal).toHaveBeenCalledOnce();
+    expect(mocks.dismiss).not.toHaveBeenCalled();
+    await act(async () => resolveOpen());
     act(() => vi.runAllTimers());
     expect(document.activeElement).toBe(hosts[0]);
   });
 
   it.each(["start", "open"] as const)(
-    "surfaces %s failure and clears loading without revealing",
+    "surfaces %s failure and clears loading",
     async (operation) => {
       mocks[operation].mockRejectedValueOnce(new Error("unavailable"));
       const reveal = vi.fn();
@@ -107,8 +115,12 @@ describe("shared Neovim file navigation", () => {
         description: "unavailable",
       });
       expect(mocks.dismiss).toHaveBeenCalledWith("pending");
-      expect(reveal).not.toHaveBeenCalled();
-      if (operation === "start") expect(mocks.open).not.toHaveBeenCalled();
+      if (operation === "start") {
+        expect(mocks.open).not.toHaveBeenCalled();
+        expect(reveal).not.toHaveBeenCalled();
+      } else {
+        expect(reveal).toHaveBeenCalledOnce();
+      }
     },
   );
 
@@ -132,7 +144,7 @@ describe("shared Neovim file navigation", () => {
       description: "Bad request: Path is outside the project directory",
     });
     expect(mocks.dismiss).toHaveBeenCalledWith("pending");
-    expect(reveal).not.toHaveBeenCalled();
+    expect(reveal).toHaveBeenCalledOnce();
   });
 
   it.each([
